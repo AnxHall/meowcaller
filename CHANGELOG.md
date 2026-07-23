@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/group_call_state — `planned`
+- Added the capture-authoritative datasheet for transaction-ordered group roster,
+  relay, and `CALLID@call` routing state. The proposed envelope stores one parsed
+  snapshot, preserves direct routing until group state exists, and refuses to
+  recreate a call for late post-terminate updates. No production code changed.
+
 ### voip/group_update_ingest — `planned`
 - Restored the minimal datasheet template and group-call module registry for the
   capture-driven build. The human reviewer approved the immutable capture corpus
