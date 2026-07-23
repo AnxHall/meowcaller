@@ -9,9 +9,9 @@ sanitized direct-roster, canonical-roster, capability-capture, and send-boundary
 cases copied from the capture boundaries pinned below.
 
 **Status:** partial in whatsmeow commit
-`35d2eb603c8a8cb4cabc9289538434e85ad7b65e`; capability parsing, malformed wire,
-and atomic peer-device capture cases pass while roster and singular-send KATs
-remain skipped on stubs.
+`78a94217e8c4de14e91f4487d126e40f87a50ec7`; capability parsing/capture and
+direct/canonical roster KATs pass while the singular-send KAT remains skipped
+on its stub.
 
 **Reference pinned at:**
 

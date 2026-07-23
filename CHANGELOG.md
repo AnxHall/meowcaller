@@ -27,6 +27,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Whatsmeow commit `35d2eb6` atomically attaches the parsed peer device to an
   existing call and passes owned-byte, unknown-call, and focused race tests.
   Roster and send KATs remain skipped on their stubs; CodeRabbit is clean.
+- Whatsmeow commit `78a9421` deep-copies either the connected direct pair or
+  latest canonical group snapshot and passes both capture cases, invalid-state
+  cases, and focused race tests. The singular send KAT remains skipped on its
+  stub; CodeRabbit is clean.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
