@@ -30,6 +30,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Implemented `Call.AddParticipants` as an ordered all-target loop with
   index-aligned errors. All module KATs now run and pass; full tests, focused
   race, build, vet, and CodeRabbit are clean.
+- Updated the public `Call` description to state that a direct call may become
+  an ad-hoc group call without claiming group media support.
 
 ### voip/group_participant_invite — `partial`
 - Added the capture-authoritative datasheet for one active-call participant

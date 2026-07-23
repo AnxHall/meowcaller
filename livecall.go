@@ -8,10 +8,11 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-// Call is one live 1:1 call. Place one with Client.Call, or receive one (unanswered)
-// in an OnIncomingCall listener. Attach outbound audio with Subscribe/Play and inbound
-// audio with Receive, and lifecycle listeners with OnReady/OnEnd/OnStateChange. All
-// methods are safe for concurrent use.
+// Call is one live call. It starts as a direct call and may become an ad-hoc
+// group call through AddParticipant. Place one with Client.Call, or receive one
+// (unanswered) in an OnIncomingCall listener. Attach outbound audio with
+// Subscribe/Play and inbound audio with Receive, and lifecycle listeners with
+// OnReady/OnEnd/OnStateChange. All methods are safe for concurrent use.
 type Call struct {
 	eng  *engine
 	id   string
