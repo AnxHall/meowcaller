@@ -36,6 +36,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   stamping, and one send. All current unit KATs run and pass, including the
   offline send boundary with no optimistic mutation; live lifecycle wiring
   remains pending. CodeRabbit, full tests, race tests, build, and vet are clean.
+- Whatsmeow commit `b5f9d94` seeds outgoing call state with an owned clone of
+  the exact local active-device capability advertised in the initial offer.
+  Ownership, full tests, race tests, build, vet, and CodeRabbit are clean; peer
+  and connected lifecycle wiring remain pending.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
