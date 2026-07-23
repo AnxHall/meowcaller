@@ -50,6 +50,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   race, build, and vet are clean. CodeRabbit's claimed missing voip helpers were
   verified as a false positive: all six definitions exist and both packages
   compile and pass. Only the connected gate remains pending.
+- Whatsmeow commit `3355bf6` opens the participant-invite gate when an outgoing
+  call receives `accept`, while preserving selected-peer routing and normal
+  event dispatch. Focused and full tests, race, build, vet, and CodeRabbit are
+  clean.
+- Whatsmeow commit `7dc1db1` opens the incoming gate only after the deferred
+  `accept` send succeeds and only while the same call state remains registered.
+  Unit coverage proves the identity guard and failed-send behavior; full tests,
+  race, build, vet, and CodeRabbit are clean. The successful live send boundary
+  remains explicitly marked for end-to-end validation.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite

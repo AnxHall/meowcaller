@@ -9,9 +9,11 @@ sanitized direct-roster, canonical-roster, capability-capture, and send-boundary
 cases copied from the capture boundaries pinned below.
 
 **Status:** partial in whatsmeow commit
-`3f55d2defe44ff722f8fece59657db6f717efa98`; capability, roster, validation,
+`7dc1db147f07af4a7b8878a4823e516386547164`; capability, roster, validation,
 offline singular-send, and both outgoing/incoming active-device lifecycle KATs
-pass with no skips. The accepted-call connected gate remains pending.
+pass with no skips. Outgoing acceptance opens the connected gate; the incoming
+identity-checked transition and failed-send boundary pass, while the successful
+live deferred-accept send remains explicitly marked for end-to-end validation.
 
 **Reference pinned at:**
 
