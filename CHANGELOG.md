@@ -14,6 +14,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   proposes the typed group-update event/dispatcher envelope for review. No
   production code changed.
 
+### voip/group_update_ingest — `scaffolded`
+- Added whatsmeow commit `285aa8b`: the `CallGroupUpdate` event envelope,
+  three-line `onCallGroupUpdate` handler stub, and four-case sanitized capture
+  vector. `TestGroupUpdateIngestionCorpus` is intentionally skipped until the
+  handler body is implemented; build, vet, and all other tests pass. The live
+  dispatcher is not wired while the handler remains a stub, preserving existing
+  behavior.
+
 ### meowcaller — use whatsmeow's first-class call API
 - Whatsmeow now owns 1:1 call signaling, call-key exchange, relay election, mute events,
   and independent video-flow transitions. Meowcaller consumes the typed handoff events
