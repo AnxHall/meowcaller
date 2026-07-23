@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/group_invite_offer — `scaffolded`
+### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
   offer. The two-person picker capture proves that each selected invitee gets an
   independent offer and transaction track; the proposed low-level builder
@@ -19,7 +19,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   top-level capability.
 - Whatsmeow commit `7aba50a` adds the approved value-parameter envelope, an
   explicit builder stub, and two sanitized capture cases covering connected and
-  absent participant state. The KAT is skipped until the body is implemented.
+  absent participant state.
+- Whatsmeow commit `f39eba1` implements the singular builder, removes the KAT
+  skip, and passes both capture cases plus missing call ID, target, creator,
+  target-device, and participant-roster validation cases. Focused race tests,
+  full tests, build, vet, and CodeRabbit review are clean.
 
 ### voip/group_call_state — `planned`
 - Added the capture-authoritative datasheet for transaction-ordered group roster,

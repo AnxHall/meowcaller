@@ -3,12 +3,12 @@
 The singular active-call invite offer sent to one added participant and that
 participant's candidate devices.
 
-**Validation vector:** `group_invite_offer_corpus.json` — planned sanitized
-wire-shape cases copied from the capture boundaries pinned below.
+**Validation vector:** `group_invite_offer_corpus.json` — sanitized wire-shape
+cases copied from the capture boundaries pinned below.
 
-**Status:** scaffolded in whatsmeow commit
-`7aba50a78570625ace92604ee81dc97d728333e8`; the capture KAT is skipped while
-the singular builder body remains an explicit stub.
+**Status:** verified in whatsmeow commit
+`f39eba1b31bfa1f197bac8017f2df8a6b88322aa`; both captured wire variants and
+all required-field validation cases run and pass.
 
 **Reference pinned at:**
 
