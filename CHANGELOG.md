@@ -45,6 +45,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   delivery and using sanitized warnings on malformed input. Integration, race,
   full, build, vet, and CodeRabbit checks are clean; incoming seeding and the
   connected gate remain pending.
+- Whatsmeow commit `3f55d2d` seeds both local and peer active devices from an
+  incoming offer while preserving existing offer/retransmit behavior. Tests,
+  race, build, and vet are clean. CodeRabbit's claimed missing voip helpers were
+  verified as a false positive: all six definitions exist and both packages
+  compile and pass. Only the connected gate remains pending.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
