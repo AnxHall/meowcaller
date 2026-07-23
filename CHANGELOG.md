@@ -40,6 +40,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   the exact local active-device capability advertised in the initial offer.
   Ownership, full tests, race tests, build, vet, and CodeRabbit are clean; peer
   and connected lifecycle wiring remain pending.
+- Whatsmeow commit `b75442b` captures the selected outgoing peer device and
+  capability through the existing preaccept dispatcher, preserving normal event
+  delivery and using sanitized warnings on malformed input. Integration, race,
+  full, build, vet, and CodeRabbit checks are clean; incoming seeding and the
+  connected gate remain pending.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
