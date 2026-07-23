@@ -29,6 +29,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   on its scaffolded body. Build, vet, and the full suite pass; CodeRabbit reported
   no findings when based on the local scaffold commit.
 
+### voip/group_call_state — `KAT-verified`
+- Added whatsmeow commit `5a6350b`: `signalingTarget` preserves participant
+  routing for direct calls and switches to `CALLID@call` after an authoritative
+  group snapshot is accepted, including ad-hoc groups with no group JID.
+  `TestApplyGroupUpdateCorpus` and `TestGroupCallSignalingTargetCorpus` both run
+  and pass. Build, vet, the full suite, and the focused race-enabled tests pass;
+  CodeRabbit reported no findings. The scaffold-to-final diff contains only the
+  two reviewed function bodies and their KAT split.
+
 ### voip/group_update_ingest — `planned`
 - Restored the minimal datasheet template and group-call module registry for the
   capture-driven build. The human reviewer approved the immutable capture corpus

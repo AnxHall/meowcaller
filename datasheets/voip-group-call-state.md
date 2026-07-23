@@ -3,8 +3,11 @@
 Internal whatsmeow group-call roster, transaction, relay, and signaling-target
 state built from parsed `group_update` snapshots.
 
-**Validation vector:** `group_call_state_corpus.json` — planned state-transition
-cases copied from the capture corpus pinned below.
+**Validation vector:** `group_call_state_corpus.json` — state-transition cases
+copied from the capture corpus pinned below.
+
+**Status:** verified in whatsmeow commit
+`5a6350b9abb1facc20eba96b4c29ebc446053c14`; both state KATs run and pass.
 
 **Reference pinned at:**
 
@@ -86,12 +89,10 @@ or update media.
   do not use the originating chat JID.
 - Do not log participant capabilities, relay keys, tokens, or opaque endpoint
   bytes.
-- `TODO(human)`: approve storing the full ordered snapshot instead of an indexed
-  participant map. Agent suggestion: full snapshot; the server is authoritative
-  and the roster sizes are small.
-- `TODO(human)`: approve strict `>` transaction acceptance. Agent suggestion:
-  strict `>`; all captured canonical snapshots advance monotonically, and equal
-  delivery is a duplicate.
-- `TODO(human)`: approve `signalingTarget` falling back to the existing direct
-  destination when `group == nil`. Agent suggestion: yes, preserving all current
-  1:1 routing and switching only after a group snapshot is accepted.
+- Approved: store the full ordered snapshot instead of an indexed participant
+  map; the server is authoritative and the roster sizes are small.
+- Approved: accept only a strictly newer transaction; all captured canonical
+  snapshots advance monotonically, and equal delivery is a duplicate.
+- Approved: `signalingTarget` falls back to the existing direct destination when
+  `group == nil`, preserving current 1:1 routing until a group snapshot is
+  accepted.
