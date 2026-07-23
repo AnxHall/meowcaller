@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.mau.fi/whatsmeow/types"
@@ -238,5 +239,88 @@ func TestCallSetMutedUsesWhatsmeowControlPlane(t *testing.T) {
 	}
 	if !got {
 		t.Fatal("SetMuted did not send the local mute state")
+	}
+}
+
+func TestCallAddParticipantDelegatesSingularInvite(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	t.Skip("blocked: api/group_participant_invite bodies are stubs")
+	eng, call := testEngineWithOutgoingCall()
+	type contextKey string
+	ctx := context.WithValue(context.Background(), contextKey("invite"), "preserved")
+	var gotContext context.Context
+	var gotCallID string
+	var gotTarget types.JID
+	eng.inviteCallParticipant = func(callCtx context.Context, callID string, target types.JID) error {
+		gotContext = callCtx
+		gotCallID = callID
+		gotTarget = target
+		return nil
+	}
+
+	if err := call.AddParticipant(ctx, "  +15551234567  "); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+	if gotContext != ctx {
+		t.Fatal("AddParticipant did not preserve the caller context")
+	}
+	if gotCallID != call.ID() {
+		t.Fatalf("call ID = %q, want %q", gotCallID, call.ID())
+	}
+	wantTarget := types.NewJID("15551234567", types.DefaultUserServer)
+	if gotTarget != wantTarget {
+		t.Fatalf("target = %s, want %s", gotTarget, wantTarget)
+	}
+}
+
+func TestCallAddParticipantValidationAndFailure(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	t.Skip("blocked: api/group_participant_invite bodies are stubs")
+	eng, call := testEngineWithOutgoingCall()
+	if err := call.AddParticipant(context.Background(), " "); err == nil {
+		t.Fatal("empty target accepted")
+	}
+	eng.inviteCallParticipant = nil
+	if err := call.AddParticipant(context.Background(), "15551234567"); err == nil {
+		t.Fatal("unavailable signaling accepted")
+	}
+
+	sentinel := errors.New("invite rejected")
+	eng.inviteCallParticipant = func(context.Context, string, types.JID) error {
+		return sentinel
+	}
+	if err := call.AddParticipant(context.Background(), "15551234567"); !errors.Is(err, sentinel) {
+		t.Fatalf("AddParticipant error = %v, want wrapped sentinel", err)
+	}
+
+	call.setPhase(CallPhaseEnded)
+	if err := call.AddParticipant(context.Background(), "15551234567"); err == nil {
+		t.Fatal("ended call accepted participant invite")
+	}
+}
+
+func TestCallAddParticipantsRetainsOrderedResults(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	t.Skip("blocked: api/group_participant_invite bodies are stubs")
+	eng, call := testEngineWithOutgoingCall()
+	sentinel := errors.New("second invite failed")
+	var got []string
+	eng.inviteCallParticipant = func(_ context.Context, _ string, target types.JID) error {
+		got = append(got, target.User)
+		if len(got) == 2 {
+			return sentinel
+		}
+		return nil
+	}
+
+	results := call.AddParticipants(context.Background(), "10001", "10002", "10003")
+	if len(results) != 3 {
+		t.Fatalf("result count = %d, want 3", len(results))
+	}
+	if results[0] != nil || !errors.Is(results[1], sentinel) || results[2] != nil {
+		t.Fatalf("results = %v, want [nil sentinel nil]", results)
+	}
+	if len(got) != 3 || got[0] != "10001" || got[1] != "10002" || got[2] != "10003" {
+		t.Fatalf("invite order = %v, want [10001 10002 10003]", got)
 	}
 }

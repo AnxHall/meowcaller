@@ -12,6 +12,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   `Call.AddParticipant(ctx, target)` delegation and an ordered plural
   convenience loop. The web example will retain one independent singular
   signaling result per selected person.
+- Added the engine injection point, public singular/plural method stubs, and
+  three skipped KATs for exact delegation, validation/error preservation, and
+  ordered all-target results. Existing tests, build, and vet remain clean.
 
 ### voip/group_participant_invite — `partial`
 - Added the capture-authoritative datasheet for one active-call participant

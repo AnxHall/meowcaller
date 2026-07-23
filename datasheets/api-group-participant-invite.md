@@ -6,7 +6,8 @@ call by delegating signaling to Whatsmeow.
 **Validation vector:** focused Go KATs for target parsing, exact call-ID/JID
 delegation, unavailable signaling, and wrapped downstream failure.
 
-**Status:** planned.
+**Status:** scaffolded; all three focused KATs are skipped on the explicit
+function stubs.
 
 **Reference pinned at:**
 

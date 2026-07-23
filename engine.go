@@ -19,10 +19,11 @@ import (
 type engine struct {
 	c *Client
 
-	mu           sync.Mutex
-	calls        map[string]*engineCall
-	setCallVideo func(context.Context, string, types.CallVideoState, *int) error
-	setCallMute  func(context.Context, string, bool) error
+	mu                    sync.Mutex
+	calls                 map[string]*engineCall
+	setCallVideo          func(context.Context, string, types.CallVideoState, *int) error
+	setCallMute           func(context.Context, string, bool) error
+	inviteCallParticipant func(context.Context, string, types.JID) error
 }
 
 type engineCall struct {
@@ -61,6 +62,14 @@ func (e *engine) sendCallVideo(ctx context.Context, callID string, state types.C
 		return errors.New("meowcaller: call signaling is unavailable")
 	}
 	return e.setCallVideo(ctx, callID, state, orientation)
+}
+
+func (e *engine) inviteParticipant(ctx context.Context, callID, target string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	// TODO
+	// agent suggestion: require an active call, parse target with parseCallTarget, then invoke the injected singular Whatsmeow operation and wrap its error.
+	// human input:
+	return errors.New("meowcaller: add participant is not implemented")
 }
 
 func (c *Call) onEndFn() func(string) {
