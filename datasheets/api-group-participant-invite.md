@@ -6,8 +6,8 @@ call by delegating signaling to Whatsmeow.
 **Validation vector:** focused Go KATs for target parsing, exact call-ID/JID
 delegation, unavailable signaling, and wrapped downstream failure.
 
-**Status:** partial; the engine adapter and singular public method KATs pass,
-while the plural method KAT remains skipped on its explicit stub.
+**Status:** KAT-verified; engine adapter, singular public method, and ordered
+plural result KATs pass with no skips.
 
 **Reference pinned at:**
 

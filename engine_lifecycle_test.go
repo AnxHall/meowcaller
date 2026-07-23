@@ -360,7 +360,6 @@ func TestCallAddParticipantValidationAndFailure(t *testing.T) {
 
 func TestCallAddParticipantsRetainsOrderedResults(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
-	t.Skip("blocked: api/group_participant_invite bodies are stubs")
 	eng, call := testEngineWithOutgoingCall()
 	sentinel := errors.New("second invite failed")
 	var got []string

@@ -22,6 +22,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Implemented `Call.AddParticipant` as the context-preserving singular façade.
   Its validation/delegation KATs, full tests, race, build, vet, and CodeRabbit
   pass; only the plural convenience stub remains.
+- Implemented `Call.AddParticipants` as an ordered all-target loop with
+  index-aligned errors. All module KATs now run and pass; full tests, focused
+  race, build, vet, and CodeRabbit are clean.
 
 ### voip/group_participant_invite — `partial`
 - Added the capture-authoritative datasheet for one active-call participant

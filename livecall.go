@@ -136,10 +136,11 @@ func (c *Call) AddParticipant(ctx context.Context, target string) error {
 // AddParticipants invites each person independently and returns index-aligned results.
 func (c *Call) AddParticipants(ctx context.Context, targets ...string) []error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
-	// TODO
-	// agent suggestion: call AddParticipant sequentially for every input and retain one error at the same index.
-	// human input:
-	return nil
+	results := make([]error, len(targets))
+	for i, target := range targets {
+		results[i] = c.AddParticipant(ctx, target)
+	}
+	return results
 }
 
 // SendReaction sends an emoji over this call's RTC app-data stream. Pass an empty
