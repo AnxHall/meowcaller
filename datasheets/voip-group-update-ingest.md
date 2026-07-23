@@ -3,8 +3,12 @@
 Inbound WhatsApp `group_update` parsing and typed event dispatch at the
 whatsmeow call-control boundary.
 
-**Validation vector:** `group_update_corpus.json` — planned sanitized fixtures
-copied from the capture events pinned below.
+**Validation vector:** `group_update_corpus.json` — sanitized fixtures copied
+from the capture events pinned below.
+
+**Status:** scaffolded in whatsmeow commit
+`285aa8bb99e242a207a29e1c86711902769c35aa`; the KAT is skipped on the handler
+body.
 
 **Reference pinned at:**
 
@@ -108,27 +112,36 @@ func (cli *Client) onCallGroupUpdate(
 The existing dispatcher gains a `case "group_update"` branch that calls
 `onCallGroupUpdate`. The existing `voip.ParseGroupUpdate` and
 `types.GroupCallUpdate`/participant/device/relay declarations remain the parser
-surface; this module does not add call-state merging or media behavior.
+surface. On successful parse, the handler delegates transaction acceptance to
+the verified `applyGroupUpdate` state module and dispatches `CallGroupUpdate`
+only when that module accepts the snapshot. This module does not implement
+call-state merging or media behavior itself.
 
 ## Implementation suggestions (guidance, not authoritative)
 
-- Parse the action child with `voip.ParseGroupUpdate` and dispatch exactly one
-  typed event on success.
+- Parse the action child with `voip.ParseGroupUpdate`.
+- Pass the value snapshot to `applyGroupUpdate` before dispatch. Dispatch exactly
+  one typed event only when the state module accepts the snapshot; duplicate,
+  stale, and post-terminate updates remain acknowledged but do not escape as
+  authoritative state changes.
 - Keep the existing deferred call ACK path; captured clients ACK
   `group_update`, and the current dispatcher already defers that ACK for every
   non-video action.
 - Do not require `GroupJID`; commit `f6065a6` already KAT-covers the valid
   ad-hoc shape.
-- Keep transaction ordering and call-state mutation out of this ingestion
-  module. A later state module decides how to reject stale snapshots.
+- Keep transaction ordering and call-state mutation logic out of this ingestion
+  module. `applyGroupUpdate` owns those decisions.
 - Preserve relay keys/tokens as opaque bytes in the typed snapshot, but never
   log their contents.
-- `TODO(human)`: approve `Update` as a value versus `*types.GroupCallUpdate`.
-  Agent suggestion: value, so the event owns a stable snapshot while `Data`
-  retains the raw node for consumers that need unparsed fields.
-- `TODO(human)`: approve retaining `Data *waBinary.Node`.
-  Agent suggestion: retain it for consistency with existing call events until
-  the parser covers every observed optional child.
+- Approved scaffold choice: `Update` is a value, so the event owns a stable
+  snapshot while `Data` retains the raw node for consumers that need unparsed
+  fields.
+- Approved scaffold choice: retain `Data *waBinary.Node` for consistency with
+  existing call events until the parser covers every observed optional child.
+- `TODO(human)`: approve dispatching only snapshots accepted by
+  `applyGroupUpdate`, rather than every successfully parsed wire update. Agent
+  suggestion: accepted only, so stale, duplicate, and post-terminate delivery
+  cannot leak around the verified state gate.
 - `TODO(human)`: choose malformed-update behavior.
   Agent suggestion: warn with sanitized call metadata, dispatch
   `UnknownCallEvent`, and still allow the deferred ACK to run so a malformed

@@ -53,6 +53,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   dispatcher is not wired while the handler remains a stub, preserving existing
   behavior.
 
+### voip/group_update_ingest — `scaffolded`
+- Reconciled the datasheet with the now-verified group-state module. The proposed
+  handler parses each update, delegates monotonic acceptance to
+  `applyGroupUpdate`, dispatches only accepted typed snapshots, and keeps
+  deferred ACK behavior for accepted, stale, late, and malformed deliveries.
+  Corrected the registry dependency so ingestion depends on group state. No
+  production code changed.
+
 ### meowcaller — use whatsmeow's first-class call API
 - Whatsmeow now owns 1:1 call signaling, call-key exchange, relay election, mute events,
   and independent video-flow transitions. Meowcaller consumes the typed handoff events
