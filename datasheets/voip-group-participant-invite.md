@@ -8,9 +8,9 @@ invite offer.
 sanitized direct-roster, canonical-roster, capability-capture, and send-boundary
 cases copied from the capture boundaries pinned below.
 
-**Status:** scaffolded in whatsmeow commit
-`0b82057314aa56fb2cf675f2e9d4a83cfbdda3fd`; all three KATs are skipped while
-the capability, roster, and singular send bodies remain explicit stubs.
+**Status:** partial in whatsmeow commit
+`f4b6c5413fbbe57b7f46bf758e2412ced9a71bc6`; capability parsing and malformed
+wire cases pass while roster and singular-send KATs remain skipped on stubs.
 
 **Reference pinned at:**
 

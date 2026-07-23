@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/group_participant_invite — `scaffolded`
+### voip/group_participant_invite — `partial`
 - Added the capture-authoritative datasheet for one active-call participant
   invitation. The proposed control path captures the established direct-call
   device capabilities, switches to the latest server roster after group
@@ -20,6 +20,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   envelopes, two sanitized capture cases for capability and roster behavior,
   and an offline send-boundary KAT. All three KATs are skipped on explicit
   stubs.
+- Whatsmeow commit `f4b6c54` implements active-device capability parsing with
+  cloned bytes and passes both captured offer/preaccept cases plus malformed
+  wire validation. Roster and send KATs remain skipped on their stubs;
+  CodeRabbit, full tests, focused race tests, build, and vet are clean.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
