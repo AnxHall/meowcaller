@@ -21,6 +21,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   post-terminate delivery. `TestGroupCallStateCorpus` is intentionally skipped
   until both state bodies are implemented; build, vet, and all other tests pass.
 
+### voip/group_call_state — `partial`
+- Added whatsmeow commit `63dc174`: `applyGroupUpdate` now holds the call-state
+  lock, refuses missing calls and equal/older transactions, and atomically stores
+  the complete newer snapshot. `TestApplyGroupUpdateCorpus` runs and passes all
+  six capture-derived cases. The separate `signalingTarget` KAT remains skipped
+  on its scaffolded body. Build, vet, and the full suite pass; CodeRabbit reported
+  no findings when based on the local scaffold commit.
+
 ### voip/group_update_ingest — `planned`
 - Restored the minimal datasheet template and group-call module registry for the
   capture-driven build. The human reviewer approved the immutable capture corpus
