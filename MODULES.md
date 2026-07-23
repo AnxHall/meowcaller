@@ -8,4 +8,4 @@ Status: `planned` → `scaffolded` → `implemented` → `verified`.
 | # | Module | Package | Deps | Datasheet | Authority | KAT | Status |
 |---|---|---|---|---|---|---|---|
 | 01 | group_update_ingest | `go.mau.fi/whatsmeow` | existing `voip.ParseGroupUpdate` | [voip-group-update-ingest.md](datasheets/voip-group-update-ingest.md) | immutable capture corpus | `group_update_corpus.json` | scaffolded (`285aa8b`; KAT skipped on handler stub) |
-| 02 | group_call_state | `go.mau.fi/whatsmeow` | group_update_ingest | [voip-group-call-state.md](datasheets/voip-group-call-state.md) | immutable capture corpus | `group_call_state_corpus.json` | planned |
+| 02 | group_call_state | `go.mau.fi/whatsmeow` | group_update_ingest | [voip-group-call-state.md](datasheets/voip-group-call-state.md) | immutable capture corpus | `group_call_state_corpus.json` | scaffolded (`507b4bd`; KAT skipped on state stubs) |

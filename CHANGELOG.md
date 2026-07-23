@@ -13,6 +13,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   snapshot, preserves direct routing until group state exists, and refuses to
   recreate a call for late post-terminate updates. No production code changed.
 
+### voip/group_call_state — `scaffolded`
+- Added whatsmeow commit `507b4bd`: the internal full-snapshot state envelope,
+  `applyGroupUpdate` and `signalingTarget` three-line stubs, and a six-case
+  capture-derived vector covering direct routing, transaction gaps, ad-hoc
+  upgrades, pending participants without PIDs, stale updates, and late
+  post-terminate delivery. `TestGroupCallStateCorpus` is intentionally skipped
+  until both state bodies are implemented; build, vet, and all other tests pass.
+
 ### voip/group_update_ingest — `planned`
 - Restored the minimal datasheet template and group-call module registry for the
   capture-driven build. The human reviewer approved the immutable capture corpus
