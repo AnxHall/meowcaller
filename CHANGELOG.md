@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### api/group_participant_invite — `planned`
+- Added the capture-authoritative envelope for singular
+  `Call.AddParticipant(ctx, target)` delegation and an ordered plural
+  convenience loop. The web example will retain one independent singular
+  signaling result per selected person.
+
 ### voip/group_participant_invite — `partial`
 - Added the capture-authoritative datasheet for one active-call participant
   invitation. The proposed control path captures the established direct-call
