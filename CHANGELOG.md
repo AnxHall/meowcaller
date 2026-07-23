@@ -24,6 +24,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   cloned bytes and passes both captured offer/preaccept cases plus malformed
   wire validation. Roster and send KATs remain skipped on their stubs;
   CodeRabbit, full tests, focused race tests, build, and vet are clean.
+- Whatsmeow commit `35d2eb6` atomically attaches the parsed peer device to an
+  existing call and passes owned-byte, unknown-call, and focused race tests.
+  Roster and send KATs remain skipped on their stubs; CodeRabbit is clean.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
