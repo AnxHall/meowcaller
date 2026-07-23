@@ -6,6 +6,10 @@ participant's candidate devices.
 **Validation vector:** `group_invite_offer_corpus.json` — planned sanitized
 wire-shape cases copied from the capture boundaries pinned below.
 
+**Status:** scaffolded in whatsmeow commit
+`7aba50a78570625ace92604ee81dc97d728333e8`; the capture KAT is skipped while
+the singular builder body remains an explicit stub.
+
 **Reference pinned at:**
 
 - capture SHA-256 `d565e26f2ca48483525c5bf4dcc2c1bf5ae616299190d128f5f35f74ac50d6c6`
@@ -125,17 +129,14 @@ plural API.
 - Do not accept multiple invitees in one builder call. A plural convenience API
   must invoke the singular client operation once per target and preserve
   independent results.
-- `TODO(human)`: approve a value parameter and `(Node, error)` result rather than
-  the existing pointer/no-error builder convention. Agent suggestion: value plus
-  error, so this exported entry point can reject an empty call ID, target,
-  creator, device set, or participant roster without panicking or emitting an
-  invalid stanza.
-- `TODO(human)`: approve reusing `types.GroupCallParticipant` as the input roster
-  while encoding only the captured subset. Agent suggestion: reuse it; the
-  authoritative group snapshot already owns ordered user/device/capability
-  state, and a second invite-only roster type could diverge.
-- `TODO(human)`: approve preserving caller-supplied target-device order. Agent
-  suggestion: preserve it; the captured reordering mechanism is not established.
+- Approved: use a value parameter and `(Node, error)` result so the exported
+  entry point rejects an empty call ID, target, creator, device set, or
+  participant roster without panicking or emitting an invalid stanza.
+- Approved: reuse `types.GroupCallParticipant` as the input roster while
+  encoding only the captured subset. The authoritative group snapshot already
+  owns ordered user/device/capability state.
+- Approved: preserve caller-supplied target-device order because the captured
+  reordering mechanism is not established.
 - The later client API needs a separate, reviewed roster-seeding path for the
   first 1:1-to-group upgrade. The direct call currently stores identities but
   not both active device capabilities.

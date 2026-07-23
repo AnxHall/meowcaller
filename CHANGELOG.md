@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/group_invite_offer — `planned`
+### voip/group_invite_offer — `scaffolded`
 - Added the capture-authoritative datasheet for the singular active-call invite
   offer. The two-person picker capture proves that each selected invitee gets an
   independent offer and transaction track; the proposed low-level builder
@@ -16,7 +16,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - The proposed wire form is deliberately separate from the 1:1 offer builder:
   Opus/16000, network medium 2, unencrypted destination list, and `group_info`,
   with no privacy, call-key ciphertext, `encopt`, device identity, group JID, or
-  top-level capability. No production code changed.
+  top-level capability.
+- Whatsmeow commit `7aba50a` adds the approved value-parameter envelope, an
+  explicit builder stub, and two sanitized capture cases covering connected and
+  absent participant state. The KAT is skipped until the body is implemented.
 
 ### voip/group_call_state — `planned`
 - Added the capture-authoritative datasheet for transaction-ordered group roster,
