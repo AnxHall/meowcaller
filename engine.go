@@ -53,6 +53,7 @@ func newEngine(c *Client) *engine {
 	if c != nil && c.wa != nil {
 		e.setCallVideo = c.wa.SetCallVideo
 		e.setCallMute = c.wa.SetCallMute
+		e.inviteCallParticipant = c.wa.InviteCallParticipant
 	}
 	return e
 }
@@ -66,10 +67,24 @@ func (e *engine) sendCallVideo(ctx context.Context, callID string, state types.C
 
 func (e *engine) inviteParticipant(ctx context.Context, callID, target string) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
-	// TODO
-	// agent suggestion: require an active call, parse target with parseCallTarget, then invoke the injected singular Whatsmeow operation and wrap its error.
-	// human input:
-	return errors.New("meowcaller: add participant is not implemented")
+	e.mu.Lock()
+	m := e.calls[callID]
+	active := m != nil && m.call != nil && m.call.State() != CallPhaseEnded
+	e.mu.Unlock()
+	if !active {
+		return errors.New("meowcaller: call is not active")
+	}
+	jid, err := parseCallTarget(target)
+	if err != nil {
+		return err
+	}
+	if e.inviteCallParticipant == nil {
+		return errors.New("meowcaller: call signaling is unavailable")
+	}
+	if err = e.inviteCallParticipant(ctx, callID, jid); err != nil {
+		return fmt.Errorf("meowcaller: add participant: %w", err)
+	}
+	return nil
 }
 
 func (c *Call) onEndFn() func(string) {
