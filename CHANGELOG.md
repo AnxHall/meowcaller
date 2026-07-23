@@ -7,10 +7,17 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### web/group_participant_invite — `planned`
+### web/group_participant_invite — `KAT-verified`
 - Added the capture-authoritative browser-console envelope for a multi-target
   control request and one transient submitted/failed result event per singular
   invite.
+- Implemented `add_participants` request decoding, active/non-empty validation,
+  ordered plural delegation, and one transient success/failure event per target
+  without replacing replayed lifecycle state.
+- Added the comma/newline people picker, lifecycle-header protection, and
+  explicit audio-only “submitted, not joined” guidance in both the page and
+  README. Focused/full example tests, race, build, vet, and manual diff review
+  pass. CodeRabbit was invoked twice but blocked by its free CLI rate limit.
 
 ### api/group_participant_invite — `KAT-verified`
 - Added the capture-authoritative envelope for singular

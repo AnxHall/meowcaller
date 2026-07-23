@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,19 +29,34 @@ type webCallState struct {
 	Removed     bool   `json:"removed,omitempty"`
 }
 
+type webParticipantInviteResult struct {
+	Event   string `json:"event"`
+	CallID  string `json:"call_id"`
+	Target  string `json:"target"`
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
+
 type webCallController struct {
 	ctx    context.Context
 	client *meowcaller.Client
 	bridge *videoBridge
 	log    zerolog.Logger
 
-	mu      sync.Mutex
-	call    *meowcaller.Call
-	pending *meowcaller.Call
+	mu                 sync.Mutex
+	call               *meowcaller.Call
+	pending            *meowcaller.Call
+	inviteParticipants func(context.Context, *meowcaller.Call, ...string) []error
 }
 
 func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge *videoBridge, log zerolog.Logger) *webCallController {
-	c := &webCallController{ctx: ctx, client: client, bridge: bridge, log: log}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	c := &webCallController{
+		ctx: ctx, client: client, bridge: bridge, log: log,
+		inviteParticipants: func(ctx context.Context, call *meowcaller.Call, targets ...string) []error {
+			return call.AddParticipants(ctx, targets...)
+		},
+	}
 	bridge.OnControl(c.control)
 	bridge.OnFrame(c.sendVideoFrame)
 	client.OnIncomingCall(c.onIncomingCall)
@@ -184,6 +200,9 @@ func (c *webCallController) control(command vbControl) error {
 			Emoji: command.Emoji, Sender: "self", Removed: command.Emoji == "",
 		})
 		return nil
+	case "add_participants":
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+		return c.addParticipants(command.Targets)
 	case "hangup":
 		call, err := c.activeCall()
 		if err != nil {
@@ -193,6 +212,52 @@ func (c *webCallController) control(command vbControl) error {
 	default:
 		return fmt.Errorf("unknown action %q", command.Action)
 	}
+}
+
+func (c *webCallController) addParticipants(targets []string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	call, err := c.activeCall()
+	if err != nil {
+		return err
+	}
+	normalized := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if target = strings.TrimSpace(target); target != "" {
+			normalized = append(normalized, target)
+		}
+	}
+	if len(normalized) == 0 {
+		return errors.New("at least one participant target is required")
+	}
+	inviteParticipants := c.inviteParticipants
+	if inviteParticipants == nil {
+		inviteParticipants = func(ctx context.Context, call *meowcaller.Call, targets ...string) []error {
+			return call.AddParticipants(ctx, targets...)
+		}
+	}
+	results := inviteParticipants(c.ctx, call, normalized...)
+	for i, target := range normalized {
+		var inviteErr error
+		if i < len(results) {
+			inviteErr = results[i]
+		} else {
+			inviteErr = errors.New("participant invite returned no result")
+		}
+		result := webParticipantInviteResult{
+			Event: "participant_invite", CallID: call.ID(), Target: target,
+			Success: inviteErr == nil,
+		}
+		if inviteErr != nil {
+			result.Message = inviteErr.Error()
+			c.log.Warn().Err(inviteErr).Str("call_id", call.ID()).Str("target", target).
+				Msg("web participant invite failed")
+		} else {
+			c.log.Info().Str("call_id", call.ID()).Str("target", target).
+				Msg("web participant invite submitted")
+		}
+		c.bridge.PublishEvent(result)
+	}
+	return nil
 }
 
 func (c *webCallController) activeCall() (*meowcaller.Call, error) {

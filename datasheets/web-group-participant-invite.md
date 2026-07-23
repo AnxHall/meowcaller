@@ -6,7 +6,8 @@ to an established call and reports each singular invite result independently.
 **Validation vector:** focused Go request/controller KATs plus static page
 behavior checks.
 
-**Status:** planned.
+**Status:** KAT-verified; request decoding, controller validation/results, replay
+state preservation, and page behavior checks pass.
 
 **Reference pinned at:**
 
