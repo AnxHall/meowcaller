@@ -9,9 +9,9 @@ sanitized direct-roster, canonical-roster, capability-capture, and send-boundary
 cases copied from the capture boundaries pinned below.
 
 **Status:** partial in whatsmeow commit
-`78a94217e8c4de14e91f4487d126e40f87a50ec7`; capability parsing/capture and
-direct/canonical roster KATs pass while the singular-send KAT remains skipped
-on its stub.
+`ba1fb726547343139964a34e57fe86ec641a419e`; capability, roster, validation,
+and offline singular-send KATs pass with no skips. Live call lifecycle wiring
+for local seeding, peer capture, and the connected gate remains pending.
 
 **Reference pinned at:**
 

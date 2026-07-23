@@ -31,6 +31,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   latest canonical group snapshot and passes both capture cases, invalid-state
   cases, and focused race tests. The singular send KAT remains skipped on its
   stub; CodeRabbit is clean.
+- Whatsmeow commit `ba1fb72` implements one-target resolution, device discovery,
+  duplicate rejection, verified offer construction, independent stanza ID
+  stamping, and one send. All current unit KATs run and pass, including the
+  offline send boundary with no optimistic mutation; live lifecycle wiring
+  remains pending. CodeRabbit, full tests, race tests, build, and vet are clean.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite
