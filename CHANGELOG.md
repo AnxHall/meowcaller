@@ -7,6 +7,17 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/group_invite_offer — `planned`
+- Added the capture-authoritative datasheet for the singular active-call invite
+  offer. The two-person picker capture proves that each selected invitee gets an
+  independent offer and transaction track; the proposed low-level builder
+  therefore accepts one bare-LID target, that target's device fan-out, and the
+  existing ordered roster.
+- The proposed wire form is deliberately separate from the 1:1 offer builder:
+  Opus/16000, network medium 2, unencrypted destination list, and `group_info`,
+  with no privacy, call-key ciphertext, `encopt`, device identity, group JID, or
+  top-level capability. No production code changed.
+
 ### voip/group_call_state — `planned`
 - Added the capture-authoritative datasheet for transaction-ordered group roster,
   relay, and `CALLID@call` routing state. The proposed envelope stores one parsed
