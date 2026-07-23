@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/group_participant_invite — `planned`
+### voip/group_participant_invite — `scaffolded`
 - Added the capture-authoritative datasheet for one active-call participant
   invitation. The proposed control path captures the established direct-call
   device capabilities, switches to the latest server roster after group
@@ -15,7 +15,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   offer, stamps one stanza ID, and sends once.
 - The module is intentionally audio-only and does not invent the unresolved
   companion-session preparation, optimistic membership, relay, media, or rekey
-  behavior. No production code changed.
+  behavior.
+- Whatsmeow commit `0b82057` adds the call-state fields, four approved function
+  envelopes, two sanitized capture cases for capability and roster behavior,
+  and an offline send-boundary KAT. All three KATs are skipped on explicit
+  stubs.
 
 ### voip/group_invite_offer — `KAT-verified`
 - Added the capture-authoritative datasheet for the singular active-call invite

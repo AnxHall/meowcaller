@@ -8,6 +8,10 @@ invite offer.
 sanitized direct-roster, canonical-roster, capability-capture, and send-boundary
 cases copied from the capture boundaries pinned below.
 
+**Status:** scaffolded in whatsmeow commit
+`0b82057314aa56fb2cf675f2e9d4a83cfbdda3fd`; all three KATs are skipped while
+the capability, roster, and singular send bodies remain explicit stubs.
+
 **Reference pinned at:**
 
 - capture SHA-256 `d565e26f2ca48483525c5bf4dcc2c1bf5ae616299190d128f5f35f74ac50d6c6`
