@@ -7,6 +7,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/group_update_ingest — `planned`
+- Restored the minimal datasheet template and group-call module registry for the
+  capture-driven build. The human reviewer approved the immutable capture corpus
+  as authoritative; the datasheet pins four raw JSONL boundaries by SHA-256 and
+  proposes the typed group-update event/dispatcher envelope for review. No
+  production code changed.
+
 ### meowcaller — use whatsmeow's first-class call API
 - Whatsmeow now owns 1:1 call signaling, call-key exchange, relay election, mute events,
   and independent video-flow transitions. Meowcaller consumes the typed handoff events

@@ -1,0 +1,128 @@
+{
+  "schema": "meowcaller.voip-capture-corpus.v1",
+  "generated_from": "immutable archived JSONL captures",
+  "totals": {
+    "captures": 8,
+    "events": 64821,
+    "bytes": 76125366
+  },
+  "captures": [
+    {
+      "path": "diag/captures/group-call-outgoing-20260723-100408.jsonl",
+      "capture_version": 1,
+      "events": 10472,
+      "bytes": 3938672,
+      "sha256": "f126974bcdbbb7f6325e17f0acc3b8eea4119a48d17bbf9c0691c3228df81936",
+      "role": "initial_group_call_from_group_chat",
+      "complete_call": true,
+      "call_id": "00954571727022506957B88D578C9487",
+      "call_method": "startGroupCall",
+      "remote_target_count": 2,
+      "group_jid_present": true
+    },
+    {
+      "path": "diag/captures/group-call-outgoing-v2-20260723-100703.jsonl",
+      "capture_version": 2,
+      "events": 18629,
+      "bytes": 21836404,
+      "sha256": "47e4966e1847b686b3a31c4983df8025617d200ec27a71c5884598488af65b90",
+      "role": "initial_group_call_from_group_chat_with_video_upgrade",
+      "complete_call": true,
+      "call_id": "00789FDA2E6B8842B8EFE01ABD5F5B3A",
+      "call_method": "startGroupCall",
+      "remote_target_count": 2,
+      "group_jid_present": true,
+      "leading_residual_v1_rows": 111
+    },
+    {
+      "path": "diag/captures/group-call-add-people-v2-20260723-112208.jsonl",
+      "capture_version": 2,
+      "events": 8372,
+      "bytes": 12762523,
+      "sha256": "d565e26f2ca48483525c5bf4dcc2c1bf5ae616299190d128f5f35f74ac50d6c6",
+      "role": "one_to_one_upgraded_by_one_invite",
+      "complete_call": true,
+      "call_id": "0063F48A8B4CA7D1DAF665F1CC8EB545",
+      "call_method": "startCall",
+      "invite_method_calls": 1,
+      "group_jid_present": false
+    },
+    {
+      "path": "diag/captures/pre-group-call-multi-add-v2-20260723-114000.jsonl",
+      "capture_version": 2,
+      "events": 7803,
+      "bytes": 11660927,
+      "sha256": "2e9c5492097cd0f6aa3d9964aabf34a0a92bf53a70850072a765133ff7d36896",
+      "role": "pre_capture_setup_and_ui_activity",
+      "complete_call": false,
+      "call_ids": 0,
+      "call_method_calls": 0,
+      "session_continues_into": "group-call-multi-add-v2-20260723-135301.jsonl"
+    },
+    {
+      "path": "diag/captures/group-call-multi-add-v2-20260723-135301.jsonl",
+      "capture_version": 2,
+      "events": 7192,
+      "bytes": 9572198,
+      "sha256": "a91028746497b58d962f14fe5ed4d8036f3ca1c7f2091af5caa52f8430947def",
+      "role": "one_to_one_upgraded_by_two_invites",
+      "complete_call": true,
+      "call_id": "0013AE8E463F60BFE6A1AF5247556691",
+      "call_method": "startCall",
+      "invite_method_calls": 2,
+      "group_jid_present": false
+    },
+    {
+      "path": "diag/captures/snapshot-v2-20260723-135600.jsonl",
+      "capture_version": 2,
+      "events": 476,
+      "bytes": 688419,
+      "sha256": "47146c58d637102fd07174cb5651abf985a0e628f1b28dcdbedaac5eef3e2098",
+      "role": "partial_pre_call_selector_snapshot",
+      "complete_call": false,
+      "call_ids": 0,
+      "call_method_calls": 0,
+      "selection_confirmed": false
+    },
+    {
+      "path": "diag/captures/group-call-preselected-participants-v2-20260723-140338.jsonl",
+      "capture_version": 2,
+      "events": 8661,
+      "bytes": 10313200,
+      "sha256": "1851cf76118bc8ef116df4ea51db73968cef3d415996cdf34013bdee9ac27fc7",
+      "role": "initial_ad_hoc_group_call_from_pre_call_selector",
+      "complete_call": true,
+      "call_id": "00DD63A26643DC3496FCBD161E6E2AB1",
+      "call_method": "startGroupCall",
+      "remote_target_count": 3,
+      "group_jid_present": false
+    },
+    {
+      "path": "diag/captures/group-chat-selector-single-direct-v2-20260723-140636.jsonl",
+      "capture_version": 2,
+      "events": 3216,
+      "bytes": 5353023,
+      "sha256": "fe6a59e96f37af1459b7ffcca1fb4909253683b3e4d2cb0b3af75cd173579247",
+      "role": "single_selection_from_group_chat_selector_routes_direct",
+      "complete_call": true,
+      "call_id": "00F904B35E2C6FEC999CCC871CFD7F92",
+      "call_method": "startCall",
+      "remote_target_count": 1,
+      "group_jid_present": false,
+      "group_info_present": false,
+      "call_address_routing_present": false
+    }
+  ],
+  "observed": [
+    "A one-person pre-call selection invokes startCall and produces standard one-to-one signaling even when the selector was opened from a group chat.",
+    "A multi-person pre-call selection invokes startGroupCall and produces one initial group offer containing all selected users and devices.",
+    "A startGroupCall may carry a real group JID or an empty group JID; ad-hoc group calls are not bound to a chat.",
+    "Adding people to an active call uses one inviteToCall invocation and one offer per added user.",
+    "Group-call identity and routing cannot be inferred from the UI origin or from GroupJID presence alone.",
+    "Only connected devices receive PIDs and become active media/keying participants."
+  ],
+  "hypotheses": [
+    "The pre-call selector branches on selected remote participant count: one selects the direct-call path and two or more select the initial-group path.",
+    "The chat from which the selector was opened is presentation context only when startGroupCall receives an empty group JID."
+  ]
+}
