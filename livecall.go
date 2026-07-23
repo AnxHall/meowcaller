@@ -2,7 +2,6 @@ package meowcaller
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -131,10 +130,7 @@ func (c *Call) SetMuted(muted bool) error {
 // AddParticipant invites one person to this established call.
 func (c *Call) AddParticipant(ctx context.Context, target string) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
-	// TODO
-	// agent suggestion: delegate the call ID and target to the engine adapter with the caller's context.
-	// human input:
-	return errors.New("meowcaller: add participant is not implemented")
+	return c.eng.inviteParticipant(ctx, c.id, target)
 }
 
 // AddParticipants invites each person independently and returns index-aligned results.

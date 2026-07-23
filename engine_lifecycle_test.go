@@ -305,7 +305,6 @@ func TestEngineInviteParticipantRejectsInvalidStateAndPreservesFailure(t *testin
 
 func TestCallAddParticipantDelegatesSingularInvite(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
-	t.Skip("blocked: api/group_participant_invite bodies are stubs")
 	eng, call := testEngineWithOutgoingCall()
 	type contextKey string
 	ctx := context.WithValue(context.Background(), contextKey("invite"), "preserved")
@@ -336,7 +335,6 @@ func TestCallAddParticipantDelegatesSingularInvite(t *testing.T) {
 
 func TestCallAddParticipantValidationAndFailure(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
-	t.Skip("blocked: api/group_participant_invite bodies are stubs")
 	eng, call := testEngineWithOutgoingCall()
 	if err := call.AddParticipant(context.Background(), " "); err == nil {
 		t.Fatal("empty target accepted")

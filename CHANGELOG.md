@@ -19,6 +19,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   parsing, context-preserving singular Whatsmeow delegation, and wrapped
   failures. Focused/full tests, race, build, and vet pass; CodeRabbit's one test
   hardening finding was applied.
+- Implemented `Call.AddParticipant` as the context-preserving singular façade.
+  Its validation/delegation KATs, full tests, race, build, vet, and CodeRabbit
+  pass; only the plural convenience stub remains.
 
 ### voip/group_participant_invite — `partial`
 - Added the capture-authoritative datasheet for one active-call participant
