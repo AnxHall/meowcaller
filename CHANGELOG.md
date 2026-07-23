@@ -7,7 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### api/group_participant_invite — `planned`
+### web/group_participant_invite — `planned`
+- Added the capture-authoritative browser-console envelope for a multi-target
+  control request and one transient submitted/failed result event per singular
+  invite.
+
+### api/group_participant_invite — `KAT-verified`
 - Added the capture-authoritative envelope for singular
   `Call.AddParticipant(ctx, target)` delegation and an ordered plural
   convenience loop. The web example will retain one independent singular
