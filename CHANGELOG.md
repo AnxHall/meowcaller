@@ -61,6 +61,23 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   Corrected the registry dependency so ingestion depends on group state. No
   production code changed.
 
+### voip/group_update_ingest — `KAT-verified`
+- Added whatsmeow commit `f676cf1`: `group_update` now routes through the call
+  dispatcher, parses into the typed snapshot, delegates monotonic acceptance to
+  `applyGroupUpdate`, and emits `CallGroupUpdate` only for accepted state.
+  Duplicate and post-terminate deliveries remain ACKed but suppressed. Malformed
+  input logs sanitized metadata, emits `UnknownCallEvent`, leaves state
+  untouched, and remains ACKed.
+- `TestGroupUpdateIngestionCorpus` runs all four capture-derived fixtures and
+  validates identity, group metadata, ordered participant/device/PID state,
+  event payload, state storage, duplicate suppression, late-update suppression,
+  and ACK attempts. The malformed fallback test also passes. Build, vet, full
+  tests, and focused race tests pass.
+- CodeRabbit was run twice. Its findings were rejected as review-context false
+  positives: every allegedly missing group type and parser helper exists in the
+  selected local base, and the compile/test gates exercise them successfully.
+  The scaffold-to-final diff matches the reviewed handler and dispatcher scope.
+
 ### meowcaller — use whatsmeow's first-class call API
 - Whatsmeow now owns 1:1 call signaling, call-key exchange, relay election, mute events,
   and independent video-flow transitions. Meowcaller consumes the typed handoff events

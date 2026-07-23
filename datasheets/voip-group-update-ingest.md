@@ -6,9 +6,9 @@ whatsmeow call-control boundary.
 **Validation vector:** `group_update_corpus.json` — sanitized fixtures copied
 from the capture events pinned below.
 
-**Status:** scaffolded in whatsmeow commit
-`285aa8bb99e242a207a29e1c86711902769c35aa`; the KAT is skipped on the handler
-body.
+**Status:** verified in whatsmeow commit
+`f676cf1d3294c408920acc047fa44d9b9d1c72d9`; the capture KAT and malformed
+fallback test run and pass.
 
 **Reference pinned at:**
 
@@ -138,11 +138,9 @@ call-state merging or media behavior itself.
   fields.
 - Approved scaffold choice: retain `Data *waBinary.Node` for consistency with
   existing call events until the parser covers every observed optional child.
-- `TODO(human)`: approve dispatching only snapshots accepted by
-  `applyGroupUpdate`, rather than every successfully parsed wire update. Agent
-  suggestion: accepted only, so stale, duplicate, and post-terminate delivery
-  cannot leak around the verified state gate.
-- `TODO(human)`: choose malformed-update behavior.
-  Agent suggestion: warn with sanitized call metadata, dispatch
+- Approved: dispatch only snapshots accepted by `applyGroupUpdate`, so stale,
+  duplicate, and post-terminate delivery cannot leak around the verified state
+  gate.
+- Approved: on malformed input, warn with sanitized call metadata, dispatch
   `UnknownCallEvent`, and still allow the deferred ACK to run so a malformed
   optional field cannot trigger a server resend loop.
