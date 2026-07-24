@@ -7,9 +7,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_relay_refresh — `planned`
-- Added the capture-pinned contract for rotating group relay credentials over
-  the existing active DataChannel while preserving RTP and stream identity.
+### media/group_relay_refresh — `KAT-verified`
+- Added the capture-pinned contract and implementation for rotating group relay
+  credentials over the existing active DataChannel while preserving RTP and
+  stream identity.
+- The critical group update now selects the active relay's rotated token,
+  rebuilds and immediately sends Allocate under the group relay key, and
+  atomically replaces the one-second keepalive packet. Focused/full tests, race,
+  and vet pass. CodeRabbit review was attempted but blocked by its free CLI rate
+  limit.
 
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-

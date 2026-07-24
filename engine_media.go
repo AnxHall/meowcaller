@@ -159,6 +159,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	defer ch.Close()
+	allocateState := newGroupRelayAllocateState(allocate)
 
 	// Send a consent ping (0x0801) immediately, together with the allocate and BEFORE any
 	// RTP. The relay won't forward the peer's media until consent (ping → pong) is
@@ -323,7 +324,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			var tx [12]byte
 			_, _ = rand.Read(tx[:])
 			ping := stun.BuildWhatsappPing(tx, log)
-			if _, err := ch.Send(allocate); err != nil {
+			// Source of truth: https://github.com/purpshell/meowcaller/blob/6b568ebf25068e2720ba474a7092d482f53e3091/datasheets/group-media-relay-refresh.md#L77-L79
+			if _, err := ch.Send(allocateState.Current()); err != nil {
 				return
 			}
 			_, _ = ch.Send(ping[:])
@@ -442,6 +444,32 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		defer audioPlayoutMu.Unlock()
 		if err := audioReceivers.ApplyGroupUpdate(update); err != nil {
 			return err
+		}
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/6b568ebf25068e2720ba474a7092d482f53e3091/datasheets/group-media-relay-refresh.md#L70-L81
+		if update.Relay != nil {
+			var transactionID [12]byte
+			if _, err := rand.Read(transactionID[:]); err != nil {
+				return fmt.Errorf("generate group relay transaction ID: %w", err)
+			}
+			refreshedAllocate, changed, err := allocateState.Apply(ep, update.Relay, streamSsrcs, transactionID)
+			if err != nil {
+				return err
+			}
+			if changed {
+				if _, err = ch.Send(refreshedAllocate); err != nil {
+					return fmt.Errorf("send refreshed group relay allocate: %w", err)
+				}
+				log.Info().
+					Uint32("relay_transaction_id", update.Relay.TransactionID).
+					Str("relay_name", ep.RelayName).
+					Msg("refreshed group relay allocation")
+				e.c.diag.Emit("stun", map[string]any{
+					"event":                "group_allocate_sent",
+					"bytes":                len(refreshedAllocate),
+					"relay_transaction_id": update.Relay.TransactionID,
+					"relay_name":           ep.RelayName,
+				})
+			}
 		}
 		activeParticipantIDs := audioReceivers.ActiveParticipantIDs()
 		audioMixer.Retain(activeParticipantIDs)
