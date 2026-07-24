@@ -608,6 +608,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   PCM when a second remote connects, and reframes internal 10 ms mix ticks into the
   public 960-sample sink contract. Live multi-speaker playout remains E2E unvalidated.
 
+### voip/group-enc-rekey-ingest — planned
+- Added the capture-pinned signaling datasheet for typed keygen-v2 `enc_rekey`
+  parsing, existing Signal DM decryption reuse, 32-byte raw-key dispatch, delayed
+  transaction handling, and sanitized failure behavior. Live call
+  `D66652FC17BF1F8BBA898DE097B428FA` corroborated this as the next authentication
+  boundary.
+
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:
   `DeriveWasmParticipantSsrc` (HKDF-SHA256 with salt=slot-word LE32, ikm=callId,
