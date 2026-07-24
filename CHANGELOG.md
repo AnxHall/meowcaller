@@ -588,6 +588,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   participant keys and changed tags are rejected, and the next valid packet remains
   receivable. **KAT-verified.**
 
+### media/group-receive — scaffolded
+- Added the capture-pinned envelope for connected-device/PID activation,
+  deterministic primary-audio SSRC routing, per-participant authenticated receive
+  state, original-peer continuity, and identity-labeled decoded frames.
+
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:
   `DeriveWasmParticipantSsrc` (HKDF-SHA256 with salt=slot-word LE32, ikm=callId,
