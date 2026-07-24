@@ -71,18 +71,17 @@ GroupUpdate(U), U > rosterTx:
   atomically replace active connected PID-bearing device indexes
   preserve same-device receiver and decoder objects
   remove departed receivers and installed key epochs
-  apply buffered rekeys for exactly U
-  discard buffered rekeys older than U and retain future rekeys
+  apply buffered rekeys through U in transaction order when their authors remain active
+  discard unresolved past rekeys and retain future rekeys
 
 EncRekey(K), no roster or K > rosterTx:
   buffer by (K, wire author); never mutate the 1:1 fallback
 
-EncRekey(K), K < rosterTx:
-  ignore as stale
-
-EncRekey(K), K == rosterTx:
+EncRekey(K), roster exists and K <= rosterTx:
   resolve the exact active device first
   otherwise resolve a bare user only when exactly one active device matches
+  compare K with that participant's installed key epoch, not global rosterTx
+  ignore K only when older than that participant's installed key epoch
   install only into that resolved participant receiver
   identical duplicate is a no-op; conflicting duplicate is rejected
 
@@ -98,8 +97,10 @@ one receiver exists.
 - The synthetic raw-key RTP KAT must reject before install and authenticate after.
 - A participant rekey must leave every other participant's packet path unchanged.
 - Rekey-before-roster and roster-before-rekey must reach the same state.
-- Stale, future-skipped, unknown-author, ambiguous-author, duplicate-conflict, and
-  departure cases must be covered.
+- A delayed rekey older than the latest roster must still install for an active
+  author when that author's key epoch has not advanced.
+- Per-author stale, future, unknown-author, ambiguous-author, duplicate-conflict,
+  and departure cases must be covered.
 - Signal decryption remains a live end-to-end boundary in Whatsmeow.
 - The target receiver ROC reset is `NOT VALIDATED` for an already-active stream
   crossing a sequence rollover; no capture vector proves preserve versus reset.

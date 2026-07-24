@@ -9,9 +9,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ### media/group_enc_rekey — `planned`
 - Added the capture-authoritative participant rekey state machine: transaction-
-  exact buffering, exact-device/unique-user author resolution, per-receiver raw-key
-  installation, duplicate protection, and departure pruning. The target ROC reset
-  remains explicitly unvalidated for an already-active rollover.
+  ordered buffering, delayed per-author epochs, exact-device/unique-user author
+  resolution, per-receiver raw-key installation, duplicate protection, and
+  departure pruning. The target ROC reset remains explicitly unvalidated for an
+  already-active rollover.
 
 ### web/group_participant_invite — `KAT-verified`
 - Added the capture-authoritative browser-console envelope for a multi-target
