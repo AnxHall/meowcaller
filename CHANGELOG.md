@@ -7,12 +7,18 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_enc_rekey — `planned`
+### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-
   ordered buffering, delayed per-author epochs, exact-device/unique-user author
   resolution, per-receiver raw-key installation, duplicate protection, and
   departure pruning. The target ROC reset remains explicitly unvalidated for an
   already-active rollover.
+- Wired typed Whatsmeow rekeys through the engine's pre-media queue into the
+  participant registry. Synthetic RTP KATs prove wrong-key rejection before
+  install, authentication after install, send-key preservation, delayed rekey
+  handling, exact author targeting, sole-remote rejection, other-participant ROC
+  and decoder continuity, and key cleanup when a call ends. Live group audio
+  remains the end-to-end gate.
 
 ### web/group_participant_invite — `KAT-verified`
 - Added the capture-authoritative browser-console envelope for a multi-target
@@ -615,12 +621,17 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   PCM when a second remote connects, and reframes internal 10 ms mix ticks into the
   public 960-sample sink contract. Live multi-speaker playout remains E2E unvalidated.
 
-### voip/group-enc-rekey-ingest — planned
+### voip/group-enc-rekey-ingest — partial
 - Added the capture-pinned signaling datasheet for typed keygen-v2 `enc_rekey`
   parsing, existing Signal DM decryption reuse, 32-byte raw-key dispatch, delayed
   transaction handling, and sanitized failure behavior. Live call
   `D66652FC17BF1F8BBA898DE097B428FA` corroborated this as the next authentication
   boundary.
+- Whatsmeow now validates and clones the capture-shaped envelope, reuses the exact
+  outer-author Signal session for `msg`/`pkmsg`, validates the decrypted 32-byte
+  key, dispatches `CallEncRekey`, and preserves deferred ACKs on failure. Parser,
+  malformed-envelope, cloning, metadata-only logging, and failure-router KATs pass;
+  successful live Signal decryption remains explicitly unvalidated.
 
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:

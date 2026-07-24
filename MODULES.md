@@ -3,7 +3,7 @@
 This registry covers the capture-driven WhatsApp group-call work layered on the
 verified 1:1 rebuild. Each module is built under `AGENTS.md`, one at a time.
 
-Status: `planned` → `scaffolded` → `implemented` → `verified`.
+Status: `planned` → `scaffolded` → `partial` → `implemented` → `verified`.
 
 | # | Module | Package | Deps | Datasheet | Authority | KAT | Status |
 |---|---|---|---|---|---|---|---|
@@ -16,5 +16,5 @@ Status: `planned` → `scaffolded` → `implemented` → `verified`.
 | 07 | session/authenticated_receive | `github.com/purpshell/meowcaller` | existing WARP tag computation and recv ROC tracker | [session.md](datasheets/session.md), [srtp-warp.md](datasheets/srtp-warp.md), [srtp-e2e.md](datasheets/srtp-e2e.md) | pinned WARP/SRTP/session reference | `srtp/warp_test.go`, `srtp/e2e_test.go`, `session_test.go` | verified (configured-length tag verification, authenticated ROC commit, wrong-key rejection, and peer round-trip pass) |
 | 08 | media/group_receive | `github.com/purpshell/meowcaller` | session/authenticated_receive, whatsmeow group_update_ingest | [group-media-receive.md](datasheets/group-media-receive.md) | immutable capture corpus + focused Go KATs | `group_media_receive_test.go`, `engine_lifecycle_test.go` | verified (connected winning-device activation, PID 0 continuity, PID 2 routing, atomic rejection, departure pruning, and successful-only engine caching pass) |
 | 09 | media/group_audio_mixer | `github.com/purpshell/meowcaller` | media/group_receive, existing audio sink | [group-audio-mixer.md](datasheets/group-audio-mixer.md) | human-authorized policy; live E2E pending | `group_audio_mixer_test.go` | partial (deterministic queue/mix/roster KATs pass; live multi-speaker playout pending) |
-| 10 | group_enc_rekey_ingest | `go.mau.fi/whatsmeow` | existing call router and Signal DM decryptor | [voip-group-enc-rekey-ingest.md](datasheets/voip-group-enc-rekey-ingest.md) | immutable capture corpus + live auth-failure corroboration | `group_enc_rekey_corpus.json`, focused Go KATs | planned |
-| 11 | media/group_enc_rekey | `github.com/purpshell/meowcaller` | group_enc_rekey_ingest, media/group_receive, verified raw E2E KDF | [group-media-enc-rekey.md](datasheets/group-media-enc-rekey.md) | immutable capture corpus + live auth-failure corroboration | `session_test.go`, `group_media_receive_test.go`, `engine_lifecycle_test.go` | planned |
+| 10 | group_enc_rekey_ingest | `go.mau.fi/whatsmeow` | existing call router and Signal DM decryptor | [voip-group-enc-rekey-ingest.md](datasheets/voip-group-enc-rekey-ingest.md) | immutable capture corpus + live auth-failure corroboration | `group_enc_rekey_corpus.json`, focused Go KATs | partial (parser/router/error KATs pass; successful live Signal decrypt pending) |
+| 11 | media/group_enc_rekey | `github.com/purpshell/meowcaller` | group_enc_rekey_ingest, media/group_receive, verified raw E2E KDF | [group-media-enc-rekey.md](datasheets/group-media-enc-rekey.md) | immutable capture corpus + live auth-failure corroboration | `session_test.go`, `group_media_receive_test.go`, `engine_lifecycle_test.go` | partial (raw-key packet, author isolation, ordering, and lifecycle KATs pass; live group audio pending) |

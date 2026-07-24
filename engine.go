@@ -1,6 +1,7 @@
 package meowcaller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -34,20 +35,22 @@ type engineCall struct {
 	peerLID string
 	from    types.JID
 
-	direction        CallDirection
-	codec            AudioCodec
-	localVideo       bool
-	remoteVideo      bool
-	videoGate        bool
-	peerVideoUpgrade bool
-	videoTx          *videoSender
-	appDataTx        *appDataSender
-	rekeyPeer        func(string) error
-	groupUpdate      *types.GroupCallUpdate
-	applyGroupUpdate func(types.GroupCallUpdate) error
-	started          bool
-	ended            bool
-	cancel           context.CancelFunc
+	direction          CallDirection
+	codec              AudioCodec
+	localVideo         bool
+	remoteVideo        bool
+	videoGate          bool
+	peerVideoUpgrade   bool
+	videoTx            *videoSender
+	appDataTx          *appDataSender
+	rekeyPeer          func(string) error
+	groupUpdate        *types.GroupCallUpdate
+	applyGroupUpdate   func(types.GroupCallUpdate) error
+	pendingGroupRekeys []events.CallEncRekey
+	applyGroupRekey    func(events.CallEncRekey) error
+	started            bool
+	ended              bool
+	cancel             context.CancelFunc
 }
 
 func newEngine(c *Client) *engine {
@@ -126,6 +129,8 @@ func (e *engine) install() {
 			e.onVideo(ev)
 		case *events.CallGroupUpdate:
 			e.onGroupUpdate(ev)
+		case *events.CallEncRekey:
+			e.onEncRekey(ev)
 		}
 	})
 }
@@ -483,6 +488,38 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	e.mu.Unlock()
 }
 
+func (e *engine) onEncRekey(ev *events.CallEncRekey) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L48-L93
+	if ev == nil || len(ev.RawKey) != 32 {
+		return
+	}
+	rekey := *ev
+	rekey.RawKey = bytes.Clone(ev.RawKey)
+	rekey.Rekey.Ciphertext = nil
+	rekey.Data = nil
+	e.mu.Lock()
+	m := e.calls[ev.CallID]
+	if m == nil || m.ended || m.call == nil || m.call.State() == CallPhaseEnded {
+		e.mu.Unlock()
+		return
+	}
+	apply := m.applyGroupRekey
+	if apply == nil {
+		m.pendingGroupRekeys = append(m.pendingGroupRekeys, rekey)
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+	if err := apply(rekey); err != nil {
+		e.c.log.Warn().
+			Err(err).
+			Str("call_id", ev.CallID).
+			Uint32("transaction_id", ev.Rekey.TransactionID).
+			Str("author", ev.From.String()).
+			Msg("failed to apply participant media rekey")
+	}
+}
+
 func (e *engine) onMediaReady(ev *events.CallMediaReady) {
 	relay := ev.Relay
 	e.mu.Lock()
@@ -650,6 +687,12 @@ func (e *engine) finishCall(callID, reason string) {
 		return
 	}
 	m.ended = true
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L88-L89
+	for i := range m.pendingGroupRekeys {
+		clear(m.pendingGroupRekeys[i].RawKey)
+	}
+	m.pendingGroupRekeys = nil
+	m.applyGroupRekey = nil
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil

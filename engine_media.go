@@ -19,6 +19,7 @@ import (
 	"github.com/purpshell/meowcaller/stun"
 	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 // The live-relay media loop: connect+allocate to the elected relay, then run the
@@ -435,6 +436,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	e.mu.Lock()
 	currentPeer := peerLID
 	var pendingGroupUpdate *types.GroupCallUpdate
+	var pendingGroupRekeys []events.CallEncRekey
 	applyGroupUpdate := func(update types.GroupCallUpdate) error {
 		audioPlayoutMu.Lock()
 		defer audioPlayoutMu.Unlock()
@@ -452,11 +454,22 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		}
 		return nil
 	}
+	applyGroupRekey := func(rekey events.CallEncRekey) error {
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L80-L93
+		return audioReceivers.ApplyParticipantRawRekey(
+			rekey.Rekey.TransactionID,
+			rekey.From,
+			rekey.RawKey,
+		)
+	}
 	if m := e.calls[callID]; m != nil {
 		m.rekeyPeer = rekeyPeer
 		pendingGroupUpdate = m.groupUpdate
+		pendingGroupRekeys = append(pendingGroupRekeys, m.pendingGroupRekeys...)
 		m.groupUpdate = nil
+		m.pendingGroupRekeys = nil
 		m.applyGroupUpdate = applyGroupUpdate
+		m.applyGroupRekey = applyGroupRekey
 		currentPeer = m.peerLID
 	}
 	e.mu.Unlock()
@@ -476,6 +489,15 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			e.mu.Unlock()
 		}
 	}
+	for _, rekey := range pendingGroupRekeys {
+		if err := applyGroupRekey(rekey); err != nil {
+			log.Warn().
+				Err(err).
+				Uint32("transaction_id", rekey.Rekey.TransactionID).
+				Str("author", rekey.From.String()).
+				Msg("ignored pending participant media rekey")
+		}
+	}
 	if currentPeer != "" && currentPeer != peerLID {
 		if err := rekeyPeer(currentPeer); err != nil {
 			return fmt.Errorf("rekey media to answering device: %w", err)
@@ -487,6 +509,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		if m := e.calls[callID]; m != nil {
 			m.rekeyPeer = nil
 			m.applyGroupUpdate = nil
+			m.applyGroupRekey = nil
 		}
 		e.mu.Unlock()
 	}()

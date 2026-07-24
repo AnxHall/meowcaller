@@ -1,6 +1,7 @@
 package meowcaller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -208,6 +209,61 @@ func TestEngineGroupUpdatePreservesOriginalPeerAndQueuesLatestRoster(t *testing.
 	}
 	if len(applied) != 3 || applied[1] != 20 || applied[2] != 19 {
 		t.Fatalf("error/recovery callbacks = %v, want [18 20 19]", applied)
+	}
+}
+
+func TestEngineQueuesAndRoutesParticipantRekeyByAuthor(t *testing.T) {
+	eng, call := testEngineWithOutgoingCall()
+	m := eng.calls[call.ID()]
+	author := mediaTestJID("333333333333333", 43)
+	creator := mediaTestJID("111111111111111", 14)
+	rawKey := bytes.Repeat([]byte{0xa5}, 32)
+	event := &events.CallEncRekey{
+		BasicCallMeta: types.BasicCallMeta{
+			CallID: call.ID(), From: author, CallCreator: creator,
+		},
+		Rekey:  types.GroupCallEncRekey{TransactionID: 17},
+		RawKey: rawKey,
+	}
+	eng.onEncRekey(event)
+	rawKey[0] ^= 0xff
+	if len(m.pendingGroupRekeys) != 1 {
+		t.Fatalf("queued participant rekeys = %d, want 1", len(m.pendingGroupRekeys))
+	}
+	if m.pendingGroupRekeys[0].From != author || m.pendingGroupRekeys[0].RawKey[0] != 0xa5 {
+		t.Fatalf("queued participant rekey = %+v", m.pendingGroupRekeys[0])
+	}
+
+	var applied events.CallEncRekey
+	m.applyGroupRekey = func(got events.CallEncRekey) error {
+		applied = got
+		return nil
+	}
+	next := &events.CallEncRekey{
+		BasicCallMeta: types.BasicCallMeta{
+			CallID: call.ID(), From: author, CallCreator: creator,
+		},
+		Rekey:  types.GroupCallEncRekey{TransactionID: 18},
+		RawKey: bytes.Repeat([]byte{0x5a}, 32),
+	}
+	eng.onEncRekey(next)
+	if applied.From != author || applied.From == creator || applied.Rekey.TransactionID != 18 {
+		t.Fatalf("applied participant rekey = %+v", applied)
+	}
+
+	m.applyGroupRekey = nil
+	eng.onEncRekey(next)
+	if len(m.pendingGroupRekeys) != 2 {
+		t.Fatalf("queued participant rekeys before end = %d, want 2", len(m.pendingGroupRekeys))
+	}
+	eng.finishCall(call.ID(), "ended")
+	if len(m.pendingGroupRekeys) != 0 || m.applyGroupRekey != nil {
+		t.Fatal("call end retained pending participant key material or callback")
+	}
+	applied = events.CallEncRekey{}
+	eng.onEncRekey(next)
+	if applied.Rekey.TransactionID != 0 {
+		t.Fatal("ended call applied a participant rekey")
 	}
 }
 
