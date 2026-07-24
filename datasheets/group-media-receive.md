@@ -53,6 +53,7 @@ type participantAudioDecoder interface {
 }
 
 type decodedParticipantAudio struct {
+	ParticipantID string
 	UserJID   types.JID
 	DeviceJID types.JID
 	PID       uint32
@@ -77,6 +78,7 @@ func newParticipantReceiveRegistry(
 
 func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpdate) error
 func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error
+func (r *participantReceiveRegistry) ActiveParticipantIDs() []string
 func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticipantAudio, bool)
 ```
 

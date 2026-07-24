@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/purpshell/meowcaller/mlow"
@@ -15,13 +16,14 @@ type participantAudioDecoder interface {
 }
 
 type decodedParticipantAudio struct {
-	UserJID   types.JID
-	DeviceJID types.JID
-	PID       uint32
-	HasPID    bool
-	SSRC      uint32
-	Timestamp uint32
-	PCM       []float32
+	ParticipantID string
+	UserJID       types.JID
+	DeviceJID     types.JID
+	PID           uint32
+	HasPID        bool
+	SSRC          uint32
+	Timestamp     uint32
+	PCM           []float32
 }
 
 type participantAudioReceiver struct {
@@ -119,6 +121,13 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 	nextByDeviceID := make(map[string]*participantAudioReceiver)
 	nextByPID := make(map[uint32]*participantAudioReceiver)
 	nextBySSRC := make(map[uint32]*participantAudioReceiver)
+	type receiverMetadata struct {
+		receiver  *participantAudioReceiver
+		userJID   types.JID
+		deviceJID types.JID
+		pid       uint32
+	}
+	var metadata []receiverMetadata
 	for _, participant := range update.Participants {
 		if participant.State != "connected" {
 			continue
@@ -131,6 +140,9 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			if participantID == r.selfID {
 				continue
 			}
+			if _, exists := nextByDeviceID[participantID]; exists {
+				return fmt.Errorf("meowcaller: duplicate group participant device %s", participantID)
+			}
 			receiver := r.byDeviceID[participantID]
 			if receiver == nil {
 				var err error
@@ -139,12 +151,6 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 					return err
 				}
 			}
-			receiver.mu.Lock()
-			receiver.userJID = participant.JID
-			receiver.deviceJID = device.JID
-			receiver.pid = device.PID
-			receiver.hasPID = true
-			receiver.mu.Unlock()
 			if _, exists := nextByPID[device.PID]; exists {
 				return fmt.Errorf("meowcaller: duplicate group participant PID %d", device.PID)
 			}
@@ -154,7 +160,19 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			nextByDeviceID[participantID] = receiver
 			nextByPID[device.PID] = receiver
 			nextBySSRC[receiver.ssrc] = receiver
+			metadata = append(metadata, receiverMetadata{
+				receiver: receiver, userJID: participant.JID,
+				deviceJID: device.JID, pid: device.PID,
+			})
 		}
+	}
+	for _, next := range metadata {
+		next.receiver.mu.Lock()
+		next.receiver.userJID = next.userJID
+		next.receiver.deviceJID = next.deviceJID
+		next.receiver.pid = next.pid
+		next.receiver.hasPID = true
+		next.receiver.mu.Unlock()
 	}
 	r.byDeviceID = nextByDeviceID
 	r.byPID = nextByPID
@@ -196,6 +214,18 @@ func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error {
 	return nil
 }
 
+func (r *participantReceiveRegistry) ActiveParticipantIDs() []string {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L89-L100
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	participantIDs := make([]string, 0, len(r.byDeviceID))
+	for participantID := range r.byDeviceID {
+		participantIDs = append(participantIDs, participantID)
+	}
+	slices.Sort(participantIDs)
+	return participantIDs
+}
+
 func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticipantAudio, bool) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L37-L44
 	header, ok := rtp.ParseRtpHeader(packet)
@@ -222,7 +252,8 @@ func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticip
 	}
 	pcm := receiver.decoder.Decode(payload)
 	return decodedParticipantAudio{
-		UserJID: receiver.userJID, DeviceJID: receiver.deviceJID,
+		ParticipantID: receiver.participantID,
+		UserJID:       receiver.userJID, DeviceJID: receiver.deviceJID,
 		PID: receiver.pid, HasPID: receiver.hasPID, SSRC: authenticatedHeader.Ssrc,
 		Timestamp: authenticatedHeader.Timestamp, PCM: pcm,
 	}, true

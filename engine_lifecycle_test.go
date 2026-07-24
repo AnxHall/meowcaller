@@ -5,12 +5,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
 func testEngineWithOutgoingCall() (*engine, *Call) {
-	c := &Client{}
+	c := &Client{log: zerolog.Nop()}
 	c.eng = newEngine(c)
 	call := &Call{eng: c.eng, id: "CID", peer: peerJID(), phase: CallPhaseCalling}
 	c.eng.calls[call.ID()] = &engineCall{
@@ -180,6 +181,33 @@ func TestEngineGroupUpdatePreservesOriginalPeerAndQueuesLatestRoster(t *testing.
 	}
 	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 18 {
 		t.Fatalf("stale group update replaced transaction 18: %#v", m.groupUpdate)
+	}
+
+	m.applyGroupUpdate = func(update types.GroupCallUpdate) error {
+		applied = append(applied, update.TransactionID)
+		if update.TransactionID == 20 {
+			return errors.New("invalid roster")
+		}
+		return nil
+	}
+	rejected := types.GroupCallUpdate{CallID: call.ID(), TransactionID: 20}
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: added},
+		Update:        rejected,
+	})
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 18 {
+		t.Fatalf("rejected update advanced cached roster: %#v", m.groupUpdate)
+	}
+	recovery := types.GroupCallUpdate{CallID: call.ID(), TransactionID: 19}
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: added},
+		Update:        recovery,
+	})
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 19 {
+		t.Fatalf("valid update below rejected transaction was blocked: %#v", m.groupUpdate)
+	}
+	if len(applied) != 3 || applied[1] != 20 || applied[2] != 19 {
+		t.Fatalf("error/recovery callbacks = %v, want [18 20 19]", applied)
 	}
 }
 

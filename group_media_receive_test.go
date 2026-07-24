@@ -124,6 +124,11 @@ func TestParticipantReceiveRegistryActivatesAndRoutesConnectedPIDDevices(t *test
 	if len(registry.byPID) != 2 {
 		t.Fatalf("active remote PID count = %d, want 2", len(registry.byPID))
 	}
+	addedID := rtp.FormatE2ESrtpParticipantID(added.String())
+	activeIDs := registry.ActiveParticipantIDs()
+	if len(activeIDs) != 2 || activeIDs[0] != peerID || activeIDs[1] != addedID {
+		t.Fatalf("active participant IDs = %v, want [%s %s]", activeIDs, peerID, addedID)
+	}
 	if registry.byPID[0] != originalPeer {
 		t.Fatal("original peer receiver was replaced instead of promoted to PID 0")
 	}
@@ -143,7 +148,7 @@ func TestParticipantReceiveRegistryActivatesAndRoutesConnectedPIDDevices(t *test
 	if !ok {
 		t.Fatal("authenticated original-peer packet was rejected")
 	}
-	if peerAudio.PID != 0 || !peerAudio.HasPID || peerAudio.SSRC != peerSSRC || peerAudio.DeviceJID != peer {
+	if peerAudio.ParticipantID != peerID || peerAudio.PID != 0 || !peerAudio.HasPID || peerAudio.SSRC != peerSSRC || peerAudio.DeviceJID != peer {
 		t.Fatalf("original-peer metadata = %+v", peerAudio)
 	}
 
@@ -152,7 +157,7 @@ func TestParticipantReceiveRegistryActivatesAndRoutesConnectedPIDDevices(t *test
 	if !ok {
 		t.Fatal("authenticated added-participant packet was rejected")
 	}
-	if addedAudio.PID != 2 || !addedAudio.HasPID || addedAudio.SSRC != addedSSRC || addedAudio.DeviceJID != added {
+	if addedAudio.ParticipantID != addedID || addedAudio.PID != 2 || !addedAudio.HasPID || addedAudio.SSRC != addedSSRC || addedAudio.DeviceJID != added {
 		t.Fatalf("added-participant metadata = %+v", addedAudio)
 	}
 	if len(decoders) != 2 || !bytes.Equal(decoders[0].payloads[0], []byte{0x11}) || !bytes.Equal(decoders[1].payloads[0], []byte{0x22}) {
@@ -219,6 +224,47 @@ func TestParticipantReceiveRegistryRemovesDepartedParticipantWithoutResettingPee
 	peerPacket, _ := protectParticipantAudio(t, callKey, self, peer, []byte{0x41})
 	if _, ok := registry.DecodeAudio(peerPacket); !ok {
 		t.Fatal("original peer stopped routing after participant departure")
+	}
+}
+
+func TestParticipantReceiveRegistryRejectedUpdateIsAtomic(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 16, true)); err != nil {
+		t.Fatalf("apply connected update: %v", err)
+	}
+	peerReceiver := registry.byPID[0]
+	addedReceiver := registry.byPID[2]
+	peerUser := peerReceiver.userJID
+	activeIDs := registry.ActiveParticipantIDs()
+
+	invalid := mediaTestGroupUpdate(self, peer, added, pending, 20, true)
+	invalid.Participants[1].JID = mediaTestJID("555555555555555", 0).ToNonAD()
+	invalid.Participants[len(invalid.Participants)-1].Devices[0].PID = 0
+	err = registry.ApplyGroupUpdate(invalid)
+	if err == nil {
+		t.Fatal("duplicate PID update was accepted")
+	}
+	if registry.transactionID != 16 {
+		t.Fatalf("rejected update advanced transaction to %d", registry.transactionID)
+	}
+	if registry.byPID[0] != peerReceiver || registry.byPID[2] != addedReceiver {
+		t.Fatal("rejected update replaced active receiver maps")
+	}
+	if peerReceiver.userJID != peerUser || peerReceiver.pid != 0 {
+		t.Fatalf("rejected update mutated original peer metadata: user=%s pid=%d", peerReceiver.userJID, peerReceiver.pid)
+	}
+	if got := registry.ActiveParticipantIDs(); len(got) != len(activeIDs) || got[0] != activeIDs[0] || got[1] != activeIDs[1] {
+		t.Fatalf("rejected update changed active IDs from %v to %v", activeIDs, got)
 	}
 }
 

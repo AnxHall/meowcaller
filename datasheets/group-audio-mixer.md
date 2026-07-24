@@ -35,6 +35,9 @@ playout advances in 10 ms (160-sample) chunks
 simultaneous samples are summed and hard-clamped to [-1, 1]
 departed participant queues are removed and cannot be recreated by a late decode
 queues keep at most four codec frames and discard oldest audio under backpressure
+invite-stage rosters with one remote preserve direct timestamp-aligned playout
+the direct buffer drains before switching when a second remote becomes connected
+mixed 10 ms chunks are reframed into 960-sample public AudioSink writes
 ```
 
 ## Go envelope (signatures only)
@@ -46,10 +49,17 @@ type participantAudioMixer struct {
 	// Internal synchronized participant queues and active-roster gate.
 }
 
+type participantAudioSinkFramer struct {
+	// Internal 10 ms to public 60 ms frame accumulator.
+}
+
 func newParticipantAudioMixer() *participantAudioMixer
+func shouldStartParticipantMixing(activeParticipantIDs []string) bool
 func (m *participantAudioMixer) Add(participantID string, pcm []float32) bool
 func (m *participantAudioMixer) Retain(participantIDs []string)
 func (m *participantAudioMixer) MixChunk() ([]float32, bool)
+func (f *participantAudioSinkFramer) Push(chunk []float32) ([]float32, bool)
+func (p *audioPlayoutBuffer) Drain(sink AudioSink) error
 ```
 
 The group receive registry additionally exposes its active canonical participant

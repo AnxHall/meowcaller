@@ -459,18 +459,28 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 		e.mu.Unlock()
 		return
 	}
-	m.groupUpdate = &update
 	apply := m.applyGroupUpdate
-	e.mu.Unlock()
-	if apply != nil {
-		if err := apply(update); err != nil {
-			e.c.log.Warn().
-				Err(err).
-				Str("call_id", ev.CallID).
-				Uint32("transaction_id", update.TransactionID).
-				Msg("failed to apply group media roster")
-		}
+	if apply == nil {
+		m.groupUpdate = &update
+		e.mu.Unlock()
+		return
 	}
+	e.mu.Unlock()
+	if err := apply(update); err != nil {
+		e.c.log.Warn().
+			Err(err).
+			Str("call_id", ev.CallID).
+			Uint32("transaction_id", update.TransactionID).
+			Msg("failed to apply group media roster")
+		return
+	}
+	e.mu.Lock()
+	m = e.calls[ev.CallID]
+	if m != nil && !m.ended && m.call != nil && m.call.State() != CallPhaseEnded &&
+		(m.groupUpdate == nil || update.TransactionID > m.groupUpdate.TransactionID) {
+		m.groupUpdate = &update
+	}
+	e.mu.Unlock()
 }
 
 func (e *engine) onMediaReady(ev *events.CallMediaReady) {

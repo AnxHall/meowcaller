@@ -594,13 +594,19 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   authenticated receive/ROC/decoder state, original-peer PID 0 continuity,
   participant departure pruning, and identity-labeled decoded frames. Meowcaller
   now consumes and retains `CallGroupUpdate` without replacing the public original
-  peer. Focused synthetic composition KATs pass. **KAT-verified.**
+  peer. Rejected snapshots leave receiver metadata and transaction ordering
+  unchanged, and pending snapshots enter the engine cache only after successful
+  application. Focused synthetic composition KATs pass. **KAT-verified.**
 
-### media/group-audio-mixer — planned
-- Added the policy-boundary datasheet for bounded participant queues, independent
-  prefill, 10 ms mix ticks, hard clipping, roster-gated departure cleanup, and
-  single-speaker gain preservation. The policy has focused KAT targets but remains
-  live-E2E unvalidated.
+### media/group-audio-mixer — partial
+- Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
+  ticks, hard clipping, roster-gated departure cleanup, and single-speaker gain
+  preservation. The deterministic composition KATs pass. The media loop now clocks
+  mixed chunks into the existing sink while participant decoding remains
+  independent after a group roster arrives; direct 1:1 calls retain the existing
+  timestamp-aligned playout path through invite-only updates, drains buffered direct
+  PCM when a second remote connects, and reframes internal 10 ms mix ticks into the
+  public 960-sample sink contract. Live multi-speaker playout remains E2E unvalidated.
 
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:

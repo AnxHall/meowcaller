@@ -187,11 +187,78 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	})
 
 	enc := mlow.NewMlowEncoder(mlow.WithLogger(log))
-	dec := mlow.NewMlowDecoder(mlow.WithLogger(log))
+	audioReceivers, err := newParticipantReceiveRegistry(
+		callID,
+		callKey,
+		selfLID,
+		peerLID,
+		func() participantAudioDecoder {
+			return mlow.NewMlowDecoder(mlow.WithLogger(log))
+		},
+		WithLogger(log),
+	)
+	if err != nil {
+		return err
+	}
 	audioPlayout := newAudioPlayoutBuffer()
+	var audioPlayoutMu sync.Mutex
+	var groupMixing atomic.Bool
 	defer func() {
+		if groupMixing.Load() {
+			return
+		}
+		audioPlayoutMu.Lock()
+		defer audioPlayoutMu.Unlock()
 		_, sink := callPlayerSink(call)
 		_ = audioPlayout.Flush(sink)
+	}()
+	audioMixer := newParticipantAudioMixer()
+	var audioSinkFramer participantAudioSinkFramer
+	go func() {
+		ticker := time.NewTicker(time.Duration(participantAudioMixChunkSamples) * time.Second / SampleRate)
+		defer ticker.Stop()
+		playoutStarted := false
+		var writeFailures uint64
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if !groupMixing.Load() {
+				continue
+			}
+			_, sink := callPlayerSink(call)
+			if sink == nil {
+				continue
+			}
+			chunk, ok := audioMixer.MixChunk()
+			if !ok {
+				continue
+			}
+			frame, ok := audioSinkFramer.Push(chunk)
+			if !ok {
+				continue
+			}
+			if err := sink.WriteFrame(frame); err != nil {
+				if writeFailures++; writeFailures == 1 {
+					log.Warn().Err(err).Msg("failed to write mixed WhatsApp audio")
+				}
+				continue
+			}
+			if !playoutStarted {
+				playoutStarted = true
+				log.Info().
+					Int("prefill_ms", participantAudioMixerPrefillSamples*1000/SampleRate).
+					Int("chunk_ms", participantAudioMixChunkSamples*1000/SampleRate).
+					Msg("started participant-mixed inbound audio playout")
+				e.c.diag.Emit("meta", map[string]any{
+					"event": "audio_playout_started", "call_id": callID,
+					"prefill_ms": participantAudioMixerPrefillSamples * 1000 / SampleRate,
+					"chunk_ms":   participantAudioMixChunkSamples * 1000 / SampleRate,
+				})
+			}
+		}
 	}()
 	txPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, ssrc, FrameSamples, WithLogger(log))
 	if err != nil {
@@ -202,10 +269,6 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	peerRtcp, err := newMediaSrtcpReceiver(callKey, peerLID)
-	if err != nil {
-		return err
-	}
-	rxPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, ssrc, FrameSamples, WithLogger(log))
 	if err != nil {
 		return err
 	}
@@ -351,7 +414,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	rekeyPeer := func(answeringPeer string) error {
-		if err := rxPipe.RekeyRecv(callKey, answeringPeer); err != nil {
+		if err := audioReceivers.RekeyFallback(answeringPeer); err != nil {
 			return err
 		}
 		if err := rxVideoPipe.RekeyRecv(callKey, answeringPeer); err != nil {
@@ -363,15 +426,56 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		if err := setPeerAppDataSsrc(answeringPeer); err != nil {
 			return err
 		}
-		return peerRtcp.rekey(callKey, answeringPeer)
+		if err := peerRtcp.rekey(callKey, answeringPeer); err != nil {
+			return err
+		}
+		audioMixer.Retain(audioReceivers.ActiveParticipantIDs())
+		return nil
 	}
 	e.mu.Lock()
 	currentPeer := peerLID
+	var pendingGroupUpdate *types.GroupCallUpdate
+	applyGroupUpdate := func(update types.GroupCallUpdate) error {
+		audioPlayoutMu.Lock()
+		defer audioPlayoutMu.Unlock()
+		if err := audioReceivers.ApplyGroupUpdate(update); err != nil {
+			return err
+		}
+		activeParticipantIDs := audioReceivers.ActiveParticipantIDs()
+		audioMixer.Retain(activeParticipantIDs)
+		if shouldStartParticipantMixing(activeParticipantIDs) && !groupMixing.Load() {
+			_, sink := callPlayerSink(call)
+			if err := audioPlayout.Drain(sink); err != nil {
+				log.Warn().Err(err).Msg("failed to drain direct audio before group playout")
+			}
+			groupMixing.Store(true)
+		}
+		return nil
+	}
 	if m := e.calls[callID]; m != nil {
 		m.rekeyPeer = rekeyPeer
+		pendingGroupUpdate = m.groupUpdate
+		m.groupUpdate = nil
+		m.applyGroupUpdate = applyGroupUpdate
 		currentPeer = m.peerLID
 	}
 	e.mu.Unlock()
+	if pendingGroupUpdate != nil {
+		if err := applyGroupUpdate(*pendingGroupUpdate); err != nil {
+			log.Warn().
+				Err(err).
+				Uint32("transaction_id", pendingGroupUpdate.TransactionID).
+				Msg("ignored invalid pending group media roster")
+		} else {
+			e.mu.Lock()
+			if m := e.calls[callID]; m != nil && !m.ended &&
+				(m.groupUpdate == nil || pendingGroupUpdate.TransactionID > m.groupUpdate.TransactionID) {
+				update := *pendingGroupUpdate
+				m.groupUpdate = &update
+			}
+			e.mu.Unlock()
+		}
+	}
 	if currentPeer != "" && currentPeer != peerLID {
 		if err := rekeyPeer(currentPeer); err != nil {
 			return fmt.Errorf("rekey media to answering device: %w", err)
@@ -382,6 +486,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		e.mu.Lock()
 		if m := e.calls[callID]; m != nil {
 			m.rekeyPeer = nil
+			m.applyGroupUpdate = nil
 		}
 		e.mu.Unlock()
 	}()
@@ -712,39 +817,53 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			})
 			continue
 		}
-		hdr, payload, ok := rxPipe.UnprotectAudio(pkt)
+		audio, ok := audioReceivers.DecodeAudio(pkt)
 		if !ok {
 			if unprotectFail++; unprotectFail == 1 {
-				log.Warn().Int("bytes", n).Msg("RTP arrived but failed to unprotect, keying/SSRC mismatch on the recv path")
+				log.Warn().Uint32("ssrc", vh.Ssrc).Int("bytes", n).Msg("audio RTP arrived but did not match an authenticated active participant")
 			}
-			e.c.diag.Emit("srtp", map[string]any{"event": "unprotect_failed", "bytes": n})
+			e.c.diag.Emit("srtp", map[string]any{"event": "unprotect_failed", "ssrc": vh.Ssrc, "bytes": n})
 			continue
 		}
-		audioReception.Observe(hdr.Ssrc, hdr.SequenceNumber, hdr.Timestamp, uint64(time.Now().UnixMilli()), SampleRate)
+		audioReception.Observe(audio.SSRC, vh.SequenceNumber, audio.Timestamp, uint64(time.Now().UnixMilli()), SampleRate)
 		e.c.diag.Emit("rtp", map[string]any{
-			"event": "in", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-			"ts": hdr.Timestamp, "pt": hdr.PayloadType, "marker": hdr.Marker,
+			"event": "in", "ssrc": audio.SSRC, "seq": vh.SequenceNumber,
+			"ts": audio.Timestamp, "pt": vh.PayloadType, "marker": vh.Marker,
+			"participant": audio.DeviceJID.String(), "pid": audio.PID, "has_pid": audio.HasPID,
 		})
 		e.c.diag.Emit("srtp", map[string]any{
-			"event": "frame_unprotected", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-			"payload_len": len(payload), "payload_hex": hex.EncodeToString(payload),
+			"event": "frame_authenticated", "ssrc": audio.SSRC, "seq": vh.SequenceNumber,
+			"participant": audio.DeviceJID.String(), "pid": audio.PID, "has_pid": audio.HasPID,
 		})
-		frame := dec.Decode(payload)
 		e.c.diag.Emit("media_in", map[string]any{
-			"seq": hdr.SequenceNumber, "samples": len(frame),
-			"pcm_rms": rmsFloat32(frame), "payload_len": len(payload),
+			"seq": vh.SequenceNumber, "samples": len(audio.PCM),
+			"pcm_rms": rmsFloat32(audio.PCM), "participant": audio.DeviceJID.String(),
 		})
-		_, sink := callPlayerSink(call)
-		playoutStarted, playoutErr := audioPlayout.Push(hdr.Timestamp, frame, sink)
-		if playoutErr != nil {
-			log.Warn().Err(playoutErr).Msg("failed to write timestamp-aligned WhatsApp audio")
+		mixedMode := groupMixing.Load()
+		playoutLocked := false
+		if !mixedMode {
+			audioPlayoutMu.Lock()
+			playoutLocked = true
+			mixedMode = groupMixing.Load()
 		}
-		if playoutStarted {
-			log.Info().Int("prefill_ms", audioPlayoutPrefillSamples*1000/SampleRate).Msg("started timestamp-aligned inbound audio playout")
-			e.c.diag.Emit("meta", map[string]any{
-				"event": "audio_playout_started", "call_id": callID,
-				"prefill_ms": audioPlayoutPrefillSamples * 1000 / SampleRate,
-			})
+		if mixedMode {
+			audioMixer.Add(audio.ParticipantID, audio.PCM)
+		} else {
+			_, sink := callPlayerSink(call)
+			playoutStarted, playoutErr := audioPlayout.Push(audio.Timestamp, audio.PCM, sink)
+			if playoutErr != nil {
+				log.Warn().Err(playoutErr).Msg("failed to write timestamp-aligned WhatsApp audio")
+			}
+			if playoutStarted {
+				log.Info().Int("prefill_ms", audioPlayoutPrefillSamples*1000/SampleRate).Msg("started timestamp-aligned inbound audio playout")
+				e.c.diag.Emit("meta", map[string]any{
+					"event": "audio_playout_started", "call_id": callID,
+					"prefill_ms": audioPlayoutPrefillSamples * 1000 / SampleRate,
+				})
+			}
+		}
+		if playoutLocked {
+			audioPlayoutMu.Unlock()
 		}
 		if rtpIn++; rtpIn == 1 {
 			log.Info().Msg("first RTP decoded from relay, inbound audio flowing")
