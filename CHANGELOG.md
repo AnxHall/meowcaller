@@ -7,6 +7,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### media/group_relay_refresh — `planned`
+- Added the capture-pinned contract for rotating group relay credentials over
+  the existing active DataChannel while preserving RTP and stream identity.
+
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-
   ordered buffering, delayed per-author epochs, exact-device/unique-user author
