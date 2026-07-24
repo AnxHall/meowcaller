@@ -166,15 +166,33 @@ type MediaPipeline struct {
 // RekeyRecv switches the receive keystream to the companion device that answered an
 // outgoing call. The send path remains keyed to this client's own LID.
 func (p *MediaPipeline) RekeyRecv(callKey []byte, peerJID string) error {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/aafac5cf46e770f59a1ef2f842d2404154038692/wacore/src/voip/session.rs#L171-L187
 	recvKeys, err := srtp.DeriveE2eKeys(callKey, rtp.FormatE2ESrtpParticipantID(peerJID))
 	if err != nil {
 		return err
 	}
+	p.installRecvKeys(recvKeys)
+	return nil
+}
+
+// RekeyRecvFromRaw switches the receive keystream to a participant's keygen-v2
+// raw E2E key. The send path remains unchanged.
+func (p *MediaPipeline) RekeyRecvFromRaw(rawE2E []byte, peerJID string) error {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/aafac5cf46e770f59a1ef2f842d2404154038692/wacore/src/voip/session.rs#L171-L187
+	recvKeys, err := srtp.DeriveE2eKeysFromRaw(rawE2E, rtp.FormatE2ESrtpParticipantID(peerJID))
+	if err != nil {
+		return err
+	}
+	p.installRecvKeys(recvKeys)
+	return nil
+}
+
+func (p *MediaPipeline) installRecvKeys(recvKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/aafac5cf46e770f59a1ef2f842d2404154038692/wacore/src/voip/session.rs#L171-L187
 	p.recvMu.Lock()
 	p.recvKeys = recvKeys
 	p.recvRoc = srtp.RecvRocTracker{}
 	p.recvMu.Unlock()
-	return nil
 }
 
 // NewMediaPipeline derives both directions from the 32-byte callKey: send keys from
