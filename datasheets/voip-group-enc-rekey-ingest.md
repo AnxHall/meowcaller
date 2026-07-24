@@ -57,7 +57,8 @@ outer call[from] is the rekey author and matches a roster device
 call-creator is separate from the author
 keygen is 2 and enc version is 2
 ciphertext sizes are 32, 146, or 231 bytes
-Signal decryption produces exactly 32 raw key bytes
+Signal decryption produces a WA E2E Message envelope; the live Go path observed 79 bytes
+the envelope's Call.callKey field is exactly 32 bytes
 the rekey follows its matching group_update by 84–342 ms
 an older transaction rekey can arrive after a newer group_update
 not every group_update has a rekey
@@ -129,7 +130,8 @@ func newCallEncRekeyEvent(
 - Preserve the parsed envelope separately from the decrypted result.
 - Select the existing `decryptDM` normal/pre-key path from `enc[type]`, using
   outer `call[from]` as the Signal author.
-- Reject unsupported encryption types and decrypted results other than 32 bytes.
+- Decode the decrypted result as `waE2E.Message`, extract `Call.callKey`, and
+  reject malformed envelopes or inner keys other than 32 bytes.
 - Clone the raw key into the event; never log it, its ciphertext, or a fingerprint.
 - Dispatch no typed event when parsing or decryption fails, but preserve the
   existing deferred call ACK behavior.

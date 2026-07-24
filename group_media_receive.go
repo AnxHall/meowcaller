@@ -145,6 +145,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 		pid       uint32
 	}
 	var metadata []receiverMetadata
+	hasConnectedPID := false
 	for _, participant := range update.Participants {
 		if participant.State != "connected" {
 			continue
@@ -153,6 +154,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			if !device.HasPID {
 				continue
 			}
+			hasConnectedPID = true
 			participantID := rtp.FormatE2ESrtpParticipantID(device.JID.String())
 			if participantID == r.selfID {
 				continue
@@ -181,6 +183,13 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 				receiver: receiver, userJID: participant.JID,
 				deviceJID: device.JID, pid: device.PID,
 			})
+		}
+	}
+	if !hasConnectedPID {
+		fallback := r.byDeviceID[r.fallbackID]
+		if fallback != nil {
+			nextByDeviceID[r.fallbackID] = fallback
+			nextBySSRC[fallback.ssrc] = fallback
 		}
 	}
 	for _, next := range metadata {

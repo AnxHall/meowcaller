@@ -610,6 +610,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   peer. Rejected snapshots leave receiver metadata and transaction ordering
   unchanged, and pending snapshots enter the engine cache only after successful
   application. Focused synthetic composition KATs pass. **KAT-verified.**
+- Preserve the authenticated direct receiver across transitional group snapshots
+  that contain no connected PID-bearing devices. The transaction still advances,
+  and the first actionable PID roster promotes the existing peer without the
+  five-second audio interruption observed during live add-to-call testing.
 
 ### media/group-audio-mixer — partial
 - Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
@@ -628,10 +632,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   `D66652FC17BF1F8BBA898DE097B428FA` corroborated this as the next authentication
   boundary.
 - Whatsmeow now validates and clones the capture-shaped envelope, reuses the exact
-  outer-author Signal session for `msg`/`pkmsg`, validates the decrypted 32-byte
-  key, dispatches `CallEncRekey`, and preserves deferred ACKs on failure. Parser,
+  outer-author Signal session for `msg`/`pkmsg`, decodes the decrypted
+  `waE2E.Message`, validates its 32-byte `Call.callKey`, dispatches
+  `CallEncRekey`, and preserves deferred ACKs on failure. Parser,
   malformed-envelope, cloning, metadata-only logging, and failure-router KATs pass;
-  successful live Signal decryption remains explicitly unvalidated.
+  live Signal decryption of the 79-byte application envelope is observed, while a
+  post-fix authenticated group-audio retest remains pending.
 
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:

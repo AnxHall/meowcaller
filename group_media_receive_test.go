@@ -157,6 +157,105 @@ func protectParticipantAudioAt(
 	return srtp.AppendWarpMITag(keys.AuthKey[:], packet, roc, srtp.WarpMITagLen)
 }
 
+func TestParticipantReceiveRegistryPreservesFallbackAcrossPrePIDGroupUpdate(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	invited := mediaTestJID("333333333333333", 43)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	fallback := registry.byDeviceID[registry.fallbackID]
+	update := types.GroupCallUpdate{
+		CallID:        "CID",
+		TransactionID: 9,
+		Participants: []types.GroupCallParticipant{
+			{
+				JID:     self.ToNonAD(),
+				State:   "connected",
+				Devices: []types.GroupCallDevice{{JID: self}},
+			},
+			{
+				JID:     peer.ToNonAD(),
+				State:   "connected",
+				Devices: []types.GroupCallDevice{{JID: peer}},
+			},
+			{
+				JID:     invited.ToNonAD(),
+				State:   "receipt",
+				Devices: []types.GroupCallDevice{{JID: invited}},
+			},
+		},
+	}
+	if err = registry.ApplyGroupUpdate(update); err != nil {
+		t.Fatalf("apply pre-PID group update: %v", err)
+	}
+	if registry.transactionID != 9 || !registry.hasGroupUpdate {
+		t.Fatalf("pre-PID update state = transaction %d, applied %t", registry.transactionID, registry.hasGroupUpdate)
+	}
+	if registry.byDeviceID[registry.fallbackID] != fallback {
+		t.Fatal("pre-PID group update replaced the authenticated direct receiver")
+	}
+	packet, _ := protectParticipantAudio(t, callKey, self, peer, []byte{0x61})
+	if _, ok := registry.DecodeAudio(packet); !ok {
+		t.Fatal("pre-PID group update stopped direct peer audio")
+	}
+}
+
+func TestParticipantReceiveRegistryPrePIDUpdatePrunesNonFallbackReceivers(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 8, true)); err != nil {
+		t.Fatalf("apply PID-bearing group update: %v", err)
+	}
+	fallback := registry.byDeviceID[registry.fallbackID]
+	addedReceiver := registry.byPID[2]
+	if fallback == nil || addedReceiver == nil {
+		t.Fatal("PID-bearing update did not activate both remotes")
+	}
+
+	update := types.GroupCallUpdate{
+		CallID:        "CID",
+		TransactionID: 9,
+		Participants: []types.GroupCallParticipant{
+			{
+				JID:     self.ToNonAD(),
+				State:   "connected",
+				Devices: []types.GroupCallDevice{{JID: self}},
+			},
+			{
+				JID:     peer.ToNonAD(),
+				State:   "connected",
+				Devices: []types.GroupCallDevice{{JID: peer}},
+			},
+		},
+	}
+	if err = registry.ApplyGroupUpdate(update); err != nil {
+		t.Fatalf("apply pre-PID group update: %v", err)
+	}
+	if len(registry.byDeviceID) != 1 || registry.byDeviceID[registry.fallbackID] != fallback {
+		t.Fatalf("pre-PID active devices = %v, want only fallback", registry.ActiveParticipantIDs())
+	}
+	if len(registry.byPID) != 0 {
+		t.Fatalf("pre-PID active PID count = %d, want 0", len(registry.byPID))
+	}
+	if _, ok := registry.bySSRC[addedReceiver.ssrc]; ok {
+		t.Fatal("pre-PID update retained non-fallback participant SSRC")
+	}
+}
+
 func TestParticipantReceiveRegistryBuffersAndAppliesParticipantRawRekey(t *testing.T) {
 	callKey := iota32()
 	rawKey := bytes.Repeat([]byte{0xa5}, 32)

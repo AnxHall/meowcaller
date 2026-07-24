@@ -89,6 +89,8 @@ applied through an installed callback. Updates do not replace `Call.Peer()`.
 ## Implementation suggestions (guidance, not authoritative)
 
 - Seed one 1:1 fallback receiver from `CallMediaReady.PeerLID`.
+- Advance transaction state but preserve the authenticated direct receiver when
+  a transitional group snapshot has no connected PID-bearing devices.
 - Activate only devices whose parent participant state is `connected` and whose
   device has `HasPID`; PID zero is valid.
 - Exclude the local device by canonical participant ID.
