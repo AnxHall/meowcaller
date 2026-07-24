@@ -596,6 +596,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   now consumes and retains `CallGroupUpdate` without replacing the public original
   peer. Focused synthetic composition KATs pass. **KAT-verified.**
 
+### media/group-audio-mixer — planned
+- Added the policy-boundary datasheet for bounded participant queues, independent
+  prefill, 10 ms mix ticks, hard clipping, roster-gated departure cleanup, and
+  single-speaker gain preservation. The policy has focused KAT targets but remains
+  live-E2E unvalidated.
+
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:
   `DeriveWasmParticipantSsrc` (HKDF-SHA256 with salt=slot-word LE32, ikm=callId,
