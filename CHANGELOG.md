@@ -563,6 +563,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   (one nil-deref finding fixed by the value-JID change). **KAT-verified.**
 
 ### srtp/warp — module #24 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
+- Added receive-side WARP MESSAGE-INTEGRITY verification with constant-time tag
+  comparison. The existing byte-exact tag KAT now also rejects a changed
+  participant key, tag, ROC, empty tag, and oversized tag. **KAT-verified.**
 - Complete the `srtp/warp` module: `WarpExtProfile`/`WarpAudioPiggybackExt`/
   `WarpMITagLen` constants, `AudioPiggybackExtensionFor` (now implemented — fills the
   #22 rtp piggyback prerequisite), and `ComputeWarpMITag`/`AppendWarpMITag` (the
@@ -576,6 +579,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   Note: `sframe.DeriveWarpAuthKey` remains a stub — warp's MI tag uses the SRTP auth
   key, not the warp-auth key, so that helper still has no vector (validate at
   session/relay).
+
+### session/authenticated-receive — KAT-verified (reference `2f001b5a3d6374cc5cf7177792c2a81f87a54080`)
+- Split receive ROC handling into pure estimate and authenticated commit operations.
+  The reference staircase KAT proves unauthenticated packets cannot advance the
+  receiver rollover counter. `MediaPipeline.UnprotectAudio` now verifies the
+  configured-length WARP MI tag before committing ROC or decrypting; wrong
+  participant keys and changed tags are rejected, and the next valid packet remains
+  receivable. **KAT-verified.**
 
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:

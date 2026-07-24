@@ -248,28 +248,35 @@ type RecvRocTracker struct {
 	initialized bool
 }
 
-// GuessRoc guesses the ROC for seq and folds it into the state, seeding from the
-// first packet (roc=0). A reordered late packet returns the lower ROC untouched.
-func (t *RecvRocTracker) GuessRoc(seq uint16, log ...zerolog.Logger) uint32 {
-	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L139-L168
+// EstimateRoc estimates the ROC for seq without mutating receive state.
+func (t *RecvRocTracker) EstimateRoc(seq uint16, log ...zerolog.Logger) uint32 {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/2f001b5a3d6374cc5cf7177792c2a81f87a54080/wacore/src/voip/e2e_srtp.rs#L148-L168
+	lg := pickLog(log)
+	if !t.initialized {
+		return t.roc
+	}
+	if t.sL < 0x8000 {
+		if int32(seq)-int32(t.sL) > 0x8000 {
+			return t.roc - 1
+		}
+		return t.roc
+	}
+	if int32(t.sL)-int32(seq) > 0x8000 {
+		return t.roc + 1
+	}
+	lg.Trace().Uint16("seq", seq).Uint32("estimated_roc", t.roc).Msg("recv roc estimated")
+	return t.roc
+}
+
+// CommitRoc folds an authenticated packet's estimated ROC and sequence into state.
+func (t *RecvRocTracker) CommitRoc(v uint32, seq uint16, log ...zerolog.Logger) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/2f001b5a3d6374cc5cf7177792c2a81f87a54080/wacore/src/voip/e2e_srtp.rs#L170-L188
 	lg := pickLog(log)
 	if !t.initialized {
 		t.sL = seq
 		t.initialized = true
 		lg.Debug().Uint16("seq", seq).Uint32("roc", t.roc).Msg("recv roc tracker seeded")
-		return t.roc
-	}
-	var v uint32
-	if t.sL < 0x8000 {
-		if int32(seq)-int32(t.sL) > 0x8000 {
-			v = t.roc - 1
-		} else {
-			v = t.roc
-		}
-	} else if int32(t.sL)-int32(seq) > 0x8000 {
-		v = t.roc + 1
-	} else {
-		v = t.roc
+		return
 	}
 	switch v {
 	case t.roc:
@@ -281,6 +288,13 @@ func (t *RecvRocTracker) GuessRoc(seq uint16, log ...zerolog.Logger) uint32 {
 		t.sL = seq
 		lg.Debug().Uint16("seq", seq).Uint32("roc", t.roc).Msg("recv roc advanced")
 	}
-	lg.Trace().Uint16("seq", seq).Uint32("guessed_roc", v).Uint32("roc", t.roc).Msg("recv roc guessed")
+	lg.Trace().Uint16("seq", seq).Uint32("committed_roc", v).Uint32("roc", t.roc).Msg("recv roc committed")
+}
+
+// GuessRoc estimates and commits seq in one step.
+func (t *RecvRocTracker) GuessRoc(seq uint16, log ...zerolog.Logger) uint32 {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/2f001b5a3d6374cc5cf7177792c2a81f87a54080/wacore/src/voip/e2e_srtp.rs#L190-L198
+	v := t.EstimateRoc(seq, log...)
+	t.CommitRoc(v, seq, log...)
 	return v
 }

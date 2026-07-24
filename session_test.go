@@ -180,9 +180,18 @@ func TestRecvUsesPeerLidForRecv(t *testing.T) {
 	selfKeyedTx, _ := NewMediaPipeline(callKey, selfLid, peerLid, ssrc, 960)
 	wrong, _ := selfKeyedTx.ProtectAudio(opus)
 	us2, _ := NewMediaPipeline(callKey, selfLid, peerLid, ssrc, 960)
-	_, mis, _ := us2.UnprotectAudio(wrong)
-	if bytes.Equal(mis, opus) {
-		t.Error("recv must not recover a self-LID-keyed packet")
+	if _, _, ok = us2.UnprotectAudio(wrong); ok {
+		t.Error("recv must reject a self-LID-keyed packet")
+	}
+
+	tampered := append([]byte(nil), fromPeer...)
+	tampered[len(tampered)-1] ^= 0x80
+	us3, _ := NewMediaPipeline(callKey, selfLid, peerLid, ssrc, 960)
+	if _, _, ok = us3.UnprotectAudio(tampered); ok {
+		t.Error("recv must reject a packet with a tampered WARP MI tag")
+	}
+	if _, recovered, ok = us3.UnprotectAudio(fromPeer); !ok || !bytes.Equal(recovered, opus) {
+		t.Error("rejected packet must not poison receive rollover state")
 	}
 }
 
