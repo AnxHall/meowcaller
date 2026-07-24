@@ -134,6 +134,55 @@ func TestInboundVideoEnabledReleasesPendingLocalUpgrade(t *testing.T) {
 	}
 }
 
+func TestEngineGroupUpdatePreservesOriginalPeerAndQueuesLatestRoster(t *testing.T) {
+	eng, call := testEngineWithOutgoingCall()
+	originalPeer := call.Peer()
+	added := mediaTestJID("333333333333333", 43)
+	first := types.GroupCallUpdate{CallID: call.ID(), TransactionID: 16}
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: added},
+		Update:        first,
+	})
+	m := eng.calls[call.ID()]
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 16 {
+		t.Fatalf("queued group update = %#v, want transaction 16", m.groupUpdate)
+	}
+	if call.Peer() != originalPeer {
+		t.Fatalf("group update replaced original peer with %s", call.Peer())
+	}
+
+	var applied []uint32
+	m.applyGroupUpdate = func(update types.GroupCallUpdate) error {
+		applied = append(applied, update.TransactionID)
+		return nil
+	}
+	second := types.GroupCallUpdate{CallID: call.ID(), TransactionID: 18}
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: added},
+		Update:        second,
+	})
+	if len(applied) != 1 || applied[0] != 18 {
+		t.Fatalf("applied transactions = %v, want [18]", applied)
+	}
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 18 {
+		t.Fatalf("latest group update = %#v, want transaction 18", m.groupUpdate)
+	}
+	if call.Peer() != originalPeer {
+		t.Fatalf("second group update replaced original peer with %s", call.Peer())
+	}
+
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: added},
+		Update:        first,
+	})
+	if len(applied) != 1 {
+		t.Fatalf("stale group update reached live callback: %v", applied)
+	}
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 18 {
+		t.Fatalf("stale group update replaced transaction 18: %#v", m.groupUpdate)
+	}
+}
+
 func TestInboundVideoUpgradeWaitsForExplicitAcceptance(t *testing.T) {
 	eng, call := testEngineWithOutgoingCall()
 	m := eng.calls[call.ID()]

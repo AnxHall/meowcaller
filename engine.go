@@ -43,6 +43,8 @@ type engineCall struct {
 	videoTx          *videoSender
 	appDataTx        *appDataSender
 	rekeyPeer        func(string) error
+	groupUpdate      *types.GroupCallUpdate
+	applyGroupUpdate func(types.GroupCallUpdate) error
 	started          bool
 	ended            bool
 	cancel           context.CancelFunc
@@ -122,6 +124,8 @@ func (e *engine) install() {
 			e.onMute(ev)
 		case *events.CallVideo:
 			e.onVideo(ev)
+		case *events.CallGroupUpdate:
+			e.onGroupUpdate(ev)
 		}
 	})
 }
@@ -440,6 +444,33 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 		call.setPhase(CallPhaseConnecting)
 	}
 	call.markPeerAccepted()
+}
+
+func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L85
+	e.mu.Lock()
+	m := e.calls[ev.CallID]
+	if m == nil || m.ended || m.call == nil || m.call.State() == CallPhaseEnded {
+		e.mu.Unlock()
+		return
+	}
+	update := ev.Update
+	if m.groupUpdate != nil && update.TransactionID <= m.groupUpdate.TransactionID {
+		e.mu.Unlock()
+		return
+	}
+	m.groupUpdate = &update
+	apply := m.applyGroupUpdate
+	e.mu.Unlock()
+	if apply != nil {
+		if err := apply(update); err != nil {
+			e.c.log.Warn().
+				Err(err).
+				Str("call_id", ev.CallID).
+				Uint32("transaction_id", update.TransactionID).
+				Msg("failed to apply group media roster")
+		}
+	}
 }
 
 func (e *engine) onMediaReady(ev *events.CallMediaReady) {
