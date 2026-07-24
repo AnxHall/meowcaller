@@ -211,3 +211,56 @@ func TestRocTrackerWraps(t *testing.T) {
 		t.Errorf("state not corrupted by late packet: roc=%d, want 2", got)
 	}
 }
+
+func TestRecvRocEstimateCommitsOnlyAuthenticatedPacket(t *testing.T) {
+	var rx RecvRocTracker
+	if got := rx.EstimateRoc(0xFFFF); got != 0 {
+		t.Fatalf("initial estimate = %d, want 0", got)
+	}
+	if got := rx.EstimateRoc(0x0000); got != 0 {
+		t.Fatalf("uncommitted estimate mutated state: got %d, want 0", got)
+	}
+
+	roc := rx.EstimateRoc(0xFFFF)
+	rx.CommitRoc(roc, 0xFFFF)
+	if got := rx.EstimateRoc(0x0000); got != 1 {
+		t.Fatalf("authenticated wrap estimate = %d, want 1", got)
+	}
+
+	if got := rx.EstimateRoc(0x0001); got != 1 {
+		t.Fatalf("second uncommitted estimate = %d, want 1", got)
+	}
+	if got := rx.EstimateRoc(0x0000); got != 1 {
+		t.Fatalf("uncommitted estimate poisoned state: got %d, want 1", got)
+	}
+
+	rx.CommitRoc(1, 0x0000)
+	if got := rx.EstimateRoc(0x0001); got != 1 {
+		t.Fatalf("committed wrap state = %d, want 1", got)
+	}
+}
+
+func TestUnauthenticatedStaircaseCannotAdvanceROCWithoutCommit(t *testing.T) {
+	var rx RecvRocTracker
+	rx.GuessRoc(0x7FFE)
+	if rx.roc != 0 {
+		t.Fatalf("seeded ROC = %d, want 0", rx.roc)
+	}
+
+	_ = rx.EstimateRoc(0xFFFE)
+	_ = rx.EstimateRoc(0x7FFD)
+	if rx.roc != 0 {
+		t.Fatalf("estimate-only staircase advanced ROC to %d", rx.roc)
+	}
+	if got := rx.EstimateRoc(0x7FFF); got != 0 {
+		t.Fatalf("legitimate in-window estimate = %d, want 0", got)
+	}
+
+	roc := rx.EstimateRoc(0xFFFE)
+	rx.CommitRoc(roc, 0xFFFE)
+	roc = rx.EstimateRoc(0x7FFD)
+	rx.CommitRoc(roc, 0x7FFD)
+	if rx.roc != 1 {
+		t.Fatalf("committed staircase ROC = %d, want 1", rx.roc)
+	}
+}

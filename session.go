@@ -256,9 +256,9 @@ func (p *MediaPipeline) SenderStats() rtp.RtcpSenderStats {
 	}
 }
 
-// UnprotectAudio strips the WARP MI tag (not verified), parses the header, and
+// UnprotectAudio authenticates and strips the WARP MI tag, parses the header, and
 // decrypts the payload, guessing the ROC from the recv tracker. ok=false on a
-// malformed packet.
+// malformed or unauthenticated packet.
 func (p *MediaPipeline) UnprotectAudio(packet []byte) (rtp.RtpHeader, []byte, bool) {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/src/voip/session.rs#L155-L175
 	if len(packet) < 12+p.warpMITagLen {
@@ -277,7 +277,15 @@ func (p *MediaPipeline) UnprotectAudio(packet []byte) (rtp.RtpHeader, []byte, bo
 		return rtp.RtpHeader{}, nil, false
 	}
 	p.recvMu.Lock()
-	roc := p.recvRoc.GuessRoc(header.SequenceNumber)
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/2f001b5a3d6374cc5cf7177792c2a81f87a54080/wacore/src/voip/session.rs#L239-L250
+	roc := p.recvRoc.EstimateRoc(header.SequenceNumber)
+	tag := packet[len(withoutTag):]
+	if !srtp.VerifyWarpMITag(p.recvKeys.AuthKey[:], withoutTag, roc, p.warpMITagLen, tag, p.log) {
+		p.recvMu.Unlock()
+		p.log.Debug().Uint32("ssrc", header.Ssrc).Uint16("seq", header.SequenceNumber).Uint32("roc", roc).Msg("unprotect: WARP MI authentication failed")
+		return rtp.RtpHeader{}, nil, false
+	}
+	p.recvRoc.CommitRoc(roc, header.SequenceNumber)
 	plain, err := srtp.CryptPayload(&p.recvKeys, header.Ssrc, header.SequenceNumber, roc, withoutTag[headerLen:])
 	p.recvMu.Unlock()
 	if err != nil {
