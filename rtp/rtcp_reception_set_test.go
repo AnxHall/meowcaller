@@ -56,6 +56,7 @@ func TestGroupAudioReceptionReportsPruneDepartureAndResetRejoin(t *testing.T) {
 		t.Fatalf("post-departure reports = %+v, want only A", reports)
 	}
 
+	set.Retain([]uint32{ssrcA, ssrcC})
 	set.Observe(ssrcC, 900, 8_640_000, 2_000, 16_000)
 	reports = set.Reports(2_100)
 	if len(reports) != 2 {
@@ -64,4 +65,39 @@ func TestGroupAudioReceptionReportsPruneDepartureAndResetRejoin(t *testing.T) {
 	if reports[1].Ssrc != ssrcC || reports[1].ExtendedHighestSequence != 900 || reports[1].CumulativeLost != 0 {
 		t.Fatalf("rejoined C report = %+v, want fresh sequence 900 with no inherited loss", reports[1])
 	}
+}
+
+func TestGroupAudioReceptionRetainAndObserveAreAuthoritativeInEitherOrder(t *testing.T) {
+	const (
+		activeSSRC   = uint32(0x59754A60)
+		departedSSRC = uint32(0x66FDE7F1)
+	)
+
+	t.Run("observe before retain is pruned", func(t *testing.T) {
+		var set RtcpReceptionStatsSet
+		set.Observe(departedSSRC, 39, 3_744_000, 1_000, 16_000)
+		set.Retain([]uint32{activeSSRC})
+
+		if reports := set.Reports(1_100); len(reports) != 0 {
+			t.Fatalf("reports after observe-then-retain = %+v, want none", reports)
+		}
+	})
+
+	t.Run("observe after retain is ignored", func(t *testing.T) {
+		var set RtcpReceptionStatsSet
+		set.Retain([]uint32{activeSSRC})
+		set.Observe(departedSSRC, 39, 3_744_000, 1_000, 16_000)
+
+		if reports := set.Reports(1_100); len(reports) != 0 {
+			t.Fatalf("reports after retain-then-observe = %+v, want none", reports)
+		}
+
+		set.Retain([]uint32{activeSSRC, departedSSRC})
+		set.Observe(departedSSRC, 900, 8_640_000, 2_000, 16_000)
+		reports := set.Reports(2_100)
+		if len(reports) != 1 || reports[0].Ssrc != departedSSRC ||
+			reports[0].ExtendedHighestSequence != 900 || reports[0].CumulativeLost != 0 {
+			t.Fatalf("reallowed report = %+v, want fresh departed SSRC sequence 900", reports)
+		}
+	})
 }
