@@ -7,13 +7,22 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### api/initial_group_call — `planned`
+### api/initial_group_call — `partial`
 - Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
   preselected group start, a selected-only public roster seed, stable public
   peer identity, and authoritative connected-device media readiness.
-- The focused KAT envelope covers normalization, strict optional group-JID
-  parsing, one-shot Whatsmeow delegation, incoming roster replay, group peer
-  stability, and roster/key ordering. Implementation remains pending.
+- Implemented `GroupCall` and `GroupCallWithOptions` with ordered exact
+  normalization/deduplication, strict optional group-JID parsing, and one-shot
+  delegation to Whatsmeow while leaving PN-to-LID resolution authoritative
+  there.
+- Added explicit group-scoped engine state, a transaction-zero selected-only
+  public seed, cloned pre-callback invite snapshots, stable public peer
+  handling, connected-device media derivation, and deterministic one-shot
+  roster-then-key queue activation. Synchronous pre-return roster/key events
+  attach to the returned call without losing their authoritative state.
+- Focused/full tests, the full race suite, vet, and diff checks pass.
+  CodeRabbit review was unavailable because its CLI is not installed. Live
+  WhatsApp group audio E2E remains pending.
 
 ### voip/initial_group_call — `partial`
 - Added the immutable capture contract for one initial preselected group offer:

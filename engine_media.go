@@ -32,10 +32,12 @@ import (
 func (e *engine) maybeStartMedia(callID string) {
 	e.mu.Lock()
 	m := e.calls[callID]
-	if m == nil || m.started || m.callKey == nil || m.relay == nil {
+	startMedia := e.startMedia
+	if m == nil || m.started || m.callKey == nil || m.relay == nil || startMedia == nil {
 		e.mu.Unlock()
 		return
 	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L107
 	m.started = true
 	mctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -48,7 +50,7 @@ func (e *engine) maybeStartMedia(callID string) {
 	}
 	e.c.log.Info().Str("call_id", callID).Msg("starting media")
 	go func() {
-		if err := e.runMedia(mctx, callID, call, callKey, selfLID, peerLID, endpoint); err != nil {
+		if err := startMedia(mctx, callID, call, callKey, selfLID, peerLID, endpoint); err != nil {
 			e.c.log.Warn().Err(err).Str("call_id", callID).Msg("media ended")
 		}
 	}()
@@ -404,8 +406,6 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}
 	e.mu.Lock()
 	currentPeer := peerLID
-	var pendingGroupUpdate *types.GroupCallUpdate
-	var pendingGroupRekeys []events.CallEncRekey
 	applyGroupUpdate := func(update types.GroupCallUpdate) error {
 		audioPlayoutMu.Lock()
 		defer audioPlayoutMu.Unlock()
@@ -458,40 +458,11 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}
 	if m := e.calls[callID]; m != nil {
 		m.rekeyPeer = rekeyPeer
-		pendingGroupUpdate = m.groupUpdate
-		pendingGroupRekeys = append(pendingGroupRekeys, m.pendingGroupRekeys...)
-		m.groupUpdate = nil
-		m.pendingGroupRekeys = nil
-		m.applyGroupUpdate = applyGroupUpdate
-		m.applyGroupRekey = applyGroupRekey
 		currentPeer = m.peerLID
 	}
 	e.mu.Unlock()
-	if pendingGroupUpdate != nil {
-		if err := applyGroupUpdate(*pendingGroupUpdate); err != nil {
-			log.Warn().
-				Err(err).
-				Uint32("transaction_id", pendingGroupUpdate.TransactionID).
-				Msg("ignored invalid pending group media roster")
-		} else {
-			e.mu.Lock()
-			if m := e.calls[callID]; m != nil && !m.ended &&
-				(m.groupUpdate == nil || pendingGroupUpdate.TransactionID > m.groupUpdate.TransactionID) {
-				update := *pendingGroupUpdate
-				m.groupUpdate = &update
-			}
-			e.mu.Unlock()
-		}
-	}
-	for _, rekey := range pendingGroupRekeys {
-		if err := applyGroupRekey(rekey); err != nil {
-			log.Warn().
-				Err(err).
-				Uint32("transaction_id", rekey.Rekey.TransactionID).
-				Str("author", rekey.From.String()).
-				Msg("ignored pending participant media rekey")
-		}
-	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L107
+	e.activateGroupMedia(callID, applyGroupUpdate, applyGroupRekey)
 	if currentPeer != "" && currentPeer != peerLID {
 		if err := rekeyPeer(currentPeer); err != nil {
 			return fmt.Errorf("rekey media to answering device: %w", err)

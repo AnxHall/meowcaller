@@ -9,10 +9,10 @@ import (
 	"go.mau.fi/whatsmeow"
 )
 
-// Client is the managed entry point to the WhatsApp 1:1 calling stack. It wraps a
+// Client is the managed entry point to the WhatsApp calling stack. It wraps a
 // connected *whatsmeow.Client, consumes its call-control events, and drives the media
 // lifecycle behind a small surface:
-// place a call with Call, handle inbound calls from an OnIncomingCall listener, and
+// place a call with Call or GroupCall, handle inbound calls from an OnIncomingCall listener, and
 // attach a Player (outbound audio) and a sink (inbound audio) to each Call.
 //
 // The library never configures logging; pass WithLogger to surface its debug/trace.
@@ -31,6 +31,12 @@ type CallOptions struct {
 	// Video advertises a WhatsApp video call. The caller must provide encoded H.264
 	// access units with Call.SendVideo after media is active.
 	Video bool
+}
+
+// GroupCallOptions controls an outbound audio group call.
+type GroupCallOptions struct {
+	// GroupJID binds the call to a WhatsApp group. Leave empty for an ad-hoc call.
+	GroupJID string
 }
 
 // NewClient wraps a whatsmeow client and installs the call event handlers. Construct it
@@ -54,6 +60,22 @@ func (c *Client) Call(ctx context.Context, target string) (*Call, error) {
 // CallWithOptions places a 1:1 call with explicit media options.
 func (c *Client) CallWithOptions(ctx context.Context, target string, opts CallOptions) (*Call, error) {
 	return c.eng.placeCall(ctx, target, opts)
+}
+
+// GroupCall places an audio group call to at least two remote targets.
+func (c *Client) GroupCall(ctx context.Context, targets ...string) (*Call, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L61-L107
+	return c.GroupCallWithOptions(ctx, targets, GroupCallOptions{})
+}
+
+// GroupCallWithOptions places an audio group call with explicit group binding.
+func (c *Client) GroupCallWithOptions(
+	ctx context.Context,
+	targets []string,
+	opts GroupCallOptions,
+) (*Call, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L61-L107
+	return c.eng.placeGroupCall(ctx, targets, opts)
 }
 
 // OnIncomingCall registers the listener fired for each inbound call offer. The handler

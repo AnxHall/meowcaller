@@ -22,9 +22,11 @@ type engine struct {
 
 	mu                    sync.Mutex
 	calls                 map[string]*engineCall
+	offerGroupCall        func(context.Context, []types.JID, ...whatsmeow.GroupCallOfferOptions) (string, error)
 	setCallVideo          func(context.Context, string, types.CallVideoState, *int) error
 	setCallMute           func(context.Context, string, bool) error
 	inviteCallParticipant func(context.Context, string, types.JID) error
+	startMedia            func(context.Context, string, *Call, []byte, string, string, *types.RelayEndpoint) error
 }
 
 type engineCall struct {
@@ -36,6 +38,7 @@ type engineCall struct {
 	from    types.JID
 
 	direction          CallDirection
+	group              bool
 	codec              AudioCodec
 	localVideo         bool
 	remoteVideo        bool
@@ -55,7 +58,10 @@ type engineCall struct {
 
 func newEngine(c *Client) *engine {
 	e := &engine{c: c, calls: make(map[string]*engineCall)}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L94-L107
+	e.startMedia = e.runMedia
 	if c != nil && c.wa != nil {
+		e.offerGroupCall = c.wa.OfferGroupCall
 		e.setCallVideo = c.wa.SetCallVideo
 		e.setCallMute = c.wa.SetCallMute
 		e.inviteCallParticipant = c.wa.InviteCallParticipant
@@ -367,6 +373,163 @@ func (e *engine) placeCall(ctx context.Context, target string, opts CallOptions)
 	return call, nil
 }
 
+func (e *engine) placeGroupCall(
+	ctx context.Context,
+	targets []string,
+	opts GroupCallOptions,
+) (*Call, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L107
+	selected, err := parseGroupCallTargets(targets)
+	if err != nil {
+		return nil, err
+	}
+	groupJID, err := parseOptionalGroupJID(opts.GroupJID)
+	if err != nil {
+		return nil, err
+	}
+	if e.offerGroupCall == nil {
+		return nil, errors.New("meowcaller: call signaling is unavailable")
+	}
+	callID, err := e.offerGroupCall(
+		ctx,
+		append([]types.JID(nil), selected...),
+		whatsmeow.GroupCallOfferOptions{GroupJID: groupJID},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("meowcaller: offer group call: %w", err)
+	}
+
+	call := &Call{
+		eng: e, id: callID, peer: selected[0], phase: CallPhaseCalling,
+		groupState: selectedGroupCallState(selected),
+	}
+	e.mu.Lock()
+	m := e.entry(callID)
+	if m.call == nil {
+		m.call = call
+	} else {
+		call = m.call
+	}
+	m.from = selected[0]
+	m.direction = CallDirectionOutgoing
+	m.group = true
+	authoritative := m.groupUpdate
+	e.mu.Unlock()
+	if authoritative != nil {
+		call.setGroupState(groupCallStateFromUpdate(*authoritative))
+	}
+	e.c.diag.Emit("meta", map[string]any{
+		"event": "group_offer_sent", "call_id": callID,
+		"peer": selected[0].String(), "target_count": len(selected), "direction": "out",
+	})
+	e.maybeStartMedia(callID)
+	return call, nil
+}
+
+func parseGroupCallTargets(targets []string) ([]types.JID, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L99
+	selected := make([]types.JID, 0, len(targets))
+	seen := make(map[types.JID]struct{}, len(targets))
+	for i, target := range targets {
+		jid, err := parseCallTarget(target)
+		if err != nil {
+			return nil, fmt.Errorf("meowcaller: parse group call target %d: %w", i, err)
+		}
+		jid = jid.ToNonAD()
+		if jid.IsEmpty() || jid.User == "" {
+			return nil, fmt.Errorf("meowcaller: group call target %d is empty", i)
+		}
+		if _, exists := seen[jid]; exists {
+			continue
+		}
+		seen[jid] = struct{}{}
+		selected = append(selected, jid)
+	}
+	if len(selected) < 2 {
+		return nil, errors.New("meowcaller: group call requires at least two distinct targets")
+	}
+	return selected, nil
+}
+
+func parseOptionalGroupJID(raw string) (types.JID, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L96
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return types.EmptyJID, nil
+	}
+	if strings.Count(raw, "@") != 1 {
+		return types.EmptyJID, fmt.Errorf("meowcaller: parse group JID %q: expected one @", raw)
+	}
+	jid, err := types.ParseJID(raw)
+	if err != nil {
+		return types.EmptyJID, fmt.Errorf("meowcaller: parse group JID %q: %w", raw, err)
+	}
+	if jid.User == "" || jid.Server != types.GroupServer ||
+		jid.RawAgent != 0 || jid.Device != 0 || jid.Integrator != 0 ||
+		jid.String() != raw {
+		return types.EmptyJID, fmt.Errorf("meowcaller: group JID %q is not a canonical g.us JID", raw)
+	}
+	return jid, nil
+}
+
+func selectedGroupCallState(targets []types.JID) *GroupCallState {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L104
+	state := &GroupCallState{
+		Participants: make([]GroupCallParticipant, len(targets)),
+	}
+	for i, target := range targets {
+		state.Participants[i] = GroupCallParticipant{
+			JID:   target,
+			State: "outgoing",
+		}
+	}
+	return state
+}
+
+func cloneGroupCallUpdate(update types.GroupCallUpdate) types.GroupCallUpdate {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L107
+	clone := update
+	clone.Participants = make([]types.GroupCallParticipant, len(update.Participants))
+	for participantIndex, participant := range update.Participants {
+		clone.Participants[participantIndex] = participant
+		clone.Participants[participantIndex].Devices = make(
+			[]types.GroupCallDevice,
+			len(participant.Devices),
+		)
+		for deviceIndex, device := range participant.Devices {
+			clone.Participants[participantIndex].Devices[deviceIndex] = device
+			clone.Participants[participantIndex].Devices[deviceIndex].Capability =
+				bytes.Clone(device.Capability)
+		}
+	}
+	if update.Relay == nil {
+		return clone
+	}
+	relay := *update.Relay
+	relay.Key = bytes.Clone(update.Relay.Key)
+	relay.HBHKey = bytes.Clone(update.Relay.HBHKey)
+	relay.Tokens = cloneByteSlices(update.Relay.Tokens)
+	relay.AuthTokens = cloneByteSlices(update.Relay.AuthTokens)
+	relay.Endpoints = append(
+		[]types.GroupCallRelayEndpoint(nil),
+		update.Relay.Endpoints...,
+	)
+	for i := range relay.Endpoints {
+		relay.Endpoints[i].Address = bytes.Clone(update.Relay.Endpoints[i].Address)
+	}
+	clone.Relay = &relay
+	return clone
+}
+
+func cloneByteSlices(values [][]byte) [][]byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L107
+	clones := make([][]byte, len(values))
+	for i, value := range values {
+		clones[i] = bytes.Clone(value)
+	}
+	return clones
+}
+
 func whatsmeowCallOptions(opts CallOptions) whatsmeow.CallOfferOptions {
 	return whatsmeow.CallOfferOptions{Video: opts.Video}
 }
@@ -387,6 +550,7 @@ func parseCallTarget(target string) (types.JID, error) {
 }
 
 func (e *engine) onOffer(ev *events.CallOffer) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L104
 	peer := ev.CallCreator
 	if peer.IsEmpty() {
 		peer = ev.From
@@ -403,7 +567,20 @@ func (e *engine) onOffer(ev *events.CallOffer) {
 	m.direction = CallDirectionIncoming
 	m.localVideo = ev.Video
 	m.remoteVideo = ev.Video
+	var snapshot *types.GroupCallUpdate
+	if ev.Group != nil {
+		update := cloneGroupCallUpdate(*ev.Group)
+		m.group = true
+		if m.groupUpdate == nil || update.TransactionID > m.groupUpdate.TransactionID {
+			m.groupUpdate = &update
+		}
+		cached := cloneGroupCallUpdate(*m.groupUpdate)
+		snapshot = &cached
+	}
 	e.mu.Unlock()
+	if snapshot != nil {
+		call.setGroupState(groupCallStateFromUpdate(*snapshot))
+	}
 	e.c.diag.Emit("meta", map[string]any{
 		"event": "offer_received", "call_id": ev.CallID, "from": ev.From.String(), "peer": peer.String(), "video": ev.Video,
 	})
@@ -430,7 +607,8 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 	}
 	answeringPeer := ev.From.String()
 	var rekeyPeer func(string) error
-	if answeringPeer != "" && answeringPeer != m.peerLID {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L107
+	if !m.group && answeringPeer != "" && answeringPeer != m.peerLID {
 		m.peerLID = answeringPeer
 		rekeyPeer = m.rekeyPeer
 		m.call.setPeer(ev.From)
@@ -453,14 +631,27 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 
 func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L85
+	if ev == nil {
+		return
+	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L107
+	update := cloneGroupCallUpdate(ev.Update)
 	e.mu.Lock()
 	m := e.calls[ev.CallID]
-	if m == nil || m.ended || m.call == nil || m.call.State() == CallPhaseEnded {
+	if m == nil {
+		m = e.entry(ev.CallID)
+	}
+	m.group = true
+	if m.ended || (m.call != nil && m.call.State() == CallPhaseEnded) {
 		e.mu.Unlock()
 		return
 	}
-	update := ev.Update
 	if m.groupUpdate != nil && update.TransactionID <= m.groupUpdate.TransactionID {
+		e.mu.Unlock()
+		return
+	}
+	if m.call == nil {
+		m.groupUpdate = &update
 		e.mu.Unlock()
 		return
 	}
@@ -486,7 +677,8 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	var call *Call
 	if m != nil && !m.ended && m.call != nil && m.call.State() != CallPhaseEnded &&
 		(m.groupUpdate == nil || update.TransactionID > m.groupUpdate.TransactionID) {
-		m.groupUpdate = &update
+		cached := cloneGroupCallUpdate(update)
+		m.groupUpdate = &cached
 		call = m.call
 	}
 	e.mu.Unlock()
@@ -504,9 +696,14 @@ func (e *engine) onEncRekey(ev *events.CallEncRekey) {
 	rekey.RawKey = bytes.Clone(ev.RawKey)
 	rekey.Rekey.Ciphertext = nil
 	rekey.Data = nil
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L107
 	e.mu.Lock()
 	m := e.calls[ev.CallID]
-	if m == nil || m.ended || m.call == nil || m.call.State() == CallPhaseEnded {
+	if m == nil {
+		m = e.entry(ev.CallID)
+	}
+	m.group = true
+	if m.ended || (m.call != nil && m.call.State() == CallPhaseEnded) {
 		e.mu.Unlock()
 		return
 	}
@@ -527,7 +724,63 @@ func (e *engine) onEncRekey(ev *events.CallEncRekey) {
 	}
 }
 
+func (e *engine) activateGroupMedia(
+	callID string,
+	applyGroupUpdate func(types.GroupCallUpdate) error,
+	applyGroupRekey func(events.CallEncRekey) error,
+) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L107
+	if applyGroupUpdate == nil || applyGroupRekey == nil {
+		return
+	}
+	e.mu.Lock()
+	m := e.calls[callID]
+	if m == nil || m.ended {
+		e.mu.Unlock()
+		return
+	}
+	var pendingGroupUpdate *types.GroupCallUpdate
+	if m.groupUpdate != nil {
+		update := cloneGroupCallUpdate(*m.groupUpdate)
+		pendingGroupUpdate = &update
+	}
+	pendingGroupRekeys := append([]events.CallEncRekey(nil), m.pendingGroupRekeys...)
+	m.groupUpdate = nil
+	m.pendingGroupRekeys = nil
+	m.applyGroupUpdate = applyGroupUpdate
+	m.applyGroupRekey = applyGroupRekey
+	e.mu.Unlock()
+
+	if pendingGroupUpdate != nil {
+		if err := applyGroupUpdate(*pendingGroupUpdate); err != nil {
+			e.c.log.Warn().
+				Err(err).
+				Uint32("transaction_id", pendingGroupUpdate.TransactionID).
+				Msg("ignored invalid pending group media roster")
+		} else {
+			e.mu.Lock()
+			if m := e.calls[callID]; m != nil && !m.ended &&
+				(m.groupUpdate == nil ||
+					pendingGroupUpdate.TransactionID > m.groupUpdate.TransactionID) {
+				update := cloneGroupCallUpdate(*pendingGroupUpdate)
+				m.groupUpdate = &update
+			}
+			e.mu.Unlock()
+		}
+	}
+	for _, rekey := range pendingGroupRekeys {
+		if err := applyGroupRekey(rekey); err != nil {
+			e.c.log.Warn().
+				Err(err).
+				Uint32("transaction_id", rekey.Rekey.TransactionID).
+				Str("author", rekey.From.String()).
+				Msg("ignored pending participant media rekey")
+		}
+	}
+}
+
 func (e *engine) onMediaReady(ev *events.CallMediaReady) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L107
 	relay := ev.Relay
 	e.mu.Lock()
 	m := e.entry(ev.CallID)
@@ -546,7 +799,9 @@ func (e *engine) onMediaReady(ev *events.CallMediaReady) {
 	m.relay = &relay
 	m.selfLID = ev.SelfLID.String()
 	m.peerLID = ev.PeerLID.String()
-	m.call.setPeer(ev.PeerLID)
+	if !m.group {
+		m.call.setPeer(ev.PeerLID)
+	}
 	m.localVideo = m.localVideo || ev.Video
 	m.remoteVideo = m.remoteVideo || ev.Video
 	if ev.Codec == types.CallCodecOpus {

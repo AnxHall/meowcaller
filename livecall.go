@@ -8,8 +8,8 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-// Call is one live call. It starts as a direct call and may become an ad-hoc
-// group call through AddParticipant. Place one with Client.Call, or receive one
+// Call is one live direct or group call. A direct call may become an ad-hoc
+// group call through AddParticipant. Place one with Client.Call or Client.GroupCall, or receive one
 // (unanswered) in an OnIncomingCall listener. Attach outbound audio with
 // Subscribe/Play and inbound audio with Receive, and lifecycle listeners with
 // OnReady/OnEnd/OnStateChange. All methods are safe for concurrent use.
@@ -38,7 +38,8 @@ type Call struct {
 	groupCallbackGeneration uint64
 }
 
-// GroupCallState is a sanitized authoritative group-call roster transaction.
+// GroupCallState is a sanitized group-call roster. Transaction zero may contain
+// selected outgoing targets before the first authoritative server transaction.
 type GroupCallState struct {
 	TransactionID  uint32
 	RekeyRequested bool
@@ -79,8 +80,7 @@ func (c *Call) Peer() types.JID {
 	return c.peer
 }
 
-// GroupState returns the latest authoritative group-call roster, if the direct
-// call has transitioned to an ad-hoc group call.
+// GroupState returns the latest group-call roster, if this is a group call.
 func (c *Call) GroupState() (GroupCallState, bool) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
 	c.mu.Lock()
@@ -91,8 +91,8 @@ func (c *Call) GroupState() (GroupCallState, bool) {
 	return cloneGroupCallState(*c.groupState), true
 }
 
-// OnGroupState registers a callback for authoritative group-call roster
-// transactions. A latest cached state is replayed immediately.
+// OnGroupState registers a callback for group-call roster state. The latest
+// cached state, including a selected-target seed, is replayed immediately.
 func (c *Call) OnGroupState(fn func(GroupCallState)) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
 	c.mu.Lock()
