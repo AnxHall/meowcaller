@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 
+	meowcaller "github.com/purpshell/meowcaller"
 	"github.com/rs/zerolog"
 	qrcode "github.com/skip2/go-qrcode"
 )
@@ -18,7 +19,8 @@ import (
 // to and from a browser tab via WebCodecs: the browser decodes (display on a canvas) and
 // encodes (camera) the H.264; the CLI carries it over the WhatsApp relay through the
 // meowcaller Call API. This is a demo/dev tool and lives in the example, not the library —
-// the library exposes only Call.OnVideoFrame / Call.SendVideoFrame / Call.OnVideoState.
+// the library exposes encoded-frame and participant-attribution APIs while the
+// browser owns H.264 pixel encoding and decoding.
 //
 // The page is self-contained and uses WebCodecs directly, with no JS build step.
 type videoBridge struct {
@@ -51,6 +53,17 @@ type vbControl struct {
 	Targets     []string `json:"targets,omitempty"`
 	Emoji       string   `json:"emoji,omitempty"`
 	Orientation int      `json:"orientation,omitempty"`
+}
+
+type vbParticipantVideo struct {
+	ParticipantID string `json:"participant_id"`
+	Sender        string `json:"sender"`
+	Device        string `json:"device"`
+	PID           uint32 `json:"pid,omitempty"`
+	HasPID        bool   `json:"has_pid,omitempty"`
+	SSRC          uint32 `json:"ssrc"`
+	Orientation   int    `json:"orientation"`
+	AccessUnit    string `json:"access_unit"`
 }
 
 // newVideoBridge starts a bridge on a free 127.0.0.1 port.
@@ -97,6 +110,27 @@ func (vb *videoBridge) WriteFrame(annexB []byte) {
 	f := make([]byte, len(annexB))
 	copy(f, annexB)
 	vb.broadcast(vbMsg{data: f})
+}
+
+// WriteParticipantFrame pushes one participant-attributed H.264 access unit.
+func (vb *videoBridge) WriteParticipantFrame(frame meowcaller.ParticipantVideoFrame) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L56-L63
+	if len(frame.AccessUnit) == 0 {
+		return
+	}
+	data, err := json.Marshal(vbParticipantVideo{
+		ParticipantID: frame.ParticipantID,
+		Sender:        frame.Sender.String(),
+		Device:        frame.Device.String(),
+		PID:           frame.PID,
+		HasPID:        frame.HasPID,
+		SSRC:          frame.SSRC,
+		Orientation:   frame.Orientation,
+		AccessUnit:    base64.StdEncoding.EncodeToString(frame.AccessUnit),
+	})
+	if err == nil {
+		vb.broadcast(vbMsg{event: "participant_video", data: data})
+	}
 }
 
 // SetOrientation pushes the peer's video device orientation (0..3) so the page can rotate
@@ -288,9 +322,9 @@ func (vb *videoBridge) handleControl(w http.ResponseWriter, r *http.Request) {
 	}
 	valid := map[string]bool{
 		"dial_audio": true, "dial_video": true, "answer": true, "reject": true,
+		"start_group_audio": true, "start_group_video": true,
 		"start_video": true, "accept_video": true, "stop_video": true,
 		"hangup": true, "orientation": true, "reaction": true,
-		"start_group_audio": true,
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 		"add_participants": true,
 	}
@@ -349,7 +383,7 @@ main{max-width:1280px;margin:auto;padding:16px}.toolbar,.invite-toolbar{display:
 input,textarea,button{min-height:38px;border:1px solid var(--line);border-radius:6px;background:#202529;color:var(--text);font:inherit;letter-spacing:0}
 input,textarea{padding:9px 11px;min-width:0}textarea{resize:vertical}button{padding:0 13px;cursor:pointer;white-space:nowrap}button:hover{border-color:#68727a}button:disabled{cursor:not-allowed;opacity:.45}button.primary{background:#176846;border-color:#25865e}button.danger{background:#7b2929;border-color:#a83b3b}
 .actions{display:flex;gap:8px;overflow-x:auto;padding-bottom:10px}.reaction-picker{display:flex;gap:6px;padding-bottom:12px}.reaction-picker button{width:38px;padding:0;font-size:20px}.media{display:grid;grid-template-columns:1fr 1fr;gap:12px;border-top:1px solid var(--line);padding-top:14px}
-.pane{min-width:0}.pane-head{height:42px;color:var(--muted);font-size:12px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between}.pane-head button{height:32px}.remote-wrap,.local-wrap{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:4/3;overflow:hidden;background:#050607;border:1px solid var(--line);border-radius:6px}.reactions{position:absolute;inset:0;overflow:hidden;pointer-events:none;display:flex;align-items:center;justify-content:center}.reaction{position:absolute;font-size:64px;animation:reaction-rise 1.8s ease-out forwards}@keyframes reaction-rise{0%{opacity:0;transform:translateY(24px) scale(.7)}20%{opacity:1;transform:translateY(0) scale(1)}75%{opacity:1}100%{opacity:0;transform:translateY(-80px) scale(1.15)}}
+.pane{min-width:0}.pane-head{height:42px;color:var(--muted);font-size:12px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between}.pane-head button{height:32px}.remote-wrap,.local-wrap,.participant-video{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:4/3;overflow:hidden;background:#050607;border:1px solid var(--line);border-radius:6px}.group-videos{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;width:100%}.group-videos[hidden],.remote-wrap[hidden]{display:none}.participant-label{position:absolute;left:8px;bottom:6px;z-index:2;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 6px;border-radius:4px;background:#000a;color:#fff;font-size:11px}.reactions{position:absolute;inset:0;overflow:hidden;pointer-events:none;display:flex;align-items:center;justify-content:center;z-index:3}.reaction{position:absolute;font-size:64px;animation:reaction-rise 1.8s ease-out forwards}@keyframes reaction-rise{0%{opacity:0;transform:translateY(24px) scale(.7)}20%{opacity:1;transform:translateY(0) scale(1)}75%{opacity:1}100%{opacity:0;transform:translateY(-80px) scale(1.15)}}
 canvas,video{display:block;width:auto;height:auto;max-width:100%;max-height:100%;object-fit:contain;background:#050607}
 #log{height:150px;overflow:auto;margin-top:12px;padding:10px;border:1px solid var(--line);background:#0b0d0e;color:#b8d8c8;font:12px ui-monospace,monospace;white-space:pre-wrap}
 .invite-note{color:var(--muted);font-size:12px;margin:-3px 0 10px}
@@ -360,12 +394,12 @@ canvas,video{display:block;width:auto;height:auto;max-width:100%;max-height:100%
 <main>
   <section id="pairing" class="pairing" hidden><img id="qr" alt="WhatsApp linked-device QR"><div><strong>Link WhatsApp</strong><span>WhatsApp > Linked devices > Link a device</span></div></section>
   <div class="toolbar"><input id="target" inputmode="tel" placeholder="WhatsApp number or LID"><button id="dialAudio">Dial audio</button><button id="dialVideo" class="primary">Dial video</button></div>
-  <div class="invite-toolbar"><textarea id="participants" rows="2" placeholder="People (comma or newline separated)"></textarea><button id="startGroupAudio" disabled>Start group audio</button><button id="addParticipants" disabled>Add people</button></div>
+  <div class="invite-toolbar"><textarea id="participants" rows="2" placeholder="People (comma or newline separated)"></textarea><button id="startGroupAudio" disabled>Start group audio</button><button id="startGroupVideo" disabled>Start group video</button><button id="addParticipants" disabled>Add people</button></div>
   <div id="participantStatus" class="invite-note">Invites are submitted; waiting for roster confirmation.</div>
   <div class="actions"><button id="answer">Answer</button><button id="reject">Reject</button><button id="startVideo">Upgrade to video</button><button id="acceptVideo" hidden>Accept video</button><button id="stopVideo">Stop video</button><button id="hangup" class="danger">Hang up</button></div>
   <div class="reaction-picker"><button data-reaction="👍" aria-label="Thumbs up">👍</button><button data-reaction="❤️" aria-label="Heart">❤️</button><button data-reaction="😂" aria-label="Laugh">😂</button><button data-reaction="😮" aria-label="Surprised">😮</button><button data-reaction="😢" aria-label="Sad">😢</button><button data-reaction="🙏" aria-label="Thanks">🙏</button><button data-reaction="" aria-label="Remove reaction">×</button></div>
   <div class="media">
-    <section class="pane"><div class="pane-head"><span>WhatsApp peer</span><span id="remoteMeta">waiting</span></div><div class="remote-wrap"><canvas id="remote" width="640" height="480"></canvas><div id="reactions" class="reactions" aria-live="polite"></div></div></section>
+    <section class="pane"><div class="pane-head"><span>WhatsApp participants</span><span id="remoteMeta">waiting</span></div><div id="remoteWrap" class="remote-wrap"><canvas id="remote" width="640" height="480"></canvas><div id="reactions" class="reactions" aria-live="polite"></div></div><div id="groupVideos" class="group-videos" hidden></div></section>
     <section class="pane"><div class="pane-head"><span>Local camera</span><button id="cam">Start camera</button></div><div class="local-wrap"><video id="local" autoplay muted playsinline></video></div></section>
   </div>
   <div id="log"></div>
@@ -374,21 +408,26 @@ canvas,video{display:block;width:auto;height:auto;max-width:100%;max-height:100%
 const $=id=>document.getElementById(id), log=(...a)=>{$('log').textContent+=a.join(' ')+'\n';$('log').scrollTop=$('log').scrollHeight};
 const control=async(action,extra={})=>{const r=await fetch('/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...extra})});if(!r.ok)throw Error((await r.text()).trim())};
 const invoke=(action,extra)=>control(action,extra).catch(e=>log(action,e.message));
-function updatePeopleControls(s){if(s.event==='idle'||s.event==='ended'){$('startGroupAudio').disabled=false;$('addParticipants').disabled=true}else if(s.event==='ready'||(s.event==='phase'&&s.phase===4)){$('startGroupAudio').disabled=true;$('addParticipants').disabled=false}else if(['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'){$('startGroupAudio').disabled=true;$('addParticipants').disabled=true}}
+function updatePeopleControls(s){if(s.event==='idle'||s.event==='ended'){$('startGroupAudio').disabled=false;$('startGroupVideo').disabled=false;$('addParticipants').disabled=true}else if(s.event==='ready'||(s.event==='phase'&&s.phase===4)){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=false}else if(['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=true}}
 $('dialAudio').onclick=()=>invoke('dial_audio',{target:$('target').value.trim()});$('dialVideo').onclick=()=>invoke('dial_video',{target:$('target').value.trim()});
-$('startGroupAudio').onclick=()=>invoke('start_group_audio',{targets:participantTargets()});$('addParticipants').onclick=()=>invoke('add_participants',{targets:participantTargets()});const participantTargets=()=>$('participants').value.split(/[,\n]/).map(target=>target.trim()).filter(Boolean);
+$('startGroupAudio').onclick=()=>invoke('start_group_audio',{targets:participantTargets()});$('startGroupVideo').onclick=()=>invoke('start_group_video',{targets:participantTargets()});$('addParticipants').onclick=()=>invoke('add_participants',{targets:participantTargets()});const participantTargets=()=>$('participants').value.split(/[,\n]/).map(target=>target.trim()).filter(Boolean);
 $('answer').onclick=()=>invoke('answer');$('reject').onclick=()=>invoke('reject');$('startVideo').onclick=()=>invoke('start_video');$('acceptVideo').onclick=()=>invoke('accept_video');$('stopVideo').onclick=()=>invoke('stop_video');$('hangup').onclick=()=>invoke('hangup');
 document.querySelectorAll('[data-reaction]').forEach(b=>b.onclick=()=>invoke('reaction',{emoji:b.dataset.reaction}));
 if(!('VideoDecoder'in window))log('WebCodecs unavailable in this browser');
-const remote=$('remote'),paint=remote.getContext('2d'),es=new EventSource('/in');let decoder=null,decodeStarted=false,forceKeyframe=true,remoteVideoActive=true,remoteOrientation=0;
+const remote=$('remote'),paint=remote.getContext('2d'),es=new EventSource('/in');let decoder=null,decodeStarted=false,forceKeyframe=true,remoteVideoActive=true,remoteOrientation=0,groupMode=false;const participantRenderers=new Map();
 function keyNAL(d){for(let i=0;i+4<d.length;i++){let p=-1;if(d[i]===0&&d[i+1]===0&&d[i+2]===1)p=i+3;else if(d[i]===0&&d[i+1]===0&&d[i+2]===0&&d[i+3]===1)p=i+4;if(p>=0){const t=d[p]&31;if(t===5||t===7)return true}}return false}
 function setRemoteVideoActive(active){remoteVideoActive=active;if(active){$('remoteMeta').textContent='waiting'}else{paint.clearRect(0,0,remote.width,remote.height);$('remoteMeta').textContent='off'}}
 function drawRemoteFrame(f){const w=f.displayWidth,h=f.displayHeight,q=((remoteOrientation%4)+4)%4,portrait=q%2===1;remote.width=portrait?h:w;remote.height=portrait?w:h;paint.save();if(q===1){paint.translate(remote.width,0);paint.rotate(Math.PI/2)}else if(q===2){paint.translate(remote.width,remote.height);paint.rotate(Math.PI)}else if(q===3){paint.translate(0,remote.height);paint.rotate(-Math.PI/2)}paint.drawImage(f,0,0,w,h);paint.restore();$('remoteMeta').textContent=remote.width+'x'+remote.height}
 function getDecoder(){if(decoder&&decoder.state!=='closed')return decoder;decoder=new VideoDecoder({output:f=>{if(remoteVideoActive)drawRemoteFrame(f);f.close()},error:e=>log('decoder',e.message)});decoder.configure({codec:'avc1.42E01F',optimizeForLatency:true});return decoder}
-function showReaction(emoji){if(!emoji)return;const el=document.createElement('span');el.className='reaction';el.textContent=emoji;$('reactions').appendChild(el);setTimeout(()=>el.remove(),1800)}
+function participantKey(v){return v.participant_id||v.device||v.sender||String(v.ssrc)}
+function resetGroupMode(){for(const r of participantRenderers.values()){if(r.decoder&&r.decoder.state!=='closed')r.decoder.close()}participantRenderers.clear();$('groupVideos').replaceChildren();$('groupVideos').hidden=true;$('remoteWrap').hidden=false;groupMode=false}
+function drawParticipantFrame(r,f){const w=f.displayWidth,h=f.displayHeight,q=((r.orientation%4)+4)%4,portrait=q%2===1;r.canvas.width=portrait?h:w;r.canvas.height=portrait?w:h;r.paint.save();if(q===1){r.paint.translate(r.canvas.width,0);r.paint.rotate(Math.PI/2)}else if(q===2){r.paint.translate(r.canvas.width,r.canvas.height);r.paint.rotate(Math.PI)}else if(q===3){r.paint.translate(0,r.canvas.height);r.paint.rotate(-Math.PI/2)}r.paint.drawImage(f,0,0,w,h);r.paint.restore()}
+function ensureParticipantRenderer(v){const key=participantKey(v);let r=participantRenderers.get(key);if(r){r.sender=v.sender||r.sender;r.device=v.device||r.device;return r}const wrap=document.createElement('div');wrap.className='participant-video';const canvas=document.createElement('canvas');canvas.width=640;canvas.height=480;const label=document.createElement('span');label.className='participant-label';label.textContent=v.sender||v.device||key;const reactions=document.createElement('div');reactions.className='reactions';wrap.append(canvas,reactions,label);$('groupVideos').appendChild(wrap);r={key,sender:v.sender,device:v.device,orientation:v.orientation||0,canvas,paint:canvas.getContext('2d'),reactions,started:false,decoder:null};r.decoder=new VideoDecoder({output:f=>{drawParticipantFrame(r,f);f.close()},error:e=>{r.started=false;log('participant decoder',key,e.message)}});r.decoder.configure({codec:'avc1.42E01F',optimizeForLatency:true});participantRenderers.set(key,r);return r}
+function showReaction(emoji,sender){if(!emoji)return;let host=$('reactions');if(groupMode&&sender){for(const r of participantRenderers.values()){if(r.sender===sender||r.device===sender||r.key===sender){host=r.reactions;break}}}const el=document.createElement('span');el.className='reaction';el.textContent=emoji;host.appendChild(el);setTimeout(()=>el.remove(),1800)}
 es.onmessage=e=>{const au=Uint8Array.from(atob(e.data),c=>c.charCodeAt(0)),key=keyNAL(au);if(!decodeStarted&&!key)return;decodeStarted=true;try{getDecoder().decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:performance.now()*1000,data:au}))}catch(err){log('decode',err.message);decodeStarted=false}};
+es.addEventListener('participant_video',e=>{const v=JSON.parse(e.data),au=Uint8Array.from(atob(v.access_unit),c=>c.charCodeAt(0)),key=keyNAL(au);if(!groupMode){remoteOrientation=v.orientation||0;if(!decodeStarted&&!key)return;decodeStarted=true;try{getDecoder().decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:performance.now()*1000,data:au}))}catch(err){decodeStarted=false;log('decode',err.message)}return}const r=ensureParticipantRenderer(v);r.orientation=v.orientation||0;if(!r.started&&!key)return;r.started=true;try{r.decoder.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:performance.now()*1000,data:au}))}catch(err){r.started=false;log('participant decode',err.message)}});
 es.addEventListener('orient',e=>{remoteOrientation=+e.data||0});es.addEventListener('keyframe',()=>{forceKeyframe=true;log('peer requested keyframe')});
-es.addEventListener('state',e=>{const s=JSON.parse(e.data);updatePeopleControls(s);if(s.event!=='reaction'&&s.event!=='participant_invite'&&s.event!=='participant_join'&&s.event!=='group_state')$('state').textContent=s.event+(s.peer?' / '+s.peer:'');if(s.event==='pairing'){$('pairing').hidden=false;$('qr').src='/qr.png?t='+Date.now()}else if(s.event==='idle')$('pairing').hidden=true;if(s.event==='video_state'){if(s.video_state===0||s.video_state===6)setRemoteVideoActive(false);else if(s.video_state===1)setRemoteVideoActive(true);$('acceptVideo').hidden=!(s.video_state===3||s.video_state===11)}else if(s.event==='reaction'&&!s.removed)showReaction(s.emoji);else if(s.event==='group_state'){const connected=s.participants.filter(p=>p.state==='connected'&&p.devices.some(d=>d.has_pid)).length;$('participantStatus').textContent='Roster tx '+s.transaction_id+': '+connected+' connected endpoint'+(connected===1?'':'s')}else if(s.event==='participant_join'){$('participantStatus').textContent=s.target+' joined as '+s.participant+' (PID '+s.pid+')'}log(new Date().toLocaleTimeString(),JSON.stringify(s))});es.onerror=()=>log('event stream disconnected');
+es.addEventListener('state',e=>{const s=JSON.parse(e.data);updatePeopleControls(s);if(s.event!=='reaction'&&s.event!=='participant_invite'&&s.event!=='participant_join'&&s.event!=='group_state')$('state').textContent=s.event+(s.peer?' / '+s.peer:'');if(s.event==='pairing'){$('pairing').hidden=false;$('qr').src='/qr.png?t='+Date.now()}else if(s.event==='idle'){$('pairing').hidden=true;resetGroupMode()}else if(s.event==='ended')resetGroupMode();if(s.event==='video_state'){if(s.video_state===0||s.video_state===6)setRemoteVideoActive(false);else if(s.video_state===1)setRemoteVideoActive(true);$('acceptVideo').hidden=!(s.video_state===3||s.video_state===11)}else if(s.event==='reaction'&&!s.removed)showReaction(s.emoji,s.sender);else if(s.event==='group_state'){groupMode=true;$('remoteWrap').hidden=true;$('groupVideos').hidden=false;const connected=s.participants.filter(p=>p.state==='connected'&&p.devices.some(d=>d.has_pid)).length;$('participantStatus').textContent='Roster tx '+s.transaction_id+': '+connected+' connected endpoint'+(connected===1?'':'s')}else if(s.event==='participant_join'){$('participantStatus').textContent=s.target+' joined as '+s.participant+' (PID '+s.pid+')'}log(new Date().toLocaleTimeString(),JSON.stringify(s))});es.onerror=()=>log('event stream disconnected');
 let stream=null,encoder=null,reader=null,upload=Promise.resolve();
 async function stopCamera(){if(reader)await reader.cancel().catch(()=>{});if(encoder&&encoder.state!=='closed')encoder.close();if(stream)stream.getTracks().forEach(t=>t.stop());stream=encoder=reader=null;$('local').srcObject=null;$('cam').textContent='Start camera'}
 $('cam').onclick=async()=>{if(stream){await stopCamera();return}try{stream=await navigator.mediaDevices.getUserMedia({video:{frameRate:{ideal:15,max:15}}});$('local').srcObject=stream;$('cam').textContent='Stop camera';const track=stream.getVideoTracks()[0];encoder=new VideoEncoder({output:chunk=>{const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);upload=upload.then(()=>fetch('/out',{method:'POST',body:b})).then(r=>{if(!r.ok)throw Error('video upload '+r.status)}).catch(e=>log(e.message))},error:e=>log('encoder',e.message)});reader=new MediaStreamTrackProcessor({track}).readable.getReader();let n=0,encodedWidth=0,encodedHeight=0;for(;;){const{value:f,done}=await reader.read();if(done)break;if(f.displayWidth!==encodedWidth||f.displayHeight!==encodedHeight){encodedWidth=f.displayWidth;encodedHeight=f.displayHeight;encoder.configure({codec:'avc1.42E01F',avc:{format:'annexb'},width:encodedWidth,height:encodedHeight,framerate:15,bitrate:Math.max(250000,Math.min(2000000,encodedWidth*encodedHeight*2)),latencyMode:'realtime'});forceKeyframe=true}if(encoder.encodeQueueSize<2){const key=forceKeyframe||n%15===0;forceKeyframe=false;encoder.encode(f,{keyFrame:key});n++}f.close()}}catch(e){log('camera',e.message);await stopCamera()}};

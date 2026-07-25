@@ -48,7 +48,7 @@ func TestClientGroupCallNormalizesDeduplicatesAndDelegatesOnce(t *testing.T) {
 		"111111111111111@lid",
 		" +15550002 ",
 		"15550002@s.whatsapp.net",
-	}, GroupCallOptions{GroupJID: " 120363411251996986@g.us "})
+	}, GroupCallOptions{GroupJID: " 120363411251996986@g.us ", Video: true})
 	if err != nil {
 		t.Fatalf("GroupCallWithOptions: %v", err)
 	}
@@ -58,8 +58,8 @@ func TestClientGroupCallNormalizesDeduplicatesAndDelegatesOnce(t *testing.T) {
 	if !slices.Equal(gotTargets, []types.JID{first, second}) {
 		t.Fatalf("delegated targets = %v, want [%s %s]", gotTargets, first, second)
 	}
-	if len(gotOptions) != 1 || gotOptions[0].GroupJID != groupJID {
-		t.Fatalf("delegated options = %+v, want group JID %s", gotOptions, groupJID)
+	if len(gotOptions) != 1 || gotOptions[0].GroupJID != groupJID || !gotOptions[0].Video {
+		t.Fatalf("delegated options = %+v, want video group JID %s", gotOptions, groupJID)
 	}
 	if call.ID() != "GROUP-CID" || call.Peer() != first || call.State() != CallPhaseCalling {
 		t.Fatalf("call = id:%q peer:%s phase:%d", call.ID(), call.Peer(), call.State())
@@ -82,6 +82,9 @@ func TestClientGroupCallNormalizesDeduplicatesAndDelegatesOnce(t *testing.T) {
 	m := c.eng.calls[call.ID()]
 	if m == nil || !m.group || m.groupUpdate != nil {
 		t.Fatalf("engine group state = %+v, want explicit group with no speculative media roster", m)
+	}
+	if !m.localVideo || !m.remoteVideo || !call.IsVideo() {
+		t.Fatalf("video group state = local:%t remote:%t call:%t, want all true", m.localVideo, m.remoteVideo, call.IsVideo())
 	}
 }
 

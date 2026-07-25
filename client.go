@@ -33,10 +33,13 @@ type CallOptions struct {
 	Video bool
 }
 
-// GroupCallOptions controls an outbound audio group call.
+// GroupCallOptions controls media and optional chat binding for an outbound group call.
 type GroupCallOptions struct {
 	// GroupJID binds the call to a WhatsApp group. Leave empty for an ad-hoc call.
 	GroupJID string
+	// Video advertises an H.264 group video call. The caller must provide encoded
+	// access units with Call.SendVideo after media is active.
+	Video bool
 }
 
 // NewClient wraps a whatsmeow client and installs the call event handlers. Construct it
@@ -68,7 +71,7 @@ func (c *Client) GroupCall(ctx context.Context, targets ...string) (*Call, error
 	return c.GroupCallWithOptions(ctx, targets, GroupCallOptions{})
 }
 
-// GroupCallWithOptions places an audio group call with explicit group binding.
+// GroupCallWithOptions places a group call with explicit media and group binding.
 func (c *Client) GroupCallWithOptions(
 	ctx context.Context,
 	targets []string,

@@ -16,17 +16,21 @@ import (
 const browserVideoFrameDuration = time.Second / 15
 
 type webCallState struct {
-	Event       string `json:"event"`
-	CallID      string `json:"call_id,omitempty"`
-	Peer        string `json:"peer,omitempty"`
-	Phase       int    `json:"phase,omitempty"`
-	Video       bool   `json:"video,omitempty"`
-	VideoState  int    `json:"video_state"`
-	Orientation int    `json:"orientation,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Emoji       string `json:"emoji,omitempty"`
-	Sender      string `json:"sender,omitempty"`
-	Removed     bool   `json:"removed,omitempty"`
+	Event         string `json:"event"`
+	CallID        string `json:"call_id,omitempty"`
+	Peer          string `json:"peer,omitempty"`
+	Phase         int    `json:"phase,omitempty"`
+	Video         bool   `json:"video,omitempty"`
+	VideoState    int    `json:"video_state"`
+	Orientation   int    `json:"orientation,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Emoji         string `json:"emoji,omitempty"`
+	ParticipantID string `json:"participant_id,omitempty"`
+	Sender        string `json:"sender,omitempty"`
+	Device        string `json:"device,omitempty"`
+	PID           uint32 `json:"pid,omitempty"`
+	HasPID        bool   `json:"has_pid,omitempty"`
+	Removed       bool   `json:"removed,omitempty"`
 }
 
 type webParticipantInviteResult struct {
@@ -183,13 +187,15 @@ func (c *webCallController) onIncomingCall(call *meowcaller.Call) {
 
 func (c *webCallController) attach(call *meowcaller.Call) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
-	call.ReceiveVideo(meowcaller.VideoSinkFunc(c.bridge.WriteFrame))
+	call.OnParticipantVideoFrame(c.bridge.WriteParticipantFrame)
 	call.OnVideoKeyframeRequest(c.bridge.RequestKeyframe)
 	call.OnPeerAccept(c.bridge.RequestKeyframe)
 	call.OnReaction(func(reaction meowcaller.CallReaction) {
 		c.publishReaction(webCallState{
 			Event: "reaction", CallID: call.ID(), Peer: call.Peer().String(),
-			Emoji: reaction.Emoji, Sender: reaction.Sender.String(), Removed: reaction.Removed,
+			Emoji: reaction.Emoji, ParticipantID: reaction.ParticipantID,
+			Sender: reaction.Sender.String(), Device: reaction.Device.String(),
+			PID: reaction.PID, HasPID: reaction.HasPID, Removed: reaction.Removed,
 		})
 	})
 	listenGroupState := c.listenGroupState
@@ -268,6 +274,8 @@ func (c *webCallController) control(command vbControl) error {
 		return c.dial(command.Target, true)
 	case "start_group_audio":
 		return c.startGroupAudio(command.Targets)
+	case "start_group_video":
+		return c.startGroupVideo(command.Targets)
 	case "answer":
 		return c.answer()
 	case "reject":
@@ -450,6 +458,16 @@ func (c *webCallController) addParticipants(targets []string) error {
 }
 
 func (c *webCallController) startGroupAudio(targets []string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L56-L63
+	return c.startGroupCallWithVideo(targets, false)
+}
+
+func (c *webCallController) startGroupVideo(targets []string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L56-L63
+	return c.startGroupCallWithVideo(targets, true)
+}
+
+func (c *webCallController) startGroupCallWithVideo(targets []string, video bool) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
 	normalized := normalizeParticipantTargets(targets)
 	if len(normalized) < 2 {
@@ -473,7 +491,7 @@ func (c *webCallController) startGroupAudio(targets []string) error {
 		}
 		startGroupCall = c.client.GroupCallWithOptions
 	}
-	call, err := startGroupCall(c.ctx, normalized, meowcaller.GroupCallOptions{})
+	call, err := startGroupCall(c.ctx, normalized, meowcaller.GroupCallOptions{Video: video})
 	if err != nil {
 		c.clearCallStartReservation(reservation)
 		return err
@@ -511,6 +529,7 @@ func (c *webCallController) startGroupAudio(targets []string) error {
 	c.mu.Unlock()
 	c.publish(webCallState{
 		Event: "group_dialing", CallID: call.ID(), Peer: call.Peer().String(),
+		Video: video,
 	})
 	return nil
 }

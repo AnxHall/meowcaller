@@ -542,7 +542,7 @@ func (e *engine) placeGroupCall(
 	callID, err := e.offerGroupCall(
 		ctx,
 		append([]types.JID(nil), selected...),
-		whatsmeow.GroupCallOfferOptions{GroupJID: groupJID},
+		whatsmeow.GroupCallOfferOptions{GroupJID: groupJID, Video: opts.Video},
 	)
 	if err != nil {
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L118
@@ -573,6 +573,8 @@ func (e *engine) placeGroupCall(
 	m.from = selected[0]
 	m.direction = CallDirectionOutgoing
 	m.group = true
+	m.localVideo = opts.Video
+	m.remoteVideo = opts.Video
 	authoritative := m.groupUpdate
 	e.mu.Unlock()
 	if cancelPlaceholder != nil {
@@ -584,6 +586,7 @@ func (e *engine) placeGroupCall(
 	e.c.diag.Emit("meta", map[string]any{
 		"event": "group_offer_sent", "call_id": callID,
 		"peer": selected[0].String(), "target_count": len(selected), "direction": "out",
+		"video": opts.Video,
 	})
 	e.maybeStartMedia(callID)
 	return call, nil

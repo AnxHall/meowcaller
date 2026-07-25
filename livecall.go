@@ -32,6 +32,7 @@ type Call struct {
 	videoSink               VideoSink
 	onVideoState            func(VideoState)
 	onVideoKeyframeRequest  func()
+	onParticipantVideoFrame func(ParticipantVideoFrame)
 	onReaction              func(CallReaction)
 	groupState              *GroupCallState
 	onGroupState            func(GroupCallState)
@@ -65,9 +66,13 @@ type GroupCallDevice struct {
 // CallReaction is a transient emoji reaction received over the call's RTC app-data stream.
 // An empty Emoji with Removed set means the sender cleared their reaction.
 type CallReaction struct {
-	Emoji   string
-	Sender  types.JID
-	Removed bool
+	Emoji         string
+	ParticipantID string
+	Sender        types.JID
+	Device        types.JID
+	PID           uint32
+	HasPID        bool
+	Removed       bool
 }
 
 // ID returns the call-id (32 uppercase hex chars).
@@ -368,6 +373,27 @@ func (c *Call) OnVideoKeyframeRequest(fn func()) {
 	c.mu.Lock()
 	c.onVideoKeyframeRequest = fn
 	c.mu.Unlock()
+}
+
+// OnParticipantVideoFrame registers a callback for authenticated H.264 access
+// units with their group participant identity. It is additive to ReceiveVideo.
+func (c *Call) OnParticipantVideoFrame(fn func(ParticipantVideoFrame)) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	c.mu.Lock()
+	c.onParticipantVideoFrame = fn
+	c.mu.Unlock()
+}
+
+func (c *Call) dispatchParticipantVideoFrame(frame ParticipantVideoFrame) bool {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	c.mu.Lock()
+	fn := c.onParticipantVideoFrame
+	c.mu.Unlock()
+	if fn == nil {
+		return false
+	}
+	fn(cloneParticipantVideoFrame(frame))
+	return true
 }
 
 // OnReaction registers a callback for emoji reactions targeting this call.

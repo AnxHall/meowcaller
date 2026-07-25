@@ -160,14 +160,41 @@ func handleAppDataReaction(call *Call, receiver *appDataReceiver, payload []byte
 
 func handleAppDataReactionFrom(call *Call, receiver *appDataReceiver, sender types.JID, payload []byte) (bool, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	return handleAppDataReactionFromParticipant(
+		call,
+		receiver,
+		sender.String(),
+		sender,
+		sender,
+		0,
+		false,
+		payload,
+	)
+}
+
+func handleAppDataReactionFromParticipant(
+	call *Call,
+	receiver *appDataReceiver,
+	participantID string,
+	sender types.JID,
+	device types.JID,
+	pid uint32,
+	hasPID bool,
+	payload []byte,
+) (bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L10-L19
 	reaction, ok, err := receiver.receive(payload)
 	if err != nil || !ok || call == nil {
 		return false, err
 	}
 	value := CallReaction{
-		Emoji:   reaction.emoji,
-		Sender:  sender,
-		Removed: reaction.emoji == "",
+		Emoji:         reaction.emoji,
+		ParticipantID: participantID,
+		Sender:        sender,
+		Device:        device,
+		PID:           pid,
+		HasPID:        hasPID,
+		Removed:       reaction.emoji == "",
 	}
 	if fn := call.onReactionFn(); fn != nil {
 		fn(value)

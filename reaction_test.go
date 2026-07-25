@@ -93,6 +93,33 @@ func TestIncomingGroupAppDataAttributesSelectedParticipant(t *testing.T) {
 	}
 }
 
+func TestIncomingGroupAppDataPreservesParticipantDeviceIdentity(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L10-L19
+	_, call := testEngineWithOutgoingCall()
+	var receiver appDataReceiver
+	var got CallReaction
+	call.OnReaction(func(reaction CallReaction) { got = reaction })
+	sender := types.NewJID("333333333333333", types.HiddenUserServer)
+	device := types.NewADJID("333333333333333", 0, 43)
+
+	if handled, err := handleAppDataReactionFromParticipant(
+		call,
+		&receiver,
+		"333333333333333:43@lid",
+		sender,
+		device,
+		7,
+		true,
+		encodeAppDataReaction(1, "❤️"),
+	); err != nil || !handled {
+		t.Fatalf("group participant reaction = (handled=%v, err=%v)", handled, err)
+	}
+	if got.ParticipantID != "333333333333333:43@lid" || got.Sender != sender ||
+		got.Device != device || got.PID != 7 || !got.HasPID || got.Emoji != "❤️" {
+		t.Fatalf("group participant reaction = %+v", got)
+	}
+}
+
 func TestAppDataSenderUsesCapturedRTPShape(t *testing.T) {
 	callKey := iota32()
 	const ssrc = 0x7f4d310b

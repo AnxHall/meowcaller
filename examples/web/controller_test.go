@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -754,6 +755,64 @@ func TestWebCallControllerStartsOneAudioGroupCallWithDistinctTargets(t *testing.
 		}
 	default:
 		t.Fatal("group dialing state was not published")
+	}
+}
+
+func TestWebCallControllerStartsVideoGroupCall(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L56-L63
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	call := &meowcaller.Call{}
+	var gotOptions meowcaller.GroupCallOptions
+	c := &webCallController{
+		ctx: context.Background(), bridge: bridge, log: zerolog.Nop(),
+		startGroupCall: func(
+			_ context.Context,
+			_ []string,
+			options meowcaller.GroupCallOptions,
+		) (*meowcaller.Call, error) {
+			gotOptions = options
+			return call, nil
+		},
+		attachCall: func(*meowcaller.Call) error { return nil },
+	}
+	if err := c.control(vbControl{
+		Action:  "start_group_video",
+		Targets: []string{"15550001", "15550002"},
+	}); err != nil {
+		t.Fatalf("start group video: %v", err)
+	}
+	if !gotOptions.Video {
+		t.Fatal("start group video delegated audio-only options")
+	}
+}
+
+func TestVideoBridgePublishesParticipantTaggedFrame(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L63
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 1)
+	bridge.subs[events] = struct{}{}
+	frame := meowcaller.ParticipantVideoFrame{
+		ParticipantID: "333333333333333:43@lid",
+		Sender:        types.NewJID("333333333333333", types.HiddenUserServer),
+		Device:        types.NewADJID("333333333333333", 0, 43),
+		SSRC:          0x12345678,
+		Orientation:   2,
+		AccessUnit:    []byte{0, 0, 0, 1, 0x65},
+	}
+	bridge.WriteParticipantFrame(frame)
+	msg := <-events
+	if msg.event != "participant_video" {
+		t.Fatalf("bridge event = %q, want participant_video", msg.event)
+	}
+	var got vbParticipantVideo
+	if err := json.Unmarshal(msg.data, &got); err != nil {
+		t.Fatalf("decode participant video event: %v", err)
+	}
+	if got.ParticipantID != frame.ParticipantID || got.Sender != frame.Sender.String() ||
+		got.Device != frame.Device.String() || got.SSRC != frame.SSRC ||
+		got.Orientation != frame.Orientation ||
+		got.AccessUnit != base64.StdEncoding.EncodeToString(frame.AccessUnit) {
+		t.Fatalf("participant video event = %+v", got)
 	}
 }
 

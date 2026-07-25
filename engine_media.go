@@ -769,7 +769,16 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				receiver = &appDataReceiver{}
 				appDataReceivers[media.receiver] = receiver
 			}
-			handled, err := handleAppDataReactionFrom(call, receiver, media.UserJID, media.Payload)
+			handled, err := handleAppDataReactionFromParticipant(
+				call,
+				receiver,
+				media.ParticipantID,
+				media.UserJID,
+				media.DeviceJID,
+				media.PID,
+				media.HasPID,
+				media.Payload,
+			)
 			if err != nil {
 				log.Warn().Err(err).Uint32("ssrc", media.Header.Ssrc).Uint16("seq", media.Header.SequenceNumber).Msg("invalid RTC app-data payload")
 				e.c.diag.Emit("app_data", map[string]any{
@@ -859,6 +868,19 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				}
 				videoWireFrame++
 				e.c.diag.Emit("video", map[string]any{"event": "frame", "ssrc": vh.Ssrc, "bytes": len(frame)})
+				deliveredParticipantFrame := false
+				if call != nil {
+					deliveredParticipantFrame = call.dispatchParticipantVideoFrame(ParticipantVideoFrame{
+						ParticipantID: media.ParticipantID,
+						Sender:        media.UserJID,
+						Device:        media.DeviceJID,
+						PID:           media.PID,
+						HasPID:        media.HasPID,
+						SSRC:          vh.Ssrc,
+						Orientation:   videoState.orientation,
+						AccessUnit:    frame,
+					})
+				}
 				if sink := callVideoSink(call); sink != nil {
 					if err := sink.WriteVideo(frame); err != nil {
 						log.Warn().Err(err).Uint32("ssrc", vh.Ssrc).Int("bytes", len(frame)).Msg("failed to write WhatsApp video frame to sink")
@@ -868,7 +890,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 						}
 						videoFrameIn++
 					}
-				} else {
+				} else if !deliveredParticipantFrame {
 					if videoSinkMissing == 0 {
 						log.Warn().Uint32("ssrc", vh.Ssrc).Int("bytes", len(frame)).Msg("WhatsApp video frame arrived with no sink attached")
 					}
