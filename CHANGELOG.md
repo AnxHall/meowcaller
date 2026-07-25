@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### media/group_rtcp_feedback — `planned`
+- Added the capture-backed contract for participant-indexed audio reception
+  feedback. Each authenticated group SSRC retains independent sequence, loss,
+  jitter, and sender-report timing state, while the live engine reuses the
+  existing verified single-reception-block SRTCP wire format per participant.
+
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person
   start through `Client.GroupCallWithOptions`, separate established-call
@@ -146,11 +152,16 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   all-stream send/receive, direct fallback, roster carry/departure, unknown
   SSRC, late-attachment, and concurrent-rekey KATs pass.
 
-### voip/group_invite_accept — `planned`
+### voip/group_invite_accept — `KAT-verified`
 - Added the capture contract for accepting a directed invitation into an
   already-active ad-hoc call. The enriched offer seeds transaction-ordered group
-  state before eager preaccept, and both preaccept and deferred accept use
+  state before eager preaccept, and both preaccept and active-group accept use
   `CALLID@call`; ordinary 1:1 offers remain direct.
+- Corrected the accept timing from the immutable capture: the added endpoint
+  invokes `acceptCall` and immediately sends exactly `audio`, `net`, and
+  `encopt`, with no direct-call metadata. Its first inbound `mute_v2` arrives
+  later and cannot trigger acceptance; ordinary 1:1 deferred acceptance remains
+  unchanged.
 - Corrected the contract to preserve the capture's missing-key boundary: the
   enriched offer has no encrypted 1:1 call key, so it registers pending the
   selected endpoint's later group rekey and cannot emit media-ready early.
