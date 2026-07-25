@@ -425,39 +425,48 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return nil
 	}
 	var audioReception rtp.RtcpReceptionStatsSet
+	var groupRTCPMu sync.Mutex
 	e.mu.Lock()
 	currentPeer := peerLID
 	applyGroupUpdate := func(update types.GroupCallUpdate) error {
 		audioPlayoutMu.Lock()
 		defer audioPlayoutMu.Unlock()
-		if err := applyGroupAudioRoster(audioReceivers, &audioReception, update); err != nil {
-			return err
-		}
-		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L64-L92
+		groupRTCPMu.Lock()
+		defer groupRTCPMu.Unlock()
+		var relayTransactionID [12]byte
 		if update.Relay != nil {
-			var transactionID [12]byte
-			if _, err := rand.Read(transactionID[:]); err != nil {
+			if _, err := rand.Read(relayTransactionID[:]); err != nil {
 				return fmt.Errorf("generate group relay transaction ID: %w", err)
 			}
-			changed, err := allocateState.Apply(ep, update.Relay, streamSsrcs, transactionID, func(packet []byte) error {
+		}
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
+		changed, err := applyGroupMediaUpdateTransaction(
+			audioReceivers,
+			&audioReception,
+			allocateState,
+			ep,
+			streamSsrcs,
+			update,
+			relayTransactionID,
+			func(packet []byte) error {
 				_, sendErr := ch.Send(packet)
 				return sendErr
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("apply group media update: %w", err)
+		}
+		if changed {
+			log.Info().
+				Uint32("relay_transaction_id", update.Relay.TransactionID).
+				Str("relay_name", ep.RelayName).
+				Msg("refreshed group relay allocation")
+			e.c.diag.Emit("stun", map[string]any{
+				"event":                "group_allocate_sent",
+				"bytes":                len(allocateState.Current()),
+				"relay_transaction_id": update.Relay.TransactionID,
+				"relay_name":           ep.RelayName,
 			})
-			if err != nil {
-				return fmt.Errorf("refresh group relay allocation: %w", err)
-			}
-			if changed {
-				log.Info().
-					Uint32("relay_transaction_id", update.Relay.TransactionID).
-					Str("relay_name", ep.RelayName).
-					Msg("refreshed group relay allocation")
-				e.c.diag.Emit("stun", map[string]any{
-					"event":                "group_allocate_sent",
-					"bytes":                len(allocateState.Current()),
-					"relay_transaction_id": update.Relay.TransactionID,
-					"relay_name":           ep.RelayName,
-				})
-			}
 		}
 		activeParticipantIDs := audioReceivers.ActiveParticipantIDs()
 		audioMixer.Retain(activeParticipantIDs)
@@ -939,17 +948,75 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 
 func applyGroupAudioRoster(receivers *participantReceiveRegistry, reception *rtp.RtcpReceptionStatsSet, update types.GroupCallUpdate) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L128-L146
+	_, err := applyGroupMediaUpdateTransaction(
+		receivers,
+		reception,
+		nil,
+		nil,
+		[9]uint32{},
+		update,
+		[12]byte{},
+		nil,
+	)
+	return err
+}
+
+func applyGroupMediaUpdateTransaction(
+	receivers *participantReceiveRegistry,
+	reception *rtp.RtcpReceptionStatsSet,
+	allocateState *groupRelayAllocateState,
+	endpoint *types.RelayEndpoint,
+	streamSSRCs [9]uint32,
+	update types.GroupCallUpdate,
+	relayTransactionID [12]byte,
+	send func([]byte) error,
+) (bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
 	if receivers == nil {
-		return fmt.Errorf("meowcaller: participant receive registry is nil")
+		return false, fmt.Errorf("meowcaller: participant receive registry is nil")
 	}
 	if reception == nil {
-		return fmt.Errorf("meowcaller: RTCP reception set is nil")
+		return false, fmt.Errorf("meowcaller: RTCP reception set is nil")
 	}
-	if err := receivers.ApplyGroupUpdate(update); err != nil {
-		return err
+	changed := false
+	err := receivers.ApplyGroupUpdateTransaction(update, func(commit func()) error {
+		if update.Relay == nil {
+			commit()
+			return nil
+		}
+		if allocateState == nil {
+			return fmt.Errorf("meowcaller: group relay allocate state is nil")
+		}
+		var err error
+		changed, err = allocateState.Apply(
+			endpoint,
+			update.Relay,
+			streamSSRCs,
+			relayTransactionID,
+			func(packet []byte) error {
+				if send == nil {
+					return fmt.Errorf("meowcaller: group relay send is nil")
+				}
+				if sendErr := send(packet); sendErr != nil {
+					return sendErr
+				}
+				commit()
+				return nil
+			},
+		)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			commit()
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
 	reception.Retain(receivers.ActiveAudioSSRCs())
-	return nil
+	return changed, nil
 }
 
 func runMediaSRTCPTicks(ctx context.Context, ticks <-chan time.Time, send func(time.Time) error, onError func(error)) {

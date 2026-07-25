@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_receive — `partial`
+### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:
   receiver/PID/SSRC indexes and prepared group epoch keys stay prospective until
   the relay Allocate send succeeds, and a failed external apply leaves all prior
@@ -23,6 +23,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   committed-group gate without another error return. The enabled registry KAT
   covers rollback, retry, stale callback suppression, map/key continuity,
   pending-epoch consumption, and receiver-only compatibility.
+- Integrated the transaction into the live engine: a rotated relay Allocate
+  invokes the receiver commit only after its send succeeds and while the relay
+  state lock is still held; a send failure leaves relay, roster, reception, and
+  epoch state unchanged for exact retry. Newer updates without a relay commit
+  once, while stale updates bypass both the relay and commit callbacks. Focused
+  cross-resource, callback-contract, and race KATs pass.
 
 ### media/group_rtcp_feedback — `partial`
 - Corrected the wire contract from authenticated group traffic. Native

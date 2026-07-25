@@ -1274,6 +1274,43 @@ func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testin
 	}
 }
 
+func TestParticipantReceiveRegistryCommitCallbackContract(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	update := mediaTestGroupUpdate(self, peer, added, pending, 16, true)
+	err = registry.ApplyGroupUpdateTransaction(update, func(func()) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("callback success without commit was accepted")
+	}
+	if registry.HasCommittedGroupUpdate() || registry.transactionID != 0 {
+		t.Fatalf("missing commit mutated registry: group=%t tx=%d", registry.HasCommittedGroupUpdate(), registry.transactionID)
+	}
+
+	lateErr := errors.New("late callback failure")
+	err = registry.ApplyGroupUpdateTransaction(update, func(commit func()) error {
+		commit()
+		commit()
+		return lateErr
+	})
+	if err != nil {
+		t.Fatalf("commit-then-error did not preserve accepted transaction: %v", err)
+	}
+	if !registry.HasCommittedGroupUpdate() || registry.transactionID != 16 || registry.byPID[2] == nil {
+		t.Fatalf("idempotent commit did not publish exactly one roster: group=%t tx=%d pids=%v", registry.HasCommittedGroupUpdate(), registry.transactionID, registry.byPID)
+	}
+}
+
 func TestParticipantReceiveRegistryDepartureWaitsForInFlightDecode(t *testing.T) {
 	callKey := iota32()
 	self := mediaTestJID("111111111111111", 14)

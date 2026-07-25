@@ -12,6 +12,7 @@ import (
 
 	"github.com/purpshell/meowcaller/diag"
 	"github.com/purpshell/meowcaller/rtp"
+	"go.mau.fi/whatsmeow/types"
 )
 
 func TestVideoRtpDurationSamples(t *testing.T) {
@@ -456,6 +457,135 @@ func TestApplyGroupAudioRosterPrunesDepartedReceptionAndResetsRejoin(t *testing.
 	}
 	if rejoined == nil || rejoined.ExtendedHighestSequence != 900 || rejoined.CumulativeLost != 0 {
 		t.Fatalf("rejoined report = %+v, want fresh sequence 900", rejoined)
+	}
+}
+
+func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	var reception rtp.RtcpReceptionStatsSet
+	const staleReceptionSSRC = 0xdeadbeef
+	reception.Observe(staleReceptionSSRC, 7, 960, 20, SampleRate)
+
+	initialAllocate := []byte{0x00, 0x01, 0x02}
+	allocateState := newGroupRelayAllocateState(initialAllocate, bytes.Repeat([]byte{0x12}, 16))
+	endpoint := &types.RelayEndpoint{
+		RelayName: "zrh1c01",
+		IPv4:      "157.240.17.62",
+		Port:      3478,
+	}
+	update := mediaTestGroupUpdate(self, peer, added, pending, 18, true)
+	update.Relay = &types.GroupCallRelay{
+		TransactionID: 4,
+		Key:           bytes.Repeat([]byte{0x24}, 16),
+		Tokens:        [][]byte{bytes.Repeat([]byte{0x42}, 174)},
+		Endpoints: []types.GroupCallRelayEndpoint{{
+			RelayName: "zrh1c01",
+			TokenID:   0,
+		}},
+	}
+	relayTransactionID := [12]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	sendErr := errors.New("relay unavailable")
+	sendCalls := 0
+	changed, err := applyGroupMediaUpdateTransaction(
+		registry,
+		&reception,
+		allocateState,
+		endpoint,
+		[9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9},
+		update,
+		relayTransactionID,
+		func([]byte) error {
+			sendCalls++
+			return sendErr
+		},
+	)
+	if !errors.Is(err, sendErr) {
+		t.Fatalf("failed apply error = %v, want %v", err, sendErr)
+	}
+	if changed || sendCalls != 1 {
+		t.Fatalf("failed apply changed/send calls = (%t, %d), want (false, 1)", changed, sendCalls)
+	}
+	if registry.HasCommittedGroupUpdate() || registry.transactionID != 0 {
+		t.Fatalf("failed apply committed roster: group=%t tx=%d", registry.HasCommittedGroupUpdate(), registry.transactionID)
+	}
+	if got := allocateState.Current(); !bytes.Equal(got, initialAllocate) {
+		t.Fatalf("failed apply changed relay allocate: %x", got)
+	}
+	if reports := reception.Reports(40); len(reports) != 1 || reports[0].Ssrc != staleReceptionSSRC {
+		t.Fatalf("failed apply changed reception set: %+v", reports)
+	}
+
+	changed, err = applyGroupMediaUpdateTransaction(
+		registry,
+		&reception,
+		allocateState,
+		endpoint,
+		[9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9},
+		update,
+		relayTransactionID,
+		func([]byte) error {
+			sendCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("retry apply: %v", err)
+	}
+	if !changed || sendCalls != 2 {
+		t.Fatalf("retry changed/send calls = (%t, %d), want (true, 2)", changed, sendCalls)
+	}
+	if !registry.HasCommittedGroupUpdate() || registry.transactionID != 18 || registry.byPID[2] == nil {
+		t.Fatalf("retry did not commit roster: group=%t tx=%d pids=%v", registry.HasCommittedGroupUpdate(), registry.transactionID, registry.byPID)
+	}
+	if got := allocateState.Current(); bytes.Equal(got, initialAllocate) {
+		t.Fatal("retry did not commit relay allocate")
+	}
+	if reports := reception.Reports(40); len(reports) != 0 {
+		t.Fatalf("retry did not retain only committed reception SSRCs: %+v", reports)
+	}
+
+	stale := update
+	stale.Relay = &types.GroupCallRelay{TransactionID: 5}
+	changed, err = applyGroupMediaUpdateTransaction(
+		registry,
+		&reception,
+		allocateState,
+		nil,
+		[9]uint32{},
+		stale,
+		[12]byte{},
+		func([]byte) error {
+			sendCalls++
+			return nil
+		},
+	)
+	if err != nil || changed || sendCalls != 2 {
+		t.Fatalf("stale apply = changed:%t calls:%d err:%v, want false,2,nil", changed, sendCalls, err)
+	}
+
+	withoutRelay := mediaTestGroupUpdate(self, peer, added, pending, 19, false)
+	changed, err = applyGroupMediaUpdateTransaction(
+		registry,
+		&reception,
+		nil,
+		nil,
+		[9]uint32{},
+		withoutRelay,
+		[12]byte{},
+		nil,
+	)
+	if err != nil || changed || registry.transactionID != 19 {
+		t.Fatalf("non-relay apply = changed:%t tx:%d err:%v, want false,19,nil", changed, registry.transactionID, err)
 	}
 }
 
