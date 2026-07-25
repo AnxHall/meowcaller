@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_key_epoch — `planned`
+### media/group_key_epoch — `partial`
 - Added the corrective two-sided-capture contract for one transaction-wide raw
   media epoch. The elected `enc_rekey` author distributes one shared root; local
   send keys derive with the self device ID and every receive key derives with
@@ -15,6 +15,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Required in-place, concurrency-safe installation preserves RTP stream identity,
   sequence/timestamp counters, sender ROC, and receiver ROC. The older
   participant-scoped module is retained as superseded history.
+- Implemented concurrency-safe raw-epoch installation on both media directions.
+  Focused KATs prove new-key authentication, old-key rejection, unchanged SSRC,
+  continued sequence/timestamp state, and receive ROC continuity across
+  `0xffff → 0`. Registry-wide and live-engine installation remain pending.
+  CodeRabbit review was unavailable because its CLI is not installed.
 
 ### voip/group_invite_accept — `planned`
 - Added the capture contract for accepting a directed invitation into an

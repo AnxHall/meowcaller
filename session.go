@@ -150,6 +150,7 @@ func phaseName(p CallPhase) string {
 // MediaPipeline composes the outbound (protect) and inbound (unprotect) E2E 1:1
 // media path. SFrame is omitted (plain Opus inside WAHKDF SRTP).
 type MediaPipeline struct {
+	sendMu       sync.Mutex
 	sendKeys     srtp.E2eSrtpKeys
 	recvKeys     srtp.E2eSrtpKeys
 	warpMITagLen int
@@ -184,6 +185,34 @@ func (p *MediaPipeline) RekeyRecvFromRaw(rawE2E []byte, peerJID string) error {
 		return err
 	}
 	p.installRecvKeys(recvKeys)
+	return nil
+}
+
+// RekeySendFromRaw switches the send keystream to a shared keygen-v2 raw epoch
+// derived with this client's own participant ID.
+func (p *MediaPipeline) RekeySendFromRaw(rawE2E []byte, selfJID string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L56-L64
+	sendKeys, err := srtp.DeriveE2eKeysFromRaw(rawE2E, rtp.FormatE2ESrtpParticipantID(selfJID))
+	if err != nil {
+		return err
+	}
+	p.sendMu.Lock()
+	p.sendKeys = sendKeys
+	p.sendMu.Unlock()
+	return nil
+}
+
+// RekeyRecvFromRawPreservingROC switches the receive keystream to a shared
+// keygen-v2 raw epoch while retaining the continuing RTP stream's ROC state.
+func (p *MediaPipeline) RekeyRecvFromRawPreservingROC(rawE2E []byte, peerJID string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L56-L64
+	recvKeys, err := srtp.DeriveE2eKeysFromRaw(rawE2E, rtp.FormatE2ESrtpParticipantID(peerJID))
+	if err != nil {
+		return err
+	}
+	p.recvMu.Lock()
+	p.recvKeys = recvKeys
+	p.recvMu.Unlock()
 	return nil
 }
 
@@ -226,6 +255,9 @@ func NewMediaPipeline(callKey []byte, selfJID, peerJID string, ssrc, samplesPerP
 // appends the WARP MI tag.
 func (p *MediaPipeline) ProtectAudio(opusPayload []byte) ([]byte, error) {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/src/voip/session.rs#L136-L150
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
 	header := p.stream.NextPacket(opusPayload, false)
 	roc := p.sendRoc.Advance(header.SequenceNumber)
 	packet := rtp.EncodeRtpHeader(&header)
@@ -250,6 +282,9 @@ func (p *MediaPipeline) ProtectAudio(opusPayload []byte) ([]byte, error) {
 //
 // NOT VALIDATED: the video send media path is unproven.
 func (p *MediaPipeline) ProtectRTP(header *rtp.RtpHeader, payload []byte) ([]byte, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
 	roc := p.sendRoc.Advance(header.SequenceNumber)
 	packet := rtp.EncodeRtpHeader(header)
 	encrypted, err := srtp.CryptPayload(&p.sendKeys, header.Ssrc, header.SequenceNumber, roc, payload)
