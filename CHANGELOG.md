@@ -15,6 +15,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Corrected the contract to preserve the capture's missing-key boundary: the
   enriched offer has no encrypted 1:1 call key, so it registers pending the
   selected endpoint's later group rekey and cannot emit media-ready early.
+- Whatsmeow commit `81ff60c` parses and validates the enriched offer snapshot,
+  registers the keyless active ad-hoc invite, preserves an installed key across
+  retransmissions, and targets both eager preaccept and deferred accept at
+  `CALLID@call`. Ordinary keyless 1:1 offers remain rejected. Focused/full tests,
+  race, build, and vet pass; CodeRabbit was unavailable because its CLI is not
+  installed.
 
 ### voip/group_rekey_directive — `KAT-verified`
 - Added the immutable two-sided capture contract for preserving the
