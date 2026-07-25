@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	meowcaller "github.com/purpshell/meowcaller"
@@ -429,6 +430,154 @@ func TestWebCallControllerAddParticipantsStagesSynchronousJoinUntilInviteResult(
 				t.Fatalf("invite success = %t, want %t", invite.Success, tt.wantSuccess)
 			}
 		})
+	}
+}
+
+func TestWebCallControllerAddParticipantsIgnoresResultFromReplacedCall(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L64-L66
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 2)
+	bridge.subs[events] = struct{}{}
+	callA := &meowcaller.Call{}
+	callB := &meowcaller.Call{}
+	inviteStarted := make(chan struct{})
+	releaseInvite := make(chan struct{})
+	candidateB := &pendingParticipantJoinCandidate{
+		outcome: webParticipantJoin{Event: "participant_join", Target: "+15550002"},
+	}
+	c := &webCallController{
+		ctx: context.Background(), call: callA, bridge: bridge, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
+		inviteParticipants: func(context.Context, *meowcaller.Call, ...string) []error {
+			close(inviteStarted)
+			<-releaseInvite
+			return []error{errors.New("old call rejected")}
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- c.addParticipants([]string{"+15550002"})
+	}()
+	<-inviteStarted
+
+	c.mu.Lock()
+	c.call = callB
+	c.activeCallID = callB.ID()
+	c.pendingParticipantCallID = callB.ID()
+	c.pendingParticipantInvites = map[string]string{"15550002": "+15550002"}
+	c.pendingParticipantOrder = []string{"15550002"}
+	c.participantInviteInFlight = map[string]bool{"15550002": true}
+	c.pendingParticipantJoins = map[string]*pendingParticipantJoinCandidate{"15550002": candidateB}
+	c.mu.Unlock()
+
+	close(releaseInvite)
+	if err := <-done; err != nil {
+		t.Fatalf("old add participants: %v", err)
+	}
+	c.mu.Lock()
+	if c.pendingParticipantInvites["15550002"] != "+15550002" ||
+		!c.participantInviteInFlight["15550002"] ||
+		c.pendingParticipantJoins["15550002"] != candidateB {
+		t.Fatalf("old result mutated replacement state: invites=%v inflight=%v joins=%v",
+			c.pendingParticipantInvites, c.participantInviteInFlight, c.pendingParticipantJoins)
+	}
+	c.mu.Unlock()
+	select {
+	case msg := <-events:
+		t.Fatalf("old result published into replacement call: %s", msg.data)
+	default:
+	}
+}
+
+func TestWebCallControllerSerializesOverlappingParticipantSubmissions(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L64-L66
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	call := &meowcaller.Call{}
+	firstInviteStarted := make(chan struct{})
+	releaseFirstInvite := make(chan struct{})
+	secondCallerStarted := make(chan struct{})
+	secondInviteStarted := make(chan struct{})
+	var inviteCalls atomic.Int32
+	c := &webCallController{
+		ctx: context.Background(), call: call, bridge: bridge, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
+		inviteParticipants: func(context.Context, *meowcaller.Call, ...string) []error {
+			if inviteCalls.Add(1) == 1 {
+				close(firstInviteStarted)
+				<-releaseFirstInvite
+			} else {
+				close(secondInviteStarted)
+			}
+			return []error{nil}
+		},
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- c.addParticipants([]string{"+15550002"})
+	}()
+	<-firstInviteStarted
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondCallerStarted)
+		secondDone <- c.addParticipants([]string{"+15550002"})
+	}()
+	<-secondCallerStarted
+	if c.participantInviteMu.TryLock() {
+		c.participantInviteMu.Unlock()
+		t.Fatal("overlapping add call was not serialized")
+	}
+	close(releaseFirstInvite)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first add participants: %v", err)
+	}
+	<-secondInviteStarted
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second add participants: %v", err)
+	}
+	if got := inviteCalls.Load(); got != 2 {
+		t.Fatalf("invite calls = %d, want 2 serialized calls", got)
+	}
+}
+
+func TestWebCallControllerDoesNotPublishRosterAfterCallEnd(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L78-L82
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 1)
+	bridge.subs[events] = struct{}{}
+	beforePublish := make(chan struct{})
+	releasePublish := make(chan struct{})
+	c := &webCallController{
+		bridge: bridge, log: zerolog.Nop(), activeCallID: "OLD",
+		beforeGroupStatePublish: func() {
+			close(beforePublish)
+			<-releasePublish
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		c.handleGroupState("OLD", meowcaller.GroupCallState{TransactionID: 19})
+		close(done)
+	}()
+	<-beforePublish
+	c.mu.Lock()
+	c.activeCallID = ""
+	bridge.ClearGroupState("OLD")
+	c.mu.Unlock()
+	close(releasePublish)
+	<-done
+	select {
+	case msg := <-events:
+		t.Fatalf("stale roster published after call end: %s", msg.data)
+	default:
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if len(bridge.groupState) != 0 || bridge.groupCallID != "" {
+		t.Fatalf("stale roster repopulated replay cache: call=%q state=%s", bridge.groupCallID, bridge.groupState)
 	}
 }
 

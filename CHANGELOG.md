@@ -112,6 +112,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Specified exact-call result ownership, serialized overlapping submissions, and
   atomic roster publication so stale callbacks cannot mutate or repopulate a
   replacement call.
+- Implemented those ownership gates with a serialized submission boundary,
+  pointer-safe result handling, and lifecycle-atomic roster/join publication;
+  deterministic old-call, overlap, and blocked-publication KATs pass.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 

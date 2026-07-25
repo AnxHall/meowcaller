@@ -79,6 +79,7 @@ type webCallController struct {
 	bridge *videoBridge
 	log    zerolog.Logger
 
+	participantInviteMu       sync.Mutex
 	mu                        sync.Mutex
 	call                      *meowcaller.Call
 	pending                   *meowcaller.Call
@@ -94,6 +95,7 @@ type webCallController struct {
 	answerCall                func(*meowcaller.Call) error
 	rejectCall                func(*meowcaller.Call) error
 	hangupCall                func(*meowcaller.Call) error
+	beforeGroupStatePublish   func()
 	pendingParticipantCallID  string
 	pendingParticipantInvites map[string]string
 	pendingParticipantOrder   []string
@@ -322,6 +324,9 @@ func (c *webCallController) control(command vbControl) error {
 
 func (c *webCallController) addParticipants(targets []string) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L64-L66
+	c.participantInviteMu.Lock()
+	defer c.participantInviteMu.Unlock()
 	call, err := c.activeCall()
 	if err != nil {
 		return err
@@ -389,20 +394,18 @@ func (c *webCallController) addParticipants(targets []string) error {
 			Event: "participant_invite", CallID: call.ID(), Target: target,
 			Success: inviteErr == nil,
 		}
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L58-L70
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L61-L66
 		if inviteErr != nil {
 			result.Message = inviteErr.Error()
-			c.log.Warn().Err(inviteErr).Str("call_id", call.ID()).Str("target", target).
-				Msg("web participant invite failed")
-		} else {
-			c.log.Info().Str("call_id", call.ID()).Str("target", target).
-				Msg("web participant invite submitted")
 		}
-		c.bridge.PublishEvent(result)
-
-		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L58-L70
 		key := participantInviteTargetKey(target)
 		var joined *webParticipantJoin
 		c.mu.Lock()
+		if c.call != call || c.activeCallID != call.ID() || c.pendingParticipantCallID != call.ID() {
+			c.mu.Unlock()
+			continue
+		}
 		delete(c.participantInviteInFlight, key)
 		candidate := c.pendingParticipantJoins[key]
 		if inviteErr != nil {
@@ -421,9 +424,17 @@ func (c *webCallController) addParticipants(targets []string) error {
 			outcome := candidate.outcome
 			joined = &outcome
 		}
-		c.mu.Unlock()
+		c.bridge.PublishEvent(result)
 		if joined != nil {
 			c.publishParticipantJoin(*joined)
+		}
+		c.mu.Unlock()
+		if inviteErr != nil {
+			c.log.Warn().Err(inviteErr).Str("call_id", call.ID()).Str("target", target).
+				Msg("web participant invite failed")
+		} else {
+			c.log.Info().Str("call_id", call.ID()).Str("target", target).
+				Msg("web participant invite submitted")
 		}
 	}
 	return nil
@@ -595,10 +606,17 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 			State: participant.State, Devices: devices,
 		}
 	}
-	c.bridge.PublishGroupState(webState)
-
+	if c.beforeGroupStatePublish != nil {
+		c.beforeGroupStatePublish()
+	}
 	var joined []webParticipantJoin
 	c.mu.Lock()
+	if c.activeCallID != callID {
+		c.mu.Unlock()
+		return
+	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L78-L82
+	c.bridge.PublishGroupState(webState)
 	for _, participant := range state.Participants {
 		if participant.State != "connected" {
 			continue
@@ -656,10 +674,10 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 		}
 		joined = append(joined, outcome)
 	}
-	c.mu.Unlock()
 	for _, outcome := range joined {
 		c.publishParticipantJoin(outcome)
 	}
+	c.mu.Unlock()
 }
 
 func (c *webCallController) publishParticipantJoin(outcome webParticipantJoin) {
