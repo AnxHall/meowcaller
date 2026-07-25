@@ -62,6 +62,37 @@ type installedGroupRawEpoch struct {
 	rawKey        []byte
 }
 
+type participantReceiverMetadata struct {
+	receiver  *participantAudioReceiver
+	userJID   types.JID
+	deviceJID types.JID
+	pid       uint32
+}
+
+type preparedGroupRawEpoch struct {
+	sendKeys        srtp.E2eSrtpKeys
+	sendRTCPKeys    srtp.E2eSrtpKeys
+	receiveKeys     map[*participantAudioReceiver]srtp.E2eSrtpKeys
+	receiveRTCPKeys map[*participantAudioReceiver]srtp.E2eSrtpKeys
+}
+
+type preparedParticipantReceiveUpdate struct {
+	transactionID               uint32
+	byDeviceID                  map[string]*participantAudioReceiver
+	byPID                       map[uint32]*participantAudioReceiver
+	bySSRC                      map[uint32]*participantAudioReceiver
+	byVideoSSRC                 map[uint32]*participantAudioReceiver
+	byAppDataSSRC               map[uint32]*participantAudioReceiver
+	bySRTCPSSRC                 map[uint32]*participantAudioReceiver
+	metadata                    []participantReceiverMetadata
+	newReceivers                []*participantAudioReceiver
+	consumedPendingTransactions []uint32
+	epoch                       *preparedGroupRawEpoch
+	epochTransactionID          uint32
+	epochRawKey                 []byte
+	replaceInstalledEpoch       bool
+}
+
 type participantReceiveRegistry struct {
 	mu             sync.RWMutex
 	callID         string
@@ -180,34 +211,77 @@ func (r *participantReceiveRegistry) ApplyGroupUpdateTransaction(
 	apply func(commit func()) error,
 ) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
-	// TODO
-	// agent suggestion: fully prepare and derive the next roster/epoch while holding
-	// the registry lock, then let apply invoke one infallible commit closure.
-	// human input:
-	return fmt.Errorf("meowcaller: group update transaction is not implemented")
-}
-
-func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpdate) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L100
+	if apply == nil {
+		return fmt.Errorf("meowcaller: group update apply callback is nil")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hasGroupUpdate && update.TransactionID <= r.transactionID {
 		return nil
 	}
-
-	nextByDeviceID := make(map[string]*participantAudioReceiver)
-	nextByPID := make(map[uint32]*participantAudioReceiver)
-	nextBySSRC := make(map[uint32]*participantAudioReceiver)
-	nextByVideoSSRC := make(map[uint32]*participantAudioReceiver)
-	nextByAppDataSSRC := make(map[uint32]*participantAudioReceiver)
-	nextBySRTCPSSRC := make(map[uint32]*participantAudioReceiver)
-	type receiverMetadata struct {
-		receiver  *participantAudioReceiver
-		userJID   types.JID
-		deviceJID types.JID
-		pid       uint32
+	prepared, err := r.prepareGroupUpdateLocked(update)
+	if err != nil {
+		return err
 	}
-	var metadata []receiverMetadata
+	committed := false
+	commitCalls := 0
+	defer func() {
+		prepared.clear(!committed)
+	}()
+	commit := func() {
+		commitCalls++
+		if committed {
+			return
+		}
+		r.commitGroupUpdateLocked(prepared)
+		committed = true
+	}
+	if err = apply(commit); err != nil {
+		if committed {
+			r.log.Error().
+				Err(err).
+				Str("call_id", r.callID).
+				Uint32("transaction_id", update.TransactionID).
+				Msg("group update apply failed after commit")
+			return nil
+		}
+		return err
+	}
+	if commitCalls > 1 {
+		r.log.Error().
+			Str("call_id", r.callID).
+			Uint32("transaction_id", update.TransactionID).
+			Int("commit_calls", commitCalls).
+			Msg("group update apply invoked commit more than once")
+	}
+	if !committed {
+		return fmt.Errorf("meowcaller: group update apply completed without commit")
+	}
+	return nil
+}
+
+func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpdate) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L100
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L139-L141
+	return r.ApplyGroupUpdateTransaction(update, func(commit func()) error {
+		commit()
+		return nil
+	})
+}
+
+func (r *participantReceiveRegistry) prepareGroupUpdateLocked(
+	update types.GroupCallUpdate,
+) (*preparedParticipantReceiveUpdate, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L110-L120
+	prepared := &preparedParticipantReceiveUpdate{
+		transactionID: update.TransactionID,
+		byDeviceID:    make(map[string]*participantAudioReceiver),
+		byPID:         make(map[uint32]*participantAudioReceiver),
+		bySSRC:        make(map[uint32]*participantAudioReceiver),
+		byVideoSSRC:   make(map[uint32]*participantAudioReceiver),
+		byAppDataSSRC: make(map[uint32]*participantAudioReceiver),
+		bySRTCPSSRC:   make(map[uint32]*participantAudioReceiver),
+	}
 	hasConnectedRemotePID := false
 	for _, participant := range update.Participants {
 		if participant.State != "connected" {
@@ -223,41 +297,49 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 				continue
 			}
 			hasConnectedRemotePID = true
-			if _, exists := nextByDeviceID[participantID]; exists {
-				return fmt.Errorf("meowcaller: duplicate group participant device %s", participantID)
+			if _, exists := prepared.byDeviceID[participantID]; exists {
+				prepared.clear(true)
+				return nil, fmt.Errorf("meowcaller: duplicate group participant device %s", participantID)
 			}
 			receiver := r.byDeviceID[participantID]
 			if receiver == nil {
 				var err error
 				receiver, err = r.newReceiver(participant.JID, device.JID, device.PID, true)
 				if err != nil {
-					return err
+					prepared.clear(true)
+					return nil, err
 				}
+				prepared.newReceivers = append(prepared.newReceivers, receiver)
 			}
-			if _, exists := nextByPID[device.PID]; exists {
-				return fmt.Errorf("meowcaller: duplicate group participant PID %d", device.PID)
+			if _, exists := prepared.byPID[device.PID]; exists {
+				prepared.clear(true)
+				return nil, fmt.Errorf("meowcaller: duplicate group participant PID %d", device.PID)
 			}
-			if _, exists := nextBySSRC[receiver.ssrc]; exists {
-				return fmt.Errorf("meowcaller: duplicate group participant SSRC %d", receiver.ssrc)
+			if _, exists := prepared.bySSRC[receiver.ssrc]; exists {
+				prepared.clear(true)
+				return nil, fmt.Errorf("meowcaller: duplicate group participant SSRC %d", receiver.ssrc)
 			}
-			if _, exists := nextByVideoSSRC[receiver.videoSSRC]; exists {
-				return fmt.Errorf("meowcaller: duplicate group participant video SSRC %d", receiver.videoSSRC)
+			if _, exists := prepared.byVideoSSRC[receiver.videoSSRC]; exists {
+				prepared.clear(true)
+				return nil, fmt.Errorf("meowcaller: duplicate group participant video SSRC %d", receiver.videoSSRC)
 			}
-			if _, exists := nextByAppDataSSRC[receiver.appDataSSRC]; exists {
-				return fmt.Errorf("meowcaller: duplicate group participant app-data SSRC %d", receiver.appDataSSRC)
+			if _, exists := prepared.byAppDataSSRC[receiver.appDataSSRC]; exists {
+				prepared.clear(true)
+				return nil, fmt.Errorf("meowcaller: duplicate group participant app-data SSRC %d", receiver.appDataSSRC)
 			}
 			for _, streamSSRC := range receiver.streamSSRCs {
-				if _, exists := nextBySRTCPSSRC[streamSSRC]; exists {
-					return fmt.Errorf("meowcaller: duplicate group participant stream SSRC %d", streamSSRC)
+				if _, exists := prepared.bySRTCPSSRC[streamSSRC]; exists {
+					prepared.clear(true)
+					return nil, fmt.Errorf("meowcaller: duplicate group participant stream SSRC %d", streamSSRC)
 				}
-				nextBySRTCPSSRC[streamSSRC] = receiver
+				prepared.bySRTCPSSRC[streamSSRC] = receiver
 			}
-			nextByDeviceID[participantID] = receiver
-			nextByPID[device.PID] = receiver
-			nextBySSRC[receiver.ssrc] = receiver
-			nextByVideoSSRC[receiver.videoSSRC] = receiver
-			nextByAppDataSSRC[receiver.appDataSSRC] = receiver
-			metadata = append(metadata, receiverMetadata{
+			prepared.byDeviceID[participantID] = receiver
+			prepared.byPID[device.PID] = receiver
+			prepared.bySSRC[receiver.ssrc] = receiver
+			prepared.byVideoSSRC[receiver.videoSSRC] = receiver
+			prepared.byAppDataSSRC[receiver.appDataSSRC] = receiver
+			prepared.metadata = append(prepared.metadata, participantReceiverMetadata{
 				receiver: receiver, userJID: participant.JID,
 				deviceJID: device.JID, pid: device.PID,
 			})
@@ -266,16 +348,67 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 	if !hasConnectedRemotePID {
 		fallback := r.byDeviceID[r.fallbackID]
 		if fallback != nil {
-			nextByDeviceID[r.fallbackID] = fallback
-			nextBySSRC[fallback.ssrc] = fallback
-			nextByVideoSSRC[fallback.videoSSRC] = fallback
-			nextByAppDataSSRC[fallback.appDataSSRC] = fallback
+			prepared.byDeviceID[r.fallbackID] = fallback
+			prepared.bySSRC[fallback.ssrc] = fallback
+			prepared.byVideoSSRC[fallback.videoSSRC] = fallback
+			prepared.byAppDataSSRC[fallback.appDataSSRC] = fallback
 			for _, streamSSRC := range fallback.streamSSRCs {
-				nextBySRTCPSSRC[streamSSRC] = fallback
+				prepared.bySRTCPSSRC[streamSSRC] = fallback
 			}
 		}
 	}
-	for _, next := range metadata {
+
+	var newestPending installedGroupRawEpoch
+	defer func() {
+		clear(newestPending.rawKey)
+	}()
+	hasNewestPending := false
+	for transactionID, rawKey := range r.pendingEpochs {
+		if transactionID > update.TransactionID {
+			continue
+		}
+		prepared.consumedPendingTransactions = append(prepared.consumedPendingTransactions, transactionID)
+		if !hasNewestPending || transactionID > newestPending.transactionID {
+			newestPending = installedGroupRawEpoch{
+				transactionID: transactionID,
+				rawKey:        bytes.Clone(rawKey),
+			}
+			hasNewestPending = true
+		}
+	}
+	selectedEpoch := r.installedEpoch
+	hasSelectedEpoch := r.hasEpoch
+	if hasNewestPending {
+		switch {
+		case !hasSelectedEpoch || newestPending.transactionID > selectedEpoch.transactionID:
+			selectedEpoch = newestPending
+			hasSelectedEpoch = true
+			prepared.replaceInstalledEpoch = true
+		case newestPending.transactionID == selectedEpoch.transactionID &&
+			!bytes.Equal(newestPending.rawKey, selectedEpoch.rawKey):
+			prepared.clear(true)
+			return nil, fmt.Errorf(
+				"meowcaller: conflicting group raw epoch for transaction %d",
+				newestPending.transactionID,
+			)
+		}
+	}
+	if hasSelectedEpoch {
+		epoch, err := r.prepareGroupRawEpochLocked(selectedEpoch.rawKey, prepared.byDeviceID)
+		if err != nil {
+			prepared.clear(true)
+			return nil, err
+		}
+		prepared.epoch = epoch
+		prepared.epochTransactionID = selectedEpoch.transactionID
+		prepared.epochRawKey = bytes.Clone(selectedEpoch.rawKey)
+	}
+	return prepared, nil
+}
+
+func (r *participantReceiveRegistry) commitGroupUpdateLocked(prepared *preparedParticipantReceiveUpdate) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L122-L137
+	for _, next := range prepared.metadata {
 		next.receiver.mu.Lock()
 		next.receiver.userJID = next.userJID
 		next.receiver.deviceJID = next.deviceJID
@@ -283,44 +416,73 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 		next.receiver.hasPID = true
 		next.receiver.mu.Unlock()
 	}
-	r.byDeviceID = nextByDeviceID
-	r.byPID = nextByPID
-	r.bySSRC = nextBySSRC
-	r.byVideoSSRC = nextByVideoSSRC
-	r.byAppDataSSRC = nextByAppDataSSRC
-	r.bySRTCPSSRC = nextBySRTCPSSRC
-	r.transactionID = update.TransactionID
+	r.byDeviceID = prepared.byDeviceID
+	r.byPID = prepared.byPID
+	r.bySSRC = prepared.bySSRC
+	r.byVideoSSRC = prepared.byVideoSSRC
+	r.byAppDataSSRC = prepared.byAppDataSSRC
+	r.bySRTCPSSRC = prepared.bySRTCPSSRC
+	r.transactionID = prepared.transactionID
 	r.hasGroupUpdate = true
-	var newestPendingEpoch installedGroupRawEpoch
-	var hasNewestPendingEpoch bool
-	for transactionID, rawKey := range r.pendingEpochs {
-		if transactionID > update.TransactionID {
-			continue
-		}
-		if !hasNewestPendingEpoch || transactionID > newestPendingEpoch.transactionID {
-			newestPendingEpoch = installedGroupRawEpoch{
-				transactionID: transactionID,
-				rawKey:        bytes.Clone(rawKey),
+	if prepared.epoch != nil {
+		r.installPreparedGroupRawEpochLocked(prepared.epoch)
+		if prepared.replaceInstalledEpoch {
+			clear(r.installedEpoch.rawKey)
+			r.installedEpoch = installedGroupRawEpoch{
+				transactionID: prepared.epochTransactionID,
+				rawKey:        bytes.Clone(prepared.epochRawKey),
 			}
-			hasNewestPendingEpoch = true
+			r.hasEpoch = true
 		}
-		delete(r.pendingEpochs, transactionID)
 	}
-	if hasNewestPendingEpoch {
-		if err := r.applyGroupRawEpochLocked(newestPendingEpoch.transactionID, newestPendingEpoch.rawKey); err != nil {
-			return err
-		}
-	} else if r.hasEpoch {
-		if err := r.installGroupRawEpochLocked(r.installedEpoch.rawKey); err != nil {
-			return err
-		}
+	for _, transactionID := range prepared.consumedPendingTransactions {
+		clear(r.pendingEpochs[transactionID])
+		delete(r.pendingEpochs, transactionID)
 	}
 	r.log.Info().
 		Str("call_id", r.callID).
-		Uint32("transaction_id", update.TransactionID).
-		Int("remote_participants", len(nextByPID)).
+		Uint32("transaction_id", prepared.transactionID).
+		Int("remote_participants", len(prepared.byPID)).
 		Msg("applied group media receive roster")
-	return nil
+}
+
+func (p *preparedParticipantReceiveUpdate) clear(rollback bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L117-L128
+	if p == nil {
+		return
+	}
+	if p.epoch != nil {
+		p.epoch.clear()
+	}
+	clear(p.epochRawKey)
+	if rollback {
+		for _, receiver := range p.newReceivers {
+			clearParticipantReceiverKeys(receiver)
+		}
+	}
+}
+
+func clearParticipantReceiverKeys(receiver *participantAudioReceiver) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L117-L120
+	if receiver == nil {
+		return
+	}
+	receiver.pipe.sendKeys = srtp.E2eSrtpKeys{}
+	receiver.pipe.recvKeys = srtp.E2eSrtpKeys{}
+	receiver.videoPipe.sendKeys = srtp.E2eSrtpKeys{}
+	receiver.videoPipe.recvKeys = srtp.E2eSrtpKeys{}
+	receiver.appDataPipe.sendKeys = srtp.E2eSrtpKeys{}
+	receiver.appDataPipe.recvKeys = srtp.E2eSrtpKeys{}
+	receiver.srtcp.keys = srtp.E2eSrtpKeys{}
+}
+
+// HasCommittedGroupUpdate reports whether one authoritative group roster has
+// crossed the media transaction commit boundary.
+func (r *participantReceiveRegistry) HasCommittedGroupUpdate() bool {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L117-L140
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.hasGroupUpdate
 }
 
 func (r *participantReceiveRegistry) attachSendPipeline(sendPipe *MediaPipeline) error {
@@ -397,6 +559,7 @@ func (r *participantReceiveRegistry) applyGroupRawEpochLocked(transactionID uint
 	if err := r.installGroupRawEpochLocked(rawKey); err != nil {
 		return err
 	}
+	clear(r.installedEpoch.rawKey)
 	r.installedEpoch = installedGroupRawEpoch{
 		transactionID: transactionID,
 		rawKey:        bytes.Clone(rawKey),
@@ -407,48 +570,87 @@ func (r *participantReceiveRegistry) applyGroupRawEpochLocked(transactionID uint
 
 func (r *participantReceiveRegistry) installGroupRawEpochLocked(rawKey []byte) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	prepared, err := r.prepareGroupRawEpochLocked(rawKey, r.byDeviceID)
+	if err != nil {
+		return err
+	}
+	defer prepared.clear()
+	r.installPreparedGroupRawEpochLocked(prepared)
+	return nil
+}
+
+func (r *participantReceiveRegistry) prepareGroupRawEpochLocked(
+	rawKey []byte,
+	receivers map[string]*participantAudioReceiver,
+) (*preparedGroupRawEpoch, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L110-L126
 	if len(r.sendPipes) == 0 {
-		return fmt.Errorf("meowcaller: group media sender is not attached")
+		return nil, fmt.Errorf("meowcaller: group media sender is not attached")
 	}
 	sendKeys, err := srtp.DeriveE2eKeysFromRaw(rawKey, r.selfID)
 	if err != nil {
-		return fmt.Errorf("meowcaller: derive group send epoch: %w", err)
+		return nil, fmt.Errorf("meowcaller: derive group send epoch: %w", err)
 	}
 	sendRTCPKeys, err := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, r.selfID, r.log)
 	if err != nil {
-		return fmt.Errorf("meowcaller: derive group SRTCP send epoch: %w", err)
+		return nil, fmt.Errorf("meowcaller: derive group SRTCP send epoch: %w", err)
 	}
-	receiveKeys := make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(r.byDeviceID))
-	receiveRTCPKeys := make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(r.byDeviceID))
-	for _, receiver := range r.byDeviceID {
+	prepared := &preparedGroupRawEpoch{
+		sendKeys:        sendKeys,
+		sendRTCPKeys:    sendRTCPKeys,
+		receiveKeys:     make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(receivers)),
+		receiveRTCPKeys: make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(receivers)),
+	}
+	for _, receiver := range receivers {
 		keys, deriveErr := srtp.DeriveE2eKeysFromRaw(rawKey, receiver.participantID)
 		if deriveErr != nil {
-			return fmt.Errorf("meowcaller: derive group receive epoch: %w", deriveErr)
+			prepared.clear()
+			return nil, fmt.Errorf("meowcaller: derive group receive epoch: %w", deriveErr)
 		}
-		receiveKeys[receiver] = keys
+		prepared.receiveKeys[receiver] = keys
 		srtcpKeys, deriveErr := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, receiver.participantID, r.log)
 		if deriveErr != nil {
-			return fmt.Errorf("meowcaller: derive group SRTCP receive epoch: %w", deriveErr)
+			prepared.clear()
+			return nil, fmt.Errorf("meowcaller: derive group SRTCP receive epoch: %w", deriveErr)
 		}
-		receiveRTCPKeys[receiver] = srtcpKeys
+		prepared.receiveRTCPKeys[receiver] = srtcpKeys
 	}
+	return prepared, nil
+}
+
+func (r *participantReceiveRegistry) installPreparedGroupRawEpochLocked(prepared *preparedGroupRawEpoch) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L122-L137
 	for _, sendPipe := range r.sendPipes {
-		sendPipe.installSendKeys(sendKeys)
+		sendPipe.installSendKeys(prepared.sendKeys)
 	}
 	for _, sender := range r.srtcpSenders {
-		sender.installKeys(sendRTCPKeys)
+		sender.installKeys(prepared.sendRTCPKeys)
 	}
-	for receiver, keys := range receiveKeys {
+	for receiver, keys := range prepared.receiveKeys {
 		receiver.pipe.installRecvKeysPreservingROC(keys)
 		receiver.videoPipe.installRecvKeysPreservingROC(keys)
 		receiver.appDataPipe.installRecvKeysPreservingROC(keys)
-		receiver.srtcp.installKeys(receiveRTCPKeys[receiver])
+		receiver.srtcp.installKeys(prepared.receiveRTCPKeys[receiver])
 	}
 	r.log.Info().
 		Str("call_id", r.callID).
-		Int("remote_participants", len(receiveKeys)).
+		Int("remote_participants", len(prepared.receiveKeys)).
 		Msg("installed shared group media key epoch")
-	return nil
+}
+
+func (p *preparedGroupRawEpoch) clear() {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L117-L128
+	if p == nil {
+		return
+	}
+	p.sendKeys = srtp.E2eSrtpKeys{}
+	p.sendRTCPKeys = srtp.E2eSrtpKeys{}
+	for receiver := range p.receiveKeys {
+		p.receiveKeys[receiver] = srtp.E2eSrtpKeys{}
+	}
+	for receiver := range p.receiveRTCPKeys {
+		p.receiveRTCPKeys[receiver] = srtp.E2eSrtpKeys{}
+	}
 }
 
 func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error {

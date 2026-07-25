@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_receive — `verified`
+### media/group_receive — `partial`
 - Specified one cross-resource commit boundary for each accepted group update:
   receiver/PID/SSRC indexes and prepared group epoch keys stay prospective until
   the relay Allocate send succeeds, and a failed external apply leaves all prior
@@ -16,6 +16,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Scaffolded the transactional registry surface and its external-failure,
   retry, stale, receiver-map, pending-epoch, and active-key KAT. The KAT remains
   skipped until prospective derivation and the infallible commit body land.
+- Implemented prospective roster construction and full SRTP/SRTCP epoch
+  derivation before external apply. External failure now rolls back unpublished
+  receivers and derived keys without consuming pending epochs; successful retry
+  installs already-derived keys, swaps every routing index, and exposes the
+  committed-group gate without another error return. The enabled registry KAT
+  covers rollback, retry, stale callback suppression, map/key continuity,
+  pending-epoch consumption, and receiver-only compatibility.
 
 ### media/group_rtcp_feedback — `partial`
 - Corrected the wire contract from authenticated group traffic. Native

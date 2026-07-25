@@ -88,6 +88,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdateTransaction(
 	update types.GroupCallUpdate,
 	apply func(commit func()) error,
 ) error
+func (r *participantReceiveRegistry) HasCommittedGroupUpdate() bool
 func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error
 func (r *participantReceiveRegistry) ActiveParticipantIDs() []string
 func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticipantAudio, bool)
