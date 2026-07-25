@@ -23,7 +23,10 @@ device identities, and VoIP settings.
 | line 9,467 | the inviter's directed offer contains the existing connected roster but no group transaction attributes |
 | line 9,572 | the added endpoint receives an enriched offer with `joinable="1"` and embedded `group_info` transaction 7; no group JID or encrypted call key is present |
 | lines 9,608–9,609 | the added endpoint sends `preaccept` to `CALLID@call`, not directly to the inviter device |
-| lines 10,235–10,237 | the same endpoint later sends `accept` to `CALLID@call` |
+| line 10,227 | the added endpoint invokes `acceptCall` |
+| lines 10,231–10,237 | it immediately sends `accept` to `CALLID@call` with exactly `audio`, `net`, and `encopt`; no `metadata` child is present |
+| line 10,285 | the server acknowledges that `accept` |
+| line 10,684 | the first inbound `mute_v2` arrives after the accept and its acknowledgement |
 
 The vector must preserve these relationships:
 
@@ -35,7 +38,10 @@ enriched active-call offer              -> accepted without an offer call key
 offer joinable == "1"                  -> snapshot Joinable true
 ad-hoc group without group-jid         -> valid empty GroupJID
 snapshot installed before preaccept    -> preaccept target CALLID@call
-deferred accept for the same call      -> accept target CALLID@call
+active-group AcceptCall                -> immediate accept to CALLID@call
+active-group accept children           -> audio, net, encopt; no metadata
+active-group accept send failure       -> not connected; retry remains possible
+ordinary 1:1 AcceptCall                -> existing deferred accept behavior
 pending group call without a call key   -> no media-ready event yet
 ```
 
@@ -59,12 +65,17 @@ joined before a later connected PID-bearing snapshot.
 package voip
 
 func ParseGroupInviteSnapshot(offer *binary.Node) (*types.GroupCallUpdate, bool, error)
+
+package whatsmeow
+
+func (cli *Client) AcceptCall(ctx context.Context, callID string) error
 ```
 
 The existing `acceptInboundOffer` installs the returned snapshot on the newly
 registered call before building eager `preaccept`. The existing
-`callState.signalingTarget` selects `CALLID@call` once that snapshot exists and
-is also used by the deferred `accept` path.
+`callState.signalingTarget` selects `CALLID@call` once that snapshot exists.
+`AcceptCall` branches on that installed group state: group acceptance is sent
+immediately, while an ordinary 1:1 call retains the existing deferred path.
 
 ## Implementation suggestions (guidance, not authoritative)
 
@@ -82,7 +93,15 @@ is also used by the deferred `accept` path.
   outbound group-rekey module provide the first media epoch.
 - Install the complete snapshot while registering the inbound call, before
   `BuildEagerPreaccept`.
-- Use `signalingTarget()` for both eager `preaccept` and deferred `accept`.
+- Use `signalingTarget()` for eager `preaccept`.
+- For an installed active-group snapshot, send `accept` immediately to
+  `CALLID@call` with `audio` Opus/16 kHz, `net` medium 2, and `encopt` keygen 2.
+  Do not attach direct-call metadata.
+- Send outside the call-state lock. Mark only the exact state connected after a
+  successful send; a failed send must clear its in-flight reservation and remain
+  retryable.
+- Coalesce concurrent or repeated active-group acceptance so one state produces
+  at most one successful wire accept. Preserve the ordinary 1:1 deferred path.
 - Do not dispatch a synthetic `CallGroupUpdate`; later real server snapshots
   remain the membership and media-roster lifecycle source.
 - Preserve the existing media-ready nil-key gate so an accepted active-call
