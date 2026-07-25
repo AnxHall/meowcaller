@@ -362,9 +362,24 @@ func TestEngineQueuesAndRoutesSharedGroupEpochWithDistributorMetadata(t *testing
 	if len(m.pendingGroupRekeys) != 2 {
 		t.Fatalf("queued group epochs before end = %d, want 2", len(m.pendingGroupRekeys))
 	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
+	pendingRelayKey := bytes.Repeat([]byte{0xc3}, 32)
+	m.pendingGroupUpdate = &types.GroupCallUpdate{
+		CallID: call.ID(),
+		Relay:  &types.GroupCallRelay{Key: pendingRelayKey},
+	}
+	m.applyGroupUpdate = func(types.GroupCallUpdate) error { return nil }
+	m.groupActivating = true
+	m.groupActive = true
 	eng.finishCall(call.ID(), "ended")
 	if len(m.pendingGroupRekeys) != 0 || m.applyGroupRekey != nil {
 		t.Fatal("call end retained pending group key material or callback")
+	}
+	if m.pendingGroupUpdate != nil || !allZero(pendingRelayKey) {
+		t.Fatal("call end retained pending group roster key material")
+	}
+	if m.applyGroupUpdate != nil || m.groupActivating || m.groupActive {
+		t.Fatal("call end retained group roster callback or activation state")
 	}
 	applied = events.CallEncRekey{}
 	eng.onEncRekey(next)

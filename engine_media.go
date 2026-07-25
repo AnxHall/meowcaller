@@ -33,7 +33,9 @@ func (e *engine) maybeStartMedia(callID string) {
 	e.mu.Lock()
 	m := e.calls[callID]
 	startMedia := e.startMedia
-	if m == nil || m.started || m.callKey == nil || m.relay == nil || startMedia == nil {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L115-L122
+	if m == nil || m.call == nil || m.started || m.callKey == nil ||
+		m.relay == nil || startMedia == nil {
 		e.mu.Unlock()
 		return
 	}
@@ -475,6 +477,9 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			m.rekeyPeer = nil
 			m.applyGroupUpdate = nil
 			m.applyGroupRekey = nil
+			// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+			m.groupActivating = false
+			m.groupActive = false
 		}
 		e.mu.Unlock()
 	}()

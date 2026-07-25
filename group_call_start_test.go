@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,6 +87,7 @@ func TestClientGroupCallNormalizesDeduplicatesAndDelegatesOnce(t *testing.T) {
 
 func TestClientGroupCallValidationStopsBeforeDelegation(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L115
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L108-L110
 	tests := []struct {
 		name    string
 		targets []string
@@ -102,6 +105,26 @@ func TestClientGroupCallValidationStopsBeforeDelegation(t *testing.T) {
 		{
 			name:    "empty target",
 			targets: []string{"111111111111111@lid", " "},
+		},
+		{
+			name:    "multiple at signs",
+			targets: []string{"111111111111111@lid@junk", "222222222222222@lid"},
+		},
+		{
+			name:    "empty explicit user",
+			targets: []string{"@lid", "222222222222222@lid"},
+		},
+		{
+			name:    "group target",
+			targets: []string{"120363411251996986@g.us", "222222222222222@lid"},
+		},
+		{
+			name:    "call target",
+			targets: []string{"GROUP-CID@call", "222222222222222@lid"},
+		},
+		{
+			name:    "unknown target server",
+			targets: []string{"111111111111111@example.invalid", "222222222222222@lid"},
 		},
 		{
 			name:    "non-group optional JID",
@@ -188,6 +211,133 @@ func TestClientGroupCallPreservesOfferFailureWithoutInstallingCall(t *testing.T)
 	if len(c.eng.calls) != 0 {
 		t.Fatalf("failed offer installed %d engine calls", len(c.eng.calls))
 	}
+}
+
+func TestGroupCallOfferFailureRemovesPlaceholderAndClearsOwnedKeys(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L118
+	first := types.NewJID("222222222222222", types.HiddenUserServer)
+	second := types.NewJID("333333333333333", types.HiddenUserServer)
+	connectedDevice := first
+	connectedDevice.Device = 7
+	self := types.NewJID("111111111111111", types.HiddenUserServer)
+	self.Device = 14
+	sentinel := errors.New("offer rejected")
+
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	c.eng.startMedia = func(
+		context.Context,
+		string,
+		*Call,
+		[]byte,
+		string,
+		string,
+		*types.RelayEndpoint,
+	) error {
+		return nil
+	}
+	var placeholder *engineCall
+	var ownedRawKey []byte
+	var ownedCallKey []byte
+	var ownedRelayKey []byte
+	var ownedRelayToken []byte
+	var ownedRelayAuthToken []byte
+	relayKey := bytes.Repeat([]byte{0x71}, 32)
+	relayToken := bytes.Repeat([]byte{0x72}, 16)
+	relayAuthToken := bytes.Repeat([]byte{0x73}, 16)
+	c.eng.offerGroupCall = func(
+		context.Context,
+		[]types.JID,
+		...whatsmeow.GroupCallOfferOptions,
+	) (string, error) {
+		c.eng.onGroupUpdate(&events.CallGroupUpdate{
+			BasicCallMeta: types.BasicCallMeta{CallID: "GROUP-CID"},
+			Update: types.GroupCallUpdate{
+				CallID: "GROUP-CID", TransactionID: 11,
+				Participants: []types.GroupCallParticipant{{
+					JID: first, State: "connected",
+					Devices: []types.GroupCallDevice{{
+						JID: connectedDevice, PID: 1, HasPID: true,
+					}},
+				}},
+			},
+		})
+		c.eng.onEncRekey(&events.CallEncRekey{
+			BasicCallMeta: types.BasicCallMeta{CallID: "GROUP-CID", From: connectedDevice},
+			Rekey:         types.GroupCallEncRekey{TransactionID: 11},
+			RawKey:        bytes.Repeat([]byte{0x11}, 32),
+		})
+		c.eng.onMediaReady(&events.CallMediaReady{
+			BasicCallMeta: types.BasicCallMeta{CallID: "GROUP-CID"},
+			SelfLID:       self,
+			PeerLID:       connectedDevice,
+			CallKey:       bytes.Repeat([]byte{0xa5}, 32),
+			Relay: types.RelayEndpoint{
+				IPv4: "157.240.17.133", Port: 3478,
+				Key: relayKey, Token: relayToken, AuthToken: relayAuthToken,
+			},
+			Codec:     types.CallCodecOpus,
+			Direction: types.CallDirectionOutgoing,
+		})
+		c.eng.mu.Lock()
+		placeholder = c.eng.calls["GROUP-CID"]
+		ownedRawKey = placeholder.pendingGroupRekeys[0].RawKey
+		ownedCallKey = placeholder.callKey
+		ownedRelayKey = placeholder.relay.Key
+		ownedRelayToken = placeholder.relay.Token
+		ownedRelayAuthToken = placeholder.relay.AuthToken
+		c.eng.mu.Unlock()
+		return "GROUP-CID", sentinel
+	}
+
+	call, err := c.GroupCall(context.Background(), first.String(), second.String())
+	if call != nil || !errors.Is(err, sentinel) {
+		t.Fatalf("GroupCall = (%v, %v), want nil wrapped sentinel", call, err)
+	}
+	c.eng.mu.Lock()
+	retained := c.eng.calls["GROUP-CID"]
+	c.eng.mu.Unlock()
+	if retained != nil {
+		t.Fatalf("failed offer retained placeholder %+v", retained)
+	}
+	if placeholder == nil {
+		t.Fatal("offer did not create the expected pre-return placeholder")
+	}
+	if !allZero(ownedRawKey) || !allZero(ownedCallKey) {
+		t.Fatalf(
+			"failed offer retained key bytes = raw_zero:%t call_zero:%t",
+			allZero(ownedRawKey),
+			allZero(ownedCallKey),
+		)
+	}
+	if !allZero(ownedRelayKey) || !allZero(ownedRelayToken) ||
+		!allZero(ownedRelayAuthToken) {
+		t.Fatal("failed offer retained engine-owned relay credential bytes")
+	}
+	if !allEqual(relayKey, 0x71) || !allEqual(relayToken, 0x72) ||
+		!allEqual(relayAuthToken, 0x73) {
+		t.Fatal("failed offer cleanup mutated event-owned relay credential bytes")
+	}
+}
+
+func allZero(data []byte) bool {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L118
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func allEqual(data []byte, want byte) bool {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L118
+	for _, value := range data {
+		if value != want {
+			return false
+		}
+	}
+	return true
 }
 
 func TestIncomingGroupOfferPublishesClonedSnapshotBeforeCallback(t *testing.T) {
@@ -531,5 +681,331 @@ func TestActivateGroupMediaNilCallbacksDoNotConsumeQueue(t *testing.T) {
 		len(m.pendingGroupRekeys) != 1 ||
 		m.applyGroupUpdate != nil || m.applyGroupRekey != nil {
 		t.Fatalf("nil activation callbacks consumed or attached queue: %+v", m)
+	}
+}
+
+func TestGroupCallDefersPreReturnReadinessUntilSelectedIdentityAttaches(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L115-L122
+	first := types.NewJID("222222222222222", types.HiddenUserServer)
+	second := types.NewJID("333333333333333", types.HiddenUserServer)
+	connectedDevice := first
+	connectedDevice.Device = 7
+	self := types.NewJID("111111111111111", types.HiddenUserServer)
+	self.Device = 14
+
+	type launch struct {
+		call    *Call
+		peerLID string
+		order   []string
+	}
+	launched := make(chan launch, 2)
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	c.eng.startMedia = func(
+		_ context.Context,
+		callID string,
+		call *Call,
+		_ []byte,
+		_ string,
+		peerLID string,
+		_ *types.RelayEndpoint,
+	) error {
+		result := launch{call: call, peerLID: peerLID}
+		c.eng.activateGroupMedia(
+			callID,
+			func(update types.GroupCallUpdate) error {
+				result.order = append(result.order, fmt.Sprintf("roster:%d", update.TransactionID))
+				return nil
+			},
+			func(rekey events.CallEncRekey) error {
+				result.order = append(result.order, fmt.Sprintf("epoch:%d", rekey.Rekey.TransactionID))
+				return nil
+			},
+		)
+		launched <- result
+		return nil
+	}
+	var placeholderHadCall bool
+	var placeholderStarted bool
+	c.eng.offerGroupCall = func(
+		context.Context,
+		[]types.JID,
+		...whatsmeow.GroupCallOfferOptions,
+	) (string, error) {
+		c.eng.onGroupUpdate(&events.CallGroupUpdate{
+			BasicCallMeta: types.BasicCallMeta{CallID: "GROUP-CID"},
+			Update: types.GroupCallUpdate{
+				CallID: "GROUP-CID", TransactionID: 11,
+				Participants: []types.GroupCallParticipant{{
+					JID: first, State: "connected",
+					Devices: []types.GroupCallDevice{{
+						JID: connectedDevice, PID: 1, HasPID: true,
+					}},
+				}},
+			},
+		})
+		c.eng.onEncRekey(&events.CallEncRekey{
+			BasicCallMeta: types.BasicCallMeta{CallID: "GROUP-CID", From: connectedDevice},
+			Rekey:         types.GroupCallEncRekey{TransactionID: 11},
+			RawKey:        bytes.Repeat([]byte{0x11}, 32),
+		})
+		c.eng.onMediaReady(&events.CallMediaReady{
+			BasicCallMeta: types.BasicCallMeta{CallID: "GROUP-CID"},
+			SelfLID:       self,
+			PeerLID:       connectedDevice,
+			CallKey:       bytes.Repeat([]byte{0xa5}, 32),
+			Relay:         types.RelayEndpoint{IPv4: "157.240.17.133", Port: 3478},
+			Codec:         types.CallCodecOpus,
+			Direction:     types.CallDirectionOutgoing,
+		})
+		c.eng.mu.Lock()
+		placeholder := c.eng.calls["GROUP-CID"]
+		placeholderHadCall = placeholder != nil && placeholder.call != nil
+		placeholderStarted = placeholder != nil && placeholder.started
+		c.eng.mu.Unlock()
+		return "GROUP-CID", nil
+	}
+
+	call, err := c.GroupCall(context.Background(), first.String(), second.String())
+	if err != nil {
+		t.Fatalf("GroupCall: %v", err)
+	}
+	if placeholderHadCall || placeholderStarted {
+		t.Fatalf(
+			"pre-return readiness synthesized or started a call = call:%t started:%t",
+			placeholderHadCall,
+			placeholderStarted,
+		)
+	}
+	if call.Peer() != first {
+		t.Fatalf("public peer = %s, want first selected %s", call.Peer(), first)
+	}
+	state, ok := call.GroupState()
+	if !ok || state.TransactionID != 11 {
+		t.Fatalf("public group state = (%+v, %t), want authoritative transaction 11", state, ok)
+	}
+
+	select {
+	case got := <-launched:
+		if got.call != call {
+			t.Fatal("media launch did not receive the selected-identity Call")
+		}
+		if got.peerLID != connectedDevice.String() {
+			t.Fatalf("media peer = %q, want readiness device %q", got.peerLID, connectedDevice)
+		}
+		if !slices.Equal(got.order, []string{"roster:11", "epoch:11"}) {
+			t.Fatalf("pre-return media replay = %v", got.order)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("media did not start after selected identity attached")
+	}
+	select {
+	case duplicate := <-launched:
+		t.Fatalf("pre-return readiness started media twice: %+v", duplicate)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestActivateGroupMediaDrainsArrivalsBeforePublishingLiveCallbacks(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	eng, call := testEngineWithOutgoingCall()
+	m := eng.calls[call.ID()]
+	m.group = true
+	m.groupUpdate = &types.GroupCallUpdate{
+		CallID: call.ID(), TransactionID: 21,
+	}
+	for _, transactionID := range []uint32{19, 20} {
+		m.pendingGroupRekeys = append(m.pendingGroupRekeys, events.CallEncRekey{
+			BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+			Rekey:         types.GroupCallEncRekey{TransactionID: transactionID},
+			RawKey:        bytes.Repeat([]byte{byte(transactionID)}, 32),
+		})
+	}
+
+	rosterStarted := make(chan struct{})
+	releaseRoster := make(chan struct{})
+	activationDone := make(chan struct{})
+	var orderMu sync.Mutex
+	var order []string
+	applyUpdate := func(update types.GroupCallUpdate) error {
+		orderMu.Lock()
+		order = append(order, fmt.Sprintf("roster:%d", update.TransactionID))
+		orderMu.Unlock()
+		close(rosterStarted)
+		<-releaseRoster
+		return nil
+	}
+	applyRekey := func(rekey events.CallEncRekey) error {
+		orderMu.Lock()
+		order = append(order, fmt.Sprintf("epoch:%d", rekey.Rekey.TransactionID))
+		orderMu.Unlock()
+		return nil
+	}
+	go func() {
+		eng.activateGroupMedia(call.ID(), applyUpdate, applyRekey)
+		close(activationDone)
+	}()
+	<-rosterStarted
+
+	var secondCallbacks atomic.Int32
+	eng.activateGroupMedia(
+		call.ID(),
+		func(types.GroupCallUpdate) error {
+			secondCallbacks.Add(1)
+			return nil
+		},
+		func(events.CallEncRekey) error {
+			secondCallbacks.Add(1)
+			return nil
+		},
+	)
+	eng.onEncRekey(&events.CallEncRekey{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+		Rekey:         types.GroupCallEncRekey{TransactionID: 21},
+		RawKey:        bytes.Repeat([]byte{0x21}, 32),
+	})
+	close(releaseRoster)
+	<-activationDone
+
+	orderMu.Lock()
+	gotOrder := append([]string(nil), order...)
+	orderMu.Unlock()
+	if !slices.Equal(gotOrder, []string{
+		"roster:21",
+		"epoch:19",
+		"epoch:20",
+		"epoch:21",
+	}) {
+		t.Fatalf("activation order = %v", gotOrder)
+	}
+	if secondCallbacks.Load() != 0 {
+		t.Fatalf("second activation published callbacks %d times", secondCallbacks.Load())
+	}
+}
+
+func TestActivateGroupMediaRejectedRosterAllowsLowerRecovery(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	eng, call := testEngineWithOutgoingCall()
+	m := eng.calls[call.ID()]
+	m.group = true
+	m.groupUpdate = &types.GroupCallUpdate{
+		CallID: call.ID(), TransactionID: 20,
+	}
+	eng.activateGroupMedia(
+		call.ID(),
+		func(update types.GroupCallUpdate) error {
+			if update.TransactionID == 20 {
+				return errors.New("rejected roster")
+			}
+			return nil
+		},
+		func(events.CallEncRekey) error { return nil },
+	)
+
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+		Update: types.GroupCallUpdate{
+			CallID: call.ID(), TransactionID: 19,
+		},
+	})
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 19 {
+		t.Fatalf("recovery roster cache = %+v, want transaction 19", m.groupUpdate)
+	}
+}
+
+func TestUnknownGroupPlaceholderExpiryIsBoundedAndAttachmentSafe(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L118
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	var expiryMu sync.Mutex
+	expiries := make(map[string]func())
+	var scheduledCallID string
+	var scheduledTTL time.Duration
+	var cancels atomic.Int32
+	c.eng.scheduleGroupPlaceholderExpiry = func(
+		callID string,
+		ttl time.Duration,
+		expire func(),
+	) func() {
+		expiryMu.Lock()
+		scheduledCallID = callID
+		scheduledTTL = ttl
+		expiries[callID] = expire
+		expiryMu.Unlock()
+		return func() {
+			cancels.Add(1)
+		}
+	}
+
+	unknownKey := bytes.Repeat([]byte{0x33}, 32)
+	c.eng.onEncRekey(&events.CallEncRekey{
+		BasicCallMeta: types.BasicCallMeta{CallID: "UNKNOWN-CID"},
+		Rekey:         types.GroupCallEncRekey{TransactionID: 1},
+		RawKey:        unknownKey,
+	})
+	c.eng.mu.Lock()
+	unknown := c.eng.calls["UNKNOWN-CID"]
+	ownedUnknownKey := unknown.pendingGroupRekeys[0].RawKey
+	c.eng.mu.Unlock()
+	expiryMu.Lock()
+	expireUnknown := expiries["UNKNOWN-CID"]
+	expiryMu.Unlock()
+	if scheduledCallID != "UNKNOWN-CID" || scheduledTTL <= 0 || expireUnknown == nil {
+		t.Fatalf(
+			"placeholder expiry = call:%q ttl:%s callback:%t",
+			scheduledCallID,
+			scheduledTTL,
+			expireUnknown != nil,
+		)
+	}
+	expireUnknown()
+	c.eng.mu.Lock()
+	retainedUnknown := c.eng.calls["UNKNOWN-CID"]
+	c.eng.mu.Unlock()
+	if retainedUnknown != nil || !allZero(ownedUnknownKey) {
+		t.Fatalf(
+			"expired placeholder = retained:%t key_zero:%t",
+			retainedUnknown != nil,
+			allZero(ownedUnknownKey),
+		)
+	}
+
+	first := types.NewJID("222222222222222", types.HiddenUserServer)
+	second := types.NewJID("333333333333333", types.HiddenUserServer)
+	attachedKey := bytes.Repeat([]byte{0x44}, 32)
+	c.eng.offerGroupCall = func(
+		context.Context,
+		[]types.JID,
+		...whatsmeow.GroupCallOfferOptions,
+	) (string, error) {
+		c.eng.onEncRekey(&events.CallEncRekey{
+			BasicCallMeta: types.BasicCallMeta{CallID: "ATTACHED-CID"},
+			Rekey:         types.GroupCallEncRekey{TransactionID: 2},
+			RawKey:        attachedKey,
+		})
+		return "ATTACHED-CID", nil
+	}
+	call, err := c.GroupCall(context.Background(), first.String(), second.String())
+	if err != nil {
+		t.Fatalf("GroupCall: %v", err)
+	}
+	expiryMu.Lock()
+	expireAttached := expiries["ATTACHED-CID"]
+	expiryMu.Unlock()
+	if expireAttached == nil {
+		t.Fatal("attached placeholder did not schedule its original expiry")
+	}
+	expireAttached()
+	c.eng.mu.Lock()
+	attached := c.eng.calls["ATTACHED-CID"]
+	c.eng.mu.Unlock()
+	if attached == nil || attached.call != call || len(attached.pendingGroupRekeys) != 1 {
+		t.Fatalf("stale expiry removed attached call: %+v", attached)
+	}
+	if allZero(attached.pendingGroupRekeys[0].RawKey) {
+		t.Fatal("stale expiry cleared the attached call's pending epoch")
+	}
+	if cancels.Load() < 2 {
+		t.Fatalf("placeholder expiry cancellations = %d, want at least 2", cancels.Load())
 	}
 }

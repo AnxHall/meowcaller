@@ -20,12 +20,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   handling, connected-device media derivation, and deterministic one-shot
   roster-then-key queue activation. Synchronous pre-return roster/key events
   attach to the returned call without losing their authoritative state.
-- Focused/full tests, the full race suite, vet, and diff checks pass.
-  CodeRabbit review was unavailable because its CLI is not installed. Live
-  WhatsApp group audio E2E remains pending.
-- Review follow-up specifies bounded and pointer-safe placeholder cleanup,
-  deferred pre-attachment readiness, serialized backlog activation, and strict
-  PN/LID-only explicit group targets. Regression KATs are pending implementation.
+- Review follow-up adds bounded and pointer-safe placeholder cleanup with
+  owned-key zeroing, deep-cloned retained relay credentials, deferred
+  pre-attachment readiness, serialized backlog activation, and strict
+  PN/LID-only explicit group targets.
+- Focused review/compatibility KATs, full tests, the full race suite, vet, and
+  diff checks pass. CodeRabbit review was unavailable because its CLI is not
+  installed. Live WhatsApp group audio E2E remains pending.
 
 ### voip/initial_group_call — `partial`
 - Added the immutable capture contract for one initial preselected group offer:
