@@ -7,11 +7,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/group_rekey_directive — `planned`
+### voip/group_rekey_directive — `KAT-verified`
 - Added the immutable two-sided capture contract for preserving the
   endpoint-personalized `group_info rekey="1"` nomination on the typed group
   snapshot. Key generation, recipient fan-out, retries, and media send-key
   installation remain separate modules.
+- Whatsmeow commit `7c95b5a` adds `RekeyRequested` to the typed snapshot and
+  parses only the captured literal `"1"` as true. The absent and nominated
+  endpoint KATs, full tests, focused race, build, and vet pass. CodeRabbit review
+  was attempted but unavailable because its CLI is not installed.
 
 ### media/group_relay_refresh — `KAT-verified`
 - Added the capture-pinned contract and implementation for rotating group relay
