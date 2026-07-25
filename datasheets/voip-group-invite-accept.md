@@ -101,7 +101,9 @@ immediately, while an ordinary 1:1 call retains the existing deferred path.
   successful send; a failed send must clear its in-flight reservation and remain
   retryable.
 - Coalesce concurrent or repeated active-group acceptance so one state produces
-  at most one successful wire accept. Preserve the ordinary 1:1 deferred path.
+  at most one wire attempt. Concurrent callers wait for that attempt and receive
+  the same success or failure result; after failure, a later caller can retry.
+  Preserve the ordinary 1:1 deferred path.
 - Do not dispatch a synthetic `CallGroupUpdate`; later real server snapshots
   remain the membership and media-roster lifecycle source.
 - Preserve the existing media-ready nil-key gate so an accepted active-call

@@ -177,6 +177,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Pinned the active-group Answer path to the captured immediate accept ordering
   and exact child set, with retryable/coalesced state transitions; ordinary 1:1
   acceptance remains deferred.
+- Coalesced callers now wait for the shared wire attempt and receive its exact
+  result, preventing an overlapping Answer from reporting success when the sole
+  accept send failed.
 - Whatsmeow commit `81ff60c` parses and validates the enriched offer snapshot,
   registers the keyless active ad-hoc invite, preserves an installed key across
   retransmissions, and targets both eager preaccept and deferred accept at
