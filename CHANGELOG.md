@@ -26,6 +26,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   omits those attributes. A later live call authenticated and emitted 42
   participant H.264 access units, confirming H.264 receive independently of the
   intermittent forwarding failure.
+- Implemented the captured group-video relay subscription refresh. Connected
+  remote PIDs now populate byte-exact sender/receiver subscription attributes in
+  deterministic order, while self, pending, and duplicate entries are excluded.
+  The refreshed Allocate remains inside the existing atomic roster/relay commit:
+  failed sends publish neither resource. Capture-exact STUN and cross-resource
+  integration KATs pass; live relay acceptance remains pending.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

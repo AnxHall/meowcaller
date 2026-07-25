@@ -49,6 +49,40 @@ func (s *groupRelayAllocateState) Apply(
 	send func([]byte) error,
 ) (bool, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L64-L92
+	return s.apply(endpoint, relay, streamSSRCs, 0, nil, transactionID, send)
+}
+
+func (s *groupRelayAllocateState) ApplyWithSubscriptions(
+	endpoint *types.RelayEndpoint,
+	relay *types.GroupCallRelay,
+	streamSSRCs [9]uint32,
+	appDataSSRC uint32,
+	participantPIDs []uint32,
+	transactionID [12]byte,
+	send func([]byte) error,
+) (bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	return s.apply(
+		endpoint,
+		relay,
+		streamSSRCs,
+		appDataSSRC,
+		participantPIDs,
+		transactionID,
+		send,
+	)
+}
+
+func (s *groupRelayAllocateState) apply(
+	endpoint *types.RelayEndpoint,
+	relay *types.GroupCallRelay,
+	streamSSRCs [9]uint32,
+	appDataSSRC uint32,
+	participantPIDs []uint32,
+	transactionID [12]byte,
+	send func([]byte) error,
+) (bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
 	if relay == nil {
 		return false, nil
 	}
@@ -86,11 +120,13 @@ func (s *groupRelayAllocateState) Apply(
 	if !ok {
 		return false, fmt.Errorf("meowcaller: active relay IPv4 is malformed")
 	}
-	packet := stun.BuildWasmStunAllocateRequestWithStreamSsrcs(
+	packet := stun.BuildWasmStunAllocateRequestWithGroupSubscriptions(
 		transactionID,
 		relay.Tokens[matched.TokenID],
 		endpointXOR,
 		streamSSRCs,
+		appDataSSRC,
+		participantPIDs,
 		relay.Key,
 	)
 	if err := send(packet); err != nil {

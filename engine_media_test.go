@@ -13,6 +13,7 @@ import (
 
 	"github.com/purpshell/meowcaller/diag"
 	"github.com/purpshell/meowcaller/rtp"
+	"github.com/purpshell/meowcaller/stun"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -655,6 +656,27 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 	}
 	if got := allocateState.Current(); bytes.Equal(got, initialAllocate) {
 		t.Fatal("retry did not commit relay allocate")
+	}
+	attrs := stun.ParseStunAttributes(allocateState.Current())
+	var senderSubscriptions, receiverSubscriptions, participantCount []byte
+	for _, attr := range attrs {
+		switch attr.AttrType {
+		case 0x4025:
+			senderSubscriptions = attr.Value
+		case 0x4021:
+			receiverSubscriptions = attr.Value
+		case 0x805a:
+			participantCount = attr.Value
+		}
+	}
+	if len(senderSubscriptions) == 0 {
+		t.Fatal("committed group allocate omitted sender subscriptions")
+	}
+	if got, want := receiverSubscriptions, []byte{0x12, 0x02, 0x08, 0x00, 0x12, 0x02, 0x08, 0x02}; !bytes.Equal(got, want) {
+		t.Fatalf("committed receiver subscriptions = %x, want %x", got, want)
+	}
+	if got, want := participantCount, []byte{0x02}; !bytes.Equal(got, want) {
+		t.Fatalf("committed participant count = %x, want %x", got, want)
 	}
 	if reports := reception.Reports(40); len(reports) != 0 {
 		t.Fatalf("retry did not retain only committed reception SSRCs: %+v", reports)

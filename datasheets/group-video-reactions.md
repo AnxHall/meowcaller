@@ -1,7 +1,7 @@
 # Group video and reactions
 
 **Status:** initial group-video signaling and participant H.264 receive accepted live;
-group relay subscription refresh specified
+group relay subscription refresh KAT-verified, live retest pending
 
 **Reference pinned at:**
 
@@ -109,5 +109,6 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
 - Web tests must prove tagged participant video messages and sender-attributed
   reaction rendering are present.
 - Initial group-video signaling and participant H.264 receive are live-accepted.
-  Deterministic subscription refresh, bidirectional multi-participant H.264,
+  The capture-derived subscription protobuf and atomic roster integration KATs
+  pass. Live subscription acceptance, bidirectional multi-participant H.264,
   video add-person acceptance, and live group reactions remain pending.

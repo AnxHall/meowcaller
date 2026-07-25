@@ -1014,10 +1014,12 @@ func applyGroupMediaUpdateTransaction(
 			return fmt.Errorf("meowcaller: group relay allocate state is nil")
 		}
 		var err error
-		changed, err = allocateState.Apply(
+		changed, err = allocateState.ApplyWithSubscriptions(
 			endpoint,
 			update.Relay,
 			streamSSRCs,
+			streamSSRCs[8],
+			connectedRemoteParticipantPIDs(update, receivers.selfID),
 			relayTransactionID,
 			func(packet []byte) error {
 				if send == nil {
@@ -1043,6 +1045,24 @@ func applyGroupMediaUpdateTransaction(
 	}
 	reception.Retain(receivers.ActiveAudioSSRCs())
 	return changed, nil
+}
+
+func connectedRemoteParticipantPIDs(update types.GroupCallUpdate, selfID string) []uint32 {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L50
+	var pids []uint32
+	for _, participant := range update.Participants {
+		if participant.State != "connected" {
+			continue
+		}
+		for _, device := range participant.Devices {
+			if !device.HasPID ||
+				rtp.FormatE2ESrtpParticipantID(device.JID.String()) == selfID {
+				continue
+			}
+			pids = append(pids, device.PID)
+		}
+	}
+	return pids
 }
 
 func runMediaSRTCPTicks(ctx context.Context, ticks <-chan time.Time, send func(time.Time) error, onError func(error)) {
