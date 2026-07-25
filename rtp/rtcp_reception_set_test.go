@@ -3,8 +3,6 @@ package rtp
 import "testing"
 
 func TestGroupAudioReceptionReportsRetainEveryActiveSSRC(t *testing.T) {
-	t.Skip("blocked: media/group_rtcp_feedback is scaffolded; enable when implemented")
-
 	var set RtcpReceptionStatsSet
 	const (
 		ssrcA = uint32(0x59754A60)
@@ -30,7 +28,15 @@ func TestGroupAudioReceptionReportsRetainEveryActiveSSRC(t *testing.T) {
 	if reports[1].Ssrc != ssrcC || reports[1].ExtendedHighestSequence != 40 {
 		t.Fatalf("C report = %+v", reports[1])
 	}
-	if reports[1].LastSenderReport != 0xbbccddeeff>>8 {
+	if reports[1].LastSenderReport != 0xbbccddee {
 		t.Fatalf("C LSR = %#x, want 0xbbccddee", reports[1].LastSenderReport)
+	}
+}
+
+func TestGroupAudioReceptionReportsIgnoreUnknownSenderReport(t *testing.T) {
+	var set RtcpReceptionStatsSet
+	set.ObserveSenderReport(0x12345678, 1, 2, 3)
+	if reports := set.Reports(4); len(reports) != 0 {
+		t.Fatalf("reports = %+v, want none before authenticated RTP", reports)
 	}
 }

@@ -7,13 +7,16 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_rtcp_feedback — `planned`
+### media/group_rtcp_feedback — `partial`
 - Added the capture-backed contract for participant-indexed audio reception
   feedback. Each authenticated group SSRC retains independent sequence, loss,
   jitter, and sender-report timing state, while the live engine reuses the
   existing verified single-reception-block SRTCP wire format per participant.
-- Scaffolded the synchronized SSRC-indexed reception set and its two-stream KAT;
-  the KAT remains skipped until the stub bodies are implemented.
+- Scaffolded the synchronized SSRC-indexed reception set and its two-stream KAT,
+  then enabled the KAT when the stub bodies were implemented.
+- Implemented one synchronized reception tracker per authenticated audio SSRC,
+  deterministic report ordering, and exact sender-report routing. The
+  two-participant KAT passes; live engine integration remains pending.
 
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person
