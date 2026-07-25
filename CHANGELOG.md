@@ -122,6 +122,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Implemented those ownership gates with a serialized submission boundary,
   pointer-safe result handling, and lifecycle-atomic roster/join publication;
   deterministic old-call, overlap, and blocked-publication KATs pass.
+- Closed the remaining pre-registration ownership window: a replaced call cannot
+  reinstall cleared invite state, and join correlation now requires the pending
+  invite scope to match the active roster call. The deterministic replacement
+  KAT proves the new call publishes only its authoritative roster.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 

@@ -95,6 +95,7 @@ type webCallController struct {
 	answerCall                func(*meowcaller.Call) error
 	rejectCall                func(*meowcaller.Call) error
 	hangupCall                func(*meowcaller.Call) error
+	beforeParticipantRegister func()
 	beforeGroupStatePublish   func()
 	pendingParticipantCallID  string
 	pendingParticipantInvites map[string]string
@@ -345,6 +346,9 @@ func (c *webCallController) addParticipants(targets []string) error {
 	if len(normalized) == 0 {
 		return errors.New("at least one participant target is required")
 	}
+	if c.beforeParticipantRegister != nil {
+		c.beforeParticipantRegister()
+	}
 	inviteParticipants := c.inviteParticipants
 	if inviteParticipants == nil {
 		inviteParticipants = func(ctx context.Context, call *meowcaller.Call, targets ...string) []error {
@@ -352,6 +356,11 @@ func (c *webCallController) addParticipants(targets []string) error {
 		}
 	}
 	c.mu.Lock()
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L64-L66
+	if c.call != call || c.activeCallID != call.ID() {
+		c.mu.Unlock()
+		return errors.New("active call changed before participant invite")
+	}
 	if c.pendingParticipantCallID != "" && c.pendingParticipantCallID != call.ID() {
 		c.pendingParticipantInvites = make(map[string]string)
 		c.pendingParticipantOrder = nil
@@ -617,6 +626,10 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 	}
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L78-L82
 	c.bridge.PublishGroupState(webState)
+	if c.pendingParticipantCallID != callID {
+		c.mu.Unlock()
+		return
+	}
 	for _, participant := range state.Participants {
 		if participant.State != "connected" {
 			continue

@@ -119,9 +119,10 @@ func TestWebCallControllerPublishesJoinOnlyForConnectedPIDDevice(t *testing.T) {
 	events := make(chan vbMsg, 8)
 	bridge.subs[events] = struct{}{}
 	c := &webCallController{
-		bridge:       bridge,
-		log:          zerolog.Nop(),
-		activeCallID: "CID",
+		bridge:                   bridge,
+		log:                      zerolog.Nop(),
+		activeCallID:             "CID",
+		pendingParticipantCallID: "CID",
 		pendingParticipantInvites: map[string]string{
 			"15550002": "+15550002",
 		},
@@ -488,6 +489,76 @@ func TestWebCallControllerAddParticipantsIgnoresResultFromReplacedCall(t *testin
 	case msg := <-events:
 		t.Fatalf("old result published into replacement call: %s", msg.data)
 	default:
+	}
+}
+
+func TestWebCallControllerAddParticipantsDoesNotRegisterAfterCallReplacement(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2185887715c3ef6b2c0d76f14c8f13eab36aa224/datasheets/web-group-call-outcomes.md#L64-L71
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 2)
+	bridge.subs[events] = struct{}{}
+	callA := &meowcaller.Call{}
+	callB := &meowcaller.Call{}
+	beforeRegister := make(chan struct{})
+	releaseRegister := make(chan struct{})
+	c := &webCallController{
+		ctx: context.Background(), call: callA, bridge: bridge, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
+		beforeParticipantRegister: func() {
+			close(beforeRegister)
+			<-releaseRegister
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- c.addParticipants([]string{"+15550002"})
+	}()
+	<-beforeRegister
+	c.mu.Lock()
+	c.call = callB
+	c.activeCallID = callB.ID()
+	c.pendingParticipantCallID = callB.ID()
+	c.pendingParticipantInvites = make(map[string]string)
+	c.pendingParticipantOrder = nil
+	c.participantInviteInFlight = make(map[string]bool)
+	c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
+	c.mu.Unlock()
+	close(releaseRegister)
+	if err := <-done; err == nil || err.Error() != "active call changed before participant invite" {
+		t.Fatalf("stale registration error = %v", err)
+	}
+
+	c.handleGroupState(callB.ID(), meowcaller.GroupCallState{
+		TransactionID: 20,
+		Participants: []meowcaller.GroupCallParticipant{{
+			JID:   types.NewJID("222222222222222", types.HiddenUserServer),
+			PN:    types.NewJID("15550002", types.DefaultUserServer),
+			State: "connected",
+			Devices: []meowcaller.GroupCallDevice{{
+				JID: types.NewJID("222222222222222", types.HiddenUserServer),
+				PID: 2, HasPID: true,
+			}},
+		}},
+	})
+	var eventOrder []string
+	for {
+		select {
+		case msg := <-events:
+			var event struct {
+				Event string `json:"event"`
+			}
+			if err := json.Unmarshal(msg.data, &event); err != nil {
+				t.Fatalf("event: %v", err)
+			}
+			eventOrder = append(eventOrder, event.Event)
+		default:
+			if strings.Join(eventOrder, ",") != "group_state" {
+				t.Fatalf("replacement roster events = %v, want group_state only", eventOrder)
+			}
+			return
+		}
 	}
 }
 
