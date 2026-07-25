@@ -8,6 +8,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 ## [Unreleased]
 
 ### media/group_rtcp_feedback — `partial`
+- Corrected the wire contract from authenticated group traffic. Native
+  post-recreation audio reports are 60-byte SR-only plaintexts with one RFC
+  reception block plus an opaque eight-byte extension, protected to 74 bytes;
+  they are not the 108-byte 1:1 SR+SDES plaintext previously reused here.
+  The exact sanitized plaintext vector is pinned, while opaque extension
+  calculation, empty-set shape, multi-report policy, and live acceptance remain
+  explicit validation boundaries.
 - Added the capture-backed contract for participant-indexed audio reception
   feedback. Each authenticated group SSRC retains independent sequence, loss,
   jitter, and sender-report timing state, while the live engine reuses the
