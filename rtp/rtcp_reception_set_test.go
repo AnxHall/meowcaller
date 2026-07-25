@@ -40,3 +40,28 @@ func TestGroupAudioReceptionReportsIgnoreUnknownSenderReport(t *testing.T) {
 		t.Fatalf("reports = %+v, want none before authenticated RTP", reports)
 	}
 }
+
+func TestGroupAudioReceptionReportsPruneDepartureAndResetRejoin(t *testing.T) {
+	var set RtcpReceptionStatsSet
+	const (
+		ssrcA = uint32(0x59754A60)
+		ssrcC = uint32(0x66FDE7F1)
+	)
+	set.Observe(ssrcA, 299, 28_704_000, 1_000, 16_000)
+	set.Observe(ssrcC, 39, 3_744_000, 1_010, 16_000)
+
+	set.Retain([]uint32{ssrcA})
+	reports := set.Reports(1_100)
+	if len(reports) != 1 || reports[0].Ssrc != ssrcA {
+		t.Fatalf("post-departure reports = %+v, want only A", reports)
+	}
+
+	set.Observe(ssrcC, 900, 8_640_000, 2_000, 16_000)
+	reports = set.Reports(2_100)
+	if len(reports) != 2 {
+		t.Fatalf("post-rejoin report count = %d, want 2", len(reports))
+	}
+	if reports[1].Ssrc != ssrcC || reports[1].ExtendedHighestSequence != 900 || reports[1].CumulativeLost != 0 {
+		t.Fatalf("rejoined C report = %+v, want fresh sequence 900 with no inherited loss", reports[1])
+	}
+}

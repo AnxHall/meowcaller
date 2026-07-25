@@ -8,15 +8,33 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 ## [Unreleased]
 
 ### media/group_rtcp_feedback — `partial`
+- Corrected the wire contract from authenticated group traffic. Native
+  post-recreation audio reports are 60-byte SR-only plaintexts with one RFC
+  reception block plus an opaque eight-byte extension, protected to 74 bytes;
+  they are not the 108-byte 1:1 SR+SDES plaintext previously reused here.
+  The exact sanitized plaintext vector is pinned, while opaque extension
+  calculation, empty-set shape, multi-report policy, and live acceptance remain
+  explicit validation boundaries.
 - Added the capture-backed contract for participant-indexed audio reception
   feedback. Each authenticated group SSRC retains independent sequence, loss,
-  jitter, and sender-report timing state, while the live engine reuses the
-  existing verified single-reception-block SRTCP wire format per participant.
+  jitter, and sender-report timing state. The initial integration reused the
+  verified 1:1 single-reception-block wire format per participant; the
+  correction above replaces that historical behavior.
 - Scaffolded the synchronized SSRC-indexed reception set and its two-stream KAT,
   then enabled the KAT when the stub bodies were implemented.
 - Implemented one synchronized reception tracker per authenticated audio SSRC,
   deterministic report ordering, and exact sender-report routing. The
-  two-participant KAT passes; live engine integration remains pending.
+  two-participant KAT passes.
+- Integrated the corrected 60-byte group SR into the live audio receive/ticker
+  path. Every authoritative active audio SSRC produces one independently
+  indexed 74-byte protected packet without SDES; departed SSRC state is pruned
+  and a rejoin starts fresh. The unavailable opaque extension is zeroed, while
+  the pre-audio baseline retains the verified 1:1 report as an explicit
+  empty-set assumption.
+- Made periodic report failures observable and retryable. First-send and partial
+  failures report sent progress, consume no reused SRTCP indexes, and retry all
+  active reports with fresh indexes on the next tick. Exact plaintext, protected
+  length, leave/rejoin, retry, nil-input, and ticker-continuation KATs pass.
 
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person
@@ -93,6 +111,17 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Hardened the controller against stale old-call callbacks, duplicate normalized
   targets, PN/LID alias double joins, failed-answer busy state, and SSE
   reconnects that previously lost the latest authoritative roster.
+- Staged PID-bearing joins that race synchronously with an in-flight invite
+  result, publishing them only after success and discarding them after failure
+  so the console cannot report both a failed invite and a false join.
+- Implemented call-scoped in-flight/candidate tracking and covered synchronous
+  success and failure ordering with focused controller KATs.
+- Specified exact-call result ownership, serialized overlapping submissions, and
+  atomic roster publication so stale callbacks cannot mutate or repopulate a
+  replacement call.
+- Implemented those ownership gates with a serialized submission boundary,
+  pointer-safe result handling, and lifecycle-atomic roster/join publication;
+  deterministic old-call, overlap, and blocked-publication KATs pass.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 
@@ -170,6 +199,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Corrected the contract to preserve the capture's missing-key boundary: the
   enriched offer has no encrypted 1:1 call key, so it registers pending the
   selected endpoint's later group rekey and cannot emit media-ready early.
+- Pinned the active-group Answer path to the captured immediate accept ordering
+  and exact child set, with retryable/coalesced state transitions; ordinary 1:1
+  acceptance remains deferred.
+- Coalesced callers now wait for the shared wire attempt and receive its exact
+  result, preventing an overlapping Answer from reporting success when the sole
+  accept send failed.
 - Whatsmeow commit `81ff60c` parses and validates the enriched offer snapshot,
   registers the keyless active ad-hoc invite, preserves an installed key across
   retransmissions, and targets both eager preaccept and deferred accept at
@@ -189,19 +224,24 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   endpoint KATs, full tests, focused race, build, and vet pass. CodeRabbit review
   was attempted but unavailable because its CLI is not installed.
 
-### media/group_relay_refresh — `KAT-verified`
+### media/group_relay_refresh — `partial`
 - Added the capture-pinned contract and implementation for rotating group relay
   credentials over the existing active DataChannel while preserving RTP and
   stream identity.
 - Refined the contract so the refreshed Allocate packet, committed transaction,
-  and binding-response integrity key advance together only after the immediate
-  relay send succeeds; a failed send leaves the prior credentials retryable.
+  and inferred binding-response integrity key advance together only after the
+  immediate relay send succeeds; a failed send leaves the prior credentials
+  retryable.
 - The critical group update now selects the active relay's rotated token,
   rebuilds and immediately sends Allocate under the group relay key, and commits
   the one-second keepalive packet and binding-response key only after that send
   succeeds. Failed sends retain the prior credentials and remain retryable.
-  Focused/full tests, race, and vet pass. CodeRabbit review was attempted but
-  blocked by its free CLI rate limit.
+  The capture contains no post-rotation binding-success packet, so the
+  binding-response key remains an explicit protocol inference pending live E2E.
+- Serialized keepalive and binding-response build/send operations with relay
+  refresh so a control packet using old credentials cannot leave after a rotated
+  Apply commits. Deterministic blocked-send KATs cover both orderings; the
+  binding-key choice remains synthetic and the module remains partial.
 
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-
@@ -809,8 +849,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Preserve the authenticated direct receiver across transitional group snapshots
   that contain no connected remote PID-bearing devices. A local/self PID alone no
   longer suppresses that fallback. The transaction still advances, and the first
-  actionable remote PID roster promotes the existing peer without the five-second
-  audio interruption observed during live add-to-call testing.
+  actionable remote PID roster promotes the existing peer. The focused KAT targets
+  the live add-to-call interruption condition by authenticating direct-peer RTP
+  before and after a self-only-PID snapshot; live add-to-call E2E remains pending.
+- Linked the self-exclusion and remote-PID readiness branch to the pinned capture
+  contract. No runtime behavior changed.
 
 ### media/group-audio-mixer — partial
 - Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
