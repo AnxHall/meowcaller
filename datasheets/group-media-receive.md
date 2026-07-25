@@ -84,6 +84,10 @@ func newParticipantReceiveRegistry(
 ) (*participantReceiveRegistry, error)
 
 func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpdate) error
+func (r *participantReceiveRegistry) ApplyGroupUpdateTransaction(
+	update types.GroupCallUpdate,
+	apply func(commit func()) error,
+) error
 func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error
 func (r *participantReceiveRegistry) ActiveParticipantIDs() []string
 func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticipantAudio, bool)
@@ -92,6 +96,49 @@ func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticip
 `engine.install` consumes `events.CallGroupUpdate`. An update received before the
 media loop starts is retained on the `engineCall`; once the registry exists it is
 applied through an installed callback. Updates do not replace `Call.Peer()`.
+
+## Cross-resource commit boundary
+
+One accepted WhatsApp group transaction drives both the active receiver/key
+snapshot and the rotated relay allocation. Those resources form one media commit:
+
+```text
+stale roster transaction:
+  do not invoke the external apply callback
+  change neither receiver/key state nor relay state
+
+new roster transaction:
+  validate every participant, device, PID, and derived SSRC
+  construct every next receiver index
+  select the newest eligible pending raw epoch
+  derive every next send, receive, and SRTCP key
+  invoke the external apply callback while the receiver snapshot is still locked
+
+external failure before commit:
+  discard the prospective indexes and derived keys
+  preserve the prior receiver transaction, maps, metadata, installed epoch,
+  pending epochs, RTCP reception set, and relay allocation
+
+external success:
+  invoke the supplied commit closure exactly once after the last fallible
+  transport operation
+  install the already-derived keys and swap the receiver indexes without another
+  error return
+  publish the relay allocation before releasing its lock
+  only then expose the new roster transaction to the engine
+```
+
+The commit closure is deliberately synchronous and non-failing. The live relay
+path invokes it from the successful Allocate send callback, while the relay state
+lock is still held and before the relay credentials are published. Registry
+readers remain blocked until that relay operation returns. This establishes one
+linearization boundary: readers can observe either the complete prior media
+snapshot or the complete accepted media snapshot, never a receiver-only or
+relay-only accepted update.
+
+`ApplyGroupUpdate` remains the receiver-only compatibility surface and delegates
+to the same transaction with an immediate commit. No ordinary 1:1 path uses the
+transactional group surface.
 
 ## Implementation suggestions (guidance, not authoritative)
 
@@ -106,6 +153,15 @@ applied through an installed callback. Updates do not replace `Call.Peer()`.
   state survive promotion to PID zero.
 - Build the next PID/SSRC indexes completely, then swap them under the registry
   lock; pending candidates never enter an active index.
+- Separate prospective raw-epoch derivation from installation. The prospective
+  phase may return an error; the commit phase only assigns already-validated
+  state and installs already-derived fixed-size key values.
+- Hold the registry lock from prospective validation through external apply and
+  commit. When relay rotation is required, invoke the registry commit closure
+  only after the Allocate write succeeds and while the relay-state lock is still
+  held.
+- Zero prospective raw-key copies and derived key structs after both rollback and
+  successful installation. Consume and zero buffered epochs only at commit.
 - Route by expected SSRC before crypto and decoder work.
 - Give every device its own `MediaPipeline` and decoder.
 - Remove departed receivers immediately. A packet/key grace window is not proven

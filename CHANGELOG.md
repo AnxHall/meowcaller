@@ -7,6 +7,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### media/group_receive — `verified`
+- Specified one cross-resource commit boundary for each accepted group update:
+  receiver/PID/SSRC indexes and prepared group epoch keys stay prospective until
+  the relay Allocate send succeeds, and a failed external apply leaves all prior
+  media state retryable. The receiver-only compatibility path retains its
+  existing semantics while stale transactions bypass the external callback.
+
 ### media/group_rtcp_feedback — `partial`
 - Corrected the wire contract from authenticated group traffic. Native
   post-recreation audio reports are 60-byte SR-only plaintexts with one RFC
