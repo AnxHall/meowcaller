@@ -177,7 +177,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	defer ch.Close()
-	allocateState := newGroupRelayAllocateState(allocate)
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L53-L62
+	allocateState := newGroupRelayAllocateState(allocate, ep.Key)
 
 	// Send a consent ping (0x0801) immediately, together with the allocate and BEFORE any
 	// RTP. The relay won't forward the peer's media until consent (ping → pong) is
@@ -428,27 +429,27 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		if err := audioReceivers.ApplyGroupUpdate(update); err != nil {
 			return err
 		}
-		// Source of truth: https://github.com/purpshell/meowcaller/blob/6b568ebf25068e2720ba474a7092d482f53e3091/datasheets/group-media-relay-refresh.md#L70-L81
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L64-L92
 		if update.Relay != nil {
 			var transactionID [12]byte
 			if _, err := rand.Read(transactionID[:]); err != nil {
 				return fmt.Errorf("generate group relay transaction ID: %w", err)
 			}
-			refreshedAllocate, changed, err := allocateState.Apply(ep, update.Relay, streamSsrcs, transactionID)
+			changed, err := allocateState.Apply(ep, update.Relay, streamSsrcs, transactionID, func(packet []byte) error {
+				_, sendErr := ch.Send(packet)
+				return sendErr
+			})
 			if err != nil {
-				return err
+				return fmt.Errorf("refresh group relay allocation: %w", err)
 			}
 			if changed {
-				if _, err = ch.Send(refreshedAllocate); err != nil {
-					return fmt.Errorf("send refreshed group relay allocate: %w", err)
-				}
 				log.Info().
 					Uint32("relay_transaction_id", update.Relay.TransactionID).
 					Str("relay_name", ep.RelayName).
 					Msg("refreshed group relay allocation")
 				e.c.diag.Emit("stun", map[string]any{
 					"event":                "group_allocate_sent",
-					"bytes":                len(refreshedAllocate),
+					"bytes":                len(allocateState.Current()),
 					"relay_transaction_id": update.Relay.TransactionID,
 					"relay_name":           ep.RelayName,
 				})
@@ -669,18 +670,18 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		case relay.RelayPacketStun:
 			mt, isStun := stun.StunMessageType(pkt)
 			if isStun && mt == stun.MsgBindingRequest {
-				if txid, ok := stun.StunTransactionID(pkt); ok && len(txid) == 12 {
-					var tx [12]byte
-					copy(tx[:], txid)
-					resp := stun.EncodeStunRequest(stun.MsgBindingSuccess, tx, nil, ep.Key, true, log)
-					if _, err := ch.Send(resp); err != nil {
-						return fmt.Errorf("relay send binding-success: %w", err)
-					}
-					e.c.diag.Emit("stun", map[string]any{
-						"event":     "binding_request_answered",
-						"tx_id_hex": hex.EncodeToString(tx[:]), "resp_hex": hex.EncodeToString(resp),
-					})
+				// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L72-L92
+				resp, ok := buildRelayBindingSuccess(pkt, allocateState.CurrentKey())
+				if !ok {
+					continue
 				}
+				if _, err := ch.Send(resp); err != nil {
+					return fmt.Errorf("relay send binding-success: %w", err)
+				}
+				e.c.diag.Emit("stun", map[string]any{
+					"event":     "binding_request_answered",
+					"tx_id_hex": hex.EncodeToString(resp[8:20]), "resp_hex": hex.EncodeToString(resp),
+				})
 			}
 			continue
 		case relay.RelayPacketOther:

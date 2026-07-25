@@ -181,10 +181,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   and binding-response integrity key advance together only after the immediate
   relay send succeeds; a failed send leaves the prior credentials retryable.
 - The critical group update now selects the active relay's rotated token,
-  rebuilds and immediately sends Allocate under the group relay key, and
-  atomically replaces the one-second keepalive packet. Focused/full tests, race,
-  and vet pass. CodeRabbit review was attempted but blocked by its free CLI rate
-  limit.
+  rebuilds and immediately sends Allocate under the group relay key, and commits
+  the one-second keepalive packet and binding-response key only after that send
+  succeeds. Failed sends retain the prior credentials and remain retryable.
+  Focused/full tests, race, and vet pass. CodeRabbit review was attempted but
+  blocked by its free CLI rate limit.
 
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-
