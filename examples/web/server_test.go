@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +109,34 @@ func TestVideoBridgeParticipantInviteEventDoesNotReplaceReplayState(t *testing.T
 
 	if string(vb.state) != replay {
 		t.Fatalf("replay state changed from %s to %s", replay, vb.state)
+	}
+}
+
+func TestVideoBridgeReplaysLatestGroupStateAfterLifecycleState(t *testing.T) {
+	vb := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	vb.PublishState(webCallState{Event: "ready", CallID: "CID"})
+	vb.PublishGroupState(webGroupCallState{
+		Event: "group_state", CallID: "CID", TransactionID: 18,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/in", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	vb.handleIn(rec, req)
+
+	body := rec.Body.String()
+	readyAt := strings.Index(body, `"event":"ready"`)
+	groupAt := strings.Index(body, `"event":"group_state"`)
+	if readyAt < 0 || groupAt < 0 || readyAt >= groupAt {
+		t.Fatalf("SSE replay order is not lifecycle then roster: %s", body)
+	}
+	vb.ClearGroupState("OTHER")
+	if len(vb.groupState) == 0 {
+		t.Fatal("clearing a different call removed the roster replay")
+	}
+	vb.ClearGroupState("CID")
+	if len(vb.groupState) != 0 || vb.groupCallID != "" {
+		t.Fatal("ended call roster replay was not cleared")
 	}
 }
 

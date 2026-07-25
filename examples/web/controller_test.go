@@ -117,8 +117,9 @@ func TestWebCallControllerPublishesJoinOnlyForConnectedPIDDevice(t *testing.T) {
 	events := make(chan vbMsg, 8)
 	bridge.subs[events] = struct{}{}
 	c := &webCallController{
-		bridge: bridge,
-		log:    zerolog.Nop(),
+		bridge:       bridge,
+		log:          zerolog.Nop(),
+		activeCallID: "CID",
 		pendingParticipantInvites: map[string]string{
 			"15550002": "+15550002",
 		},
@@ -177,6 +178,87 @@ func TestWebCallControllerPublishesJoinOnlyForConnectedPIDDevice(t *testing.T) {
 	case unexpected := <-events:
 		t.Fatalf("connected target joined more than once: %s", unexpected.data)
 	default:
+	}
+}
+
+func TestWebCallControllerIgnoresStaleGroupStateFromOldCall(t *testing.T) {
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 2)
+	bridge.subs[events] = struct{}{}
+	c := &webCallController{
+		bridge: bridge, log: zerolog.Nop(), activeCallID: "NEW",
+		pendingParticipantCallID: "NEW",
+		pendingParticipantInvites: map[string]string{
+			"15550002": "+15550002",
+		},
+		pendingParticipantOrder: []string{"15550002"},
+	}
+	c.handleGroupState("OLD", meowcaller.GroupCallState{
+		TransactionID: 99,
+		Participants: []meowcaller.GroupCallParticipant{{
+			JID: types.NewJID("222222222222222", types.HiddenUserServer),
+			PN:  types.NewJID("15550002", types.DefaultUserServer), State: "connected",
+			Devices: []meowcaller.GroupCallDevice{{
+				JID: types.NewJID("222222222222222", types.HiddenUserServer),
+				PID: 2, HasPID: true,
+			}},
+		}},
+	})
+	if got := c.pendingParticipantInvites["15550002"]; got != "+15550002" {
+		t.Fatalf("stale callback consumed new-call invite: %q", got)
+	}
+	select {
+	case msg := <-events:
+		t.Fatalf("stale callback published event: %s", msg.data)
+	default:
+	}
+}
+
+func TestWebCallControllerCorrelatesParticipantAliasesOnce(t *testing.T) {
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 3)
+	bridge.subs[events] = struct{}{}
+	c := &webCallController{
+		bridge: bridge, log: zerolog.Nop(), activeCallID: "CID",
+		pendingParticipantCallID: "CID",
+		pendingParticipantInvites: map[string]string{
+			"222222222222222": "222222222222222@lid",
+			"15550002":        "+15550002",
+		},
+		pendingParticipantOrder: []string{"222222222222222", "15550002"},
+	}
+	c.handleGroupState("CID", meowcaller.GroupCallState{
+		TransactionID: 20,
+		Participants: []meowcaller.GroupCallParticipant{{
+			JID: types.NewJID("222222222222222", types.HiddenUserServer),
+			PN:  types.NewJID("15550002", types.DefaultUserServer), State: "connected",
+			Devices: []meowcaller.GroupCallDevice{{
+				JID: types.NewJID("222222222222222", types.HiddenUserServer),
+				PID: 2, HasPID: true,
+			}},
+		}},
+	})
+	_ = <-events
+	var joins int
+	for {
+		select {
+		case msg := <-events:
+			var event webParticipantJoin
+			if err := json.Unmarshal(msg.data, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Event == "participant_join" {
+				joins++
+			}
+		default:
+			if joins != 1 {
+				t.Fatalf("join events = %d, want 1", joins)
+			}
+			if len(c.pendingParticipantInvites) != 0 {
+				t.Fatalf("matched aliases remain pending: %+v", c.pendingParticipantInvites)
+			}
+			return
+		}
 	}
 }
 
@@ -260,6 +342,58 @@ func TestWebCallControllerAddParticipantsPublishesOneResultPerTarget(t *testing.
 		default:
 			t.Fatalf("event %d was not published", i)
 		}
+	}
+}
+
+func TestWebCallControllerDeduplicatesNormalizedParticipantTargets(t *testing.T) {
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 2)
+	bridge.subs[events] = struct{}{}
+	var gotTargets []string
+	c := &webCallController{
+		ctx: context.Background(), call: &meowcaller.Call{}, bridge: bridge, log: zerolog.Nop(),
+		inviteParticipants: func(_ context.Context, _ *meowcaller.Call, targets ...string) []error {
+			gotTargets = append(gotTargets, targets...)
+			return make([]error, len(targets))
+		},
+	}
+	if err := c.addParticipants([]string{
+		"+15551234567",
+		"15551234567@s.whatsapp.net",
+		" 15551234567 ",
+	}); err != nil {
+		t.Fatalf("add participants: %v", err)
+	}
+	if len(gotTargets) != 1 || gotTargets[0] != "+15551234567" {
+		t.Fatalf("submitted targets = %v, want first normalized target once", gotTargets)
+	}
+	if len(c.pendingParticipantInvites) != 1 {
+		t.Fatalf("pending invites = %+v, want one", c.pendingParticipantInvites)
+	}
+}
+
+func TestWebCallControllerFailedAnswerReleasesIncomingCall(t *testing.T) {
+	call := &meowcaller.Call{}
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	rejected := 0
+	c := &webCallController{
+		bridge: bridge, log: zerolog.Nop(), pending: call,
+		attachCall: func(*meowcaller.Call) error { return nil },
+		answerCall: func(*meowcaller.Call) error { return errors.New("accept failed") },
+		rejectCall: func(*meowcaller.Call) error {
+			rejected++
+			return nil
+		},
+	}
+	err := c.answer()
+	if err == nil || err.Error() != "accept failed" {
+		t.Fatalf("answer error = %v", err)
+	}
+	if c.pending != nil || c.call != nil || c.activeCallID != "" {
+		t.Fatalf("failed answer left controller busy: pending=%p call=%p id=%q", c.pending, c.call, c.activeCallID)
+	}
+	if rejected != 1 {
+		t.Fatalf("reject calls = %d, want 1", rejected)
 	}
 }
 

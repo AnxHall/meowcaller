@@ -78,7 +78,12 @@ type webCallController struct {
 	mu                        sync.Mutex
 	call                      *meowcaller.Call
 	pending                   *meowcaller.Call
+	activeCallID              string
 	inviteParticipants        func(context.Context, *meowcaller.Call, ...string) []error
+	attachCall                func(*meowcaller.Call) error
+	answerCall                func(*meowcaller.Call) error
+	rejectCall                func(*meowcaller.Call) error
+	pendingParticipantCallID  string
 	pendingParticipantInvites map[string]string
 	pendingParticipantOrder   []string
 }
@@ -125,6 +130,7 @@ func (c *webCallController) onIncomingCall(call *meowcaller.Call) {
 		return
 	}
 	c.pending = call
+	c.activeCallID = call.ID()
 	c.mu.Unlock()
 	c.publish(webCallState{
 		Event: "incoming", CallID: call.ID(), Peer: call.Peer().String(), Video: call.IsVideo(),
@@ -164,11 +170,18 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 		c.mu.Lock()
 		if c.call == call {
 			c.call = nil
-			c.pendingParticipantInvites = make(map[string]string)
-			c.pendingParticipantOrder = nil
 		}
 		if c.pending == call {
 			c.pending = nil
+		}
+		if c.activeCallID == call.ID() {
+			c.activeCallID = ""
+			c.pendingParticipantCallID = ""
+			c.pendingParticipantInvites = make(map[string]string)
+			c.pendingParticipantOrder = nil
+			if c.bridge != nil {
+				c.bridge.ClearGroupState(call.ID())
+			}
 		}
 		c.mu.Unlock()
 		c.publish(webCallState{Event: "ended", CallID: call.ID(), Peer: call.Peer().String(), Message: reason})
@@ -262,10 +275,18 @@ func (c *webCallController) addParticipants(targets []string) error {
 		return err
 	}
 	normalized := make([]string, 0, len(targets))
+	seenTargets := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
-		if target = strings.TrimSpace(target); target != "" {
-			normalized = append(normalized, target)
+		target = strings.TrimSpace(target)
+		key := participantInviteTargetKey(target)
+		if target == "" || key == "" {
+			continue
 		}
+		if _, exists := seenTargets[key]; exists {
+			continue
+		}
+		seenTargets[key] = struct{}{}
+		normalized = append(normalized, target)
 	}
 	if len(normalized) == 0 {
 		return errors.New("at least one participant target is required")
@@ -277,6 +298,11 @@ func (c *webCallController) addParticipants(targets []string) error {
 		}
 	}
 	c.mu.Lock()
+	if c.pendingParticipantCallID != "" && c.pendingParticipantCallID != call.ID() {
+		c.pendingParticipantInvites = make(map[string]string)
+		c.pendingParticipantOrder = nil
+	}
+	c.pendingParticipantCallID = call.ID()
 	if c.pendingParticipantInvites == nil {
 		c.pendingParticipantInvites = make(map[string]string)
 	}
@@ -334,6 +360,12 @@ func participantInviteTargetKey(target string) string {
 
 func (c *webCallController) handleGroupState(callID string, state meowcaller.GroupCallState) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L45-L72
+	c.mu.Lock()
+	current := c.activeCallID == callID
+	c.mu.Unlock()
+	if !current {
+		return
+	}
 	webState := webGroupCallState{
 		Event:          "group_state",
 		CallID:         callID,
@@ -354,7 +386,7 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 			State: participant.State, Devices: devices,
 		}
 	}
-	c.bridge.PublishEvent(webState)
+	c.bridge.PublishGroupState(webState)
 
 	var joined []webParticipantJoin
 	c.mu.Lock()
@@ -372,18 +404,25 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 		if selected == nil {
 			continue
 		}
+		var outcome *webParticipantJoin
 		for _, key := range c.pendingParticipantOrder {
 			target, pending := c.pendingParticipantInvites[key]
 			if !pending || (key != participant.JID.User && key != participant.PN.User) {
 				continue
 			}
 			delete(c.pendingParticipantInvites, key)
-			joined = append(joined, webParticipantJoin{
-				Event: "participant_join", CallID: callID,
-				TransactionID: state.TransactionID, Target: target,
-				Participant: participant.JID.String(), Device: selected.JID.String(),
-				PID: selected.PID,
-			})
+			if outcome == nil {
+				next := webParticipantJoin{
+					Event: "participant_join", CallID: callID,
+					TransactionID: state.TransactionID, Target: target,
+					Participant: participant.JID.String(), Device: selected.JID.String(),
+					PID: selected.PID,
+				}
+				outcome = &next
+			}
+		}
+		if outcome != nil {
+			joined = append(joined, *outcome)
 		}
 	}
 	c.mu.Unlock()
@@ -414,7 +453,7 @@ func (c *webCallController) dial(target string, video bool) error {
 		return errors.New("target is required")
 	}
 	c.mu.Lock()
-	busy := c.call != nil || c.pending != nil
+	busy := c.call != nil || c.pending != nil || c.activeCallID != ""
 	c.mu.Unlock()
 	if busy {
 		return errors.New("another call is already active")
@@ -423,7 +462,15 @@ func (c *webCallController) dial(target string, video bool) error {
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
+	c.activeCallID = call.ID()
+	c.mu.Unlock()
 	if err = c.attach(call); err != nil {
+		c.mu.Lock()
+		if c.activeCallID == call.ID() {
+			c.activeCallID = ""
+		}
+		c.mu.Unlock()
 		_ = call.Hangup()
 		return err
 	}
@@ -437,29 +484,79 @@ func (c *webCallController) dial(target string, video bool) error {
 func (c *webCallController) answer() error {
 	c.mu.Lock()
 	call := c.pending
-	if call != nil {
-		c.pending = nil
-		c.call = call
-	}
 	c.mu.Unlock()
 	if call == nil {
 		return errors.New("no incoming call")
 	}
-	if err := c.attach(call); err != nil {
-		_ = call.Reject()
+	attach := c.attach
+	if c.attachCall != nil {
+		attach = c.attachCall
+	}
+	reject := call.Reject
+	if c.rejectCall != nil {
+		reject = func() error { return c.rejectCall(call) }
+	}
+	if err := attach(call); err != nil {
+		_ = reject()
+		c.clearFailedIncoming(call)
 		return err
 	}
-	if err := call.Answer(); err != nil {
+	answer := call.Answer
+	if c.answerCall != nil {
+		answer = func() error { return c.answerCall(call) }
+	}
+	if err := answer(); err != nil {
+		_ = reject()
+		c.clearFailedIncoming(call)
 		return err
 	}
+	c.mu.Lock()
+	if c.pending != call || c.activeCallID != call.ID() {
+		c.mu.Unlock()
+		_ = reject()
+		return errors.New("incoming call ended while answering")
+	}
+	c.pending = nil
+	c.call = call
+	c.mu.Unlock()
 	c.publish(webCallState{Event: "answering", CallID: call.ID(), Peer: call.Peer().String(), Video: call.IsVideo()})
 	return nil
+}
+
+func (c *webCallController) clearFailedIncoming(call *meowcaller.Call) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L51-L66
+	c.mu.Lock()
+	if c.pending == call {
+		c.pending = nil
+	}
+	if c.call == call {
+		c.call = nil
+	}
+	if c.activeCallID == call.ID() {
+		c.activeCallID = ""
+		c.pendingParticipantCallID = ""
+		c.pendingParticipantInvites = make(map[string]string)
+		c.pendingParticipantOrder = nil
+		if c.bridge != nil {
+			c.bridge.ClearGroupState(call.ID())
+		}
+	}
+	c.mu.Unlock()
 }
 
 func (c *webCallController) reject() error {
 	c.mu.Lock()
 	call := c.pending
 	c.pending = nil
+	if call != nil && c.activeCallID == call.ID() {
+		c.activeCallID = ""
+		c.pendingParticipantCallID = ""
+		c.pendingParticipantInvites = make(map[string]string)
+		c.pendingParticipantOrder = nil
+		if c.bridge != nil {
+			c.bridge.ClearGroupState(call.ID())
+		}
+	}
 	c.mu.Unlock()
 	if call == nil {
 		return errors.New("no incoming call")

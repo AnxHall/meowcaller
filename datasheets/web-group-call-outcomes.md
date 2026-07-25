@@ -59,15 +59,25 @@ different LID.
 - Publish `participant_join` only when state is `connected` and at least one
   device has `HasPID`; preserve PID zero.
 - Publish at most one join outcome per submitted target.
+- Scope roster callbacks and pending invite correlation to the exact active call
+  ID so an old in-flight callback cannot consume a later call's target.
+- Deduplicate targets by normalized user part before signaling. If one
+  participant matches both pending PN and LID aliases, consume both aliases but
+  publish one join.
 - Do not claim `invited`, `outgoing`, or `receipt` as joined.
 - Group/invite/join transients must not replace the lifecycle replay state or
   header.
+- Cache the latest authoritative roster independently and replay lifecycle first,
+  roster second on SSE reconnect; clear it when that exact call ends.
+- Reject and release an incoming call when media attachment or acceptance fails
+  so the console does not remain busy.
 - Render the latest roster transaction and connected count in the page, and
   replace “submitted” guidance with explicit “waiting for roster confirmation.”
 
 ## Validation boundaries
 
-- KATs cover target normalization, LID and PN matching, PID zero, intermediate
-  states, failed invite removal, one-shot joins, generic state serialization,
-  lifecycle replay protection, and page presentation.
+- KATs cover target normalization/deduplication, LID and PN alias matching, PID
+  zero, intermediate states, failed invite removal, one-shot joins, stale-call
+  suppression, failed-answer cleanup, generic state serialization,
+  lifecycle/roster reconnect replay, and page presentation.
 - Live WhatsApp behavior remains the final end-to-end gate.

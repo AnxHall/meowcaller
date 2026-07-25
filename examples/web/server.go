@@ -33,6 +33,8 @@ type videoBridge struct {
 	orientation int
 	qrPNG       []byte
 	state       []byte
+	groupState  []byte
+	groupCallID string
 	closed      bool
 }
 
@@ -140,6 +142,29 @@ func (vb *videoBridge) PublishEvent(event any) {
 	}
 }
 
+func (vb *videoBridge) PublishGroupState(state webGroupCallState) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L45-L72
+	data, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	vb.mu.Lock()
+	vb.groupState = append(vb.groupState[:0], data...)
+	vb.groupCallID = state.CallID
+	vb.mu.Unlock()
+	vb.broadcast(vbMsg{event: "state", data: data})
+}
+
+func (vb *videoBridge) ClearGroupState(callID string) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L45-L72
+	vb.mu.Lock()
+	if vb.groupCallID == callID {
+		vb.groupState = nil
+		vb.groupCallID = ""
+	}
+	vb.mu.Unlock()
+}
+
 func (vb *videoBridge) RequestKeyframe() {
 	vb.broadcast(vbMsg{event: "keyframe", data: []byte("1")})
 }
@@ -190,6 +215,7 @@ func (vb *videoBridge) handleIn(w http.ResponseWriter, r *http.Request) {
 	vb.subs[ch] = struct{}{}
 	orient := vb.orientation
 	state := append([]byte(nil), vb.state...)
+	groupState := append([]byte(nil), vb.groupState...)
 	vb.mu.Unlock()
 	defer func() {
 		vb.mu.Lock()
@@ -205,6 +231,9 @@ func (vb *videoBridge) handleIn(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: orient\ndata: %d\n\n", orient) // send current orientation up front
 	if len(state) > 0 {
 		fmt.Fprintf(w, "event: state\ndata: %s\n\n", state)
+	}
+	if len(groupState) > 0 {
+		fmt.Fprintf(w, "event: state\ndata: %s\n\n", groupState)
 	}
 	flusher.Flush()
 	for {

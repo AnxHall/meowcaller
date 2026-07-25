@@ -17,6 +17,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   successful-target tracking, PN/LID correlation, deterministic selected-device
   reporting, and a live roster status line in the page. Failed submissions are
   removed from correlation and group transients do not replace lifecycle replay.
+- Hardened the controller against stale old-call callbacks, duplicate normalized
+  targets, PN/LID alias double joins, failed-answer busy state, and SSE
+  reconnects that previously lost the latest authoritative roster.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 
