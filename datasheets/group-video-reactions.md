@@ -1,9 +1,12 @@
 # Group video and reactions
 
-**Status:** initial group-video signaling accepted live; encoded media validation pending
+**Status:** initial group-video signaling and participant H.264 receive accepted live;
+group relay subscription refresh specified
 
-**Reference pinned at:** UNMAPPED — WhatsApp Web group-video signaling was not
-present in the archived group-call captures.
+**Reference pinned at:**
+
+- capture SHA-256 `47e4966e1847b686b3a31c4983df8025617d200ec27a71c5884598488af65b90`
+- live diagnostic call `14F2B768B13898CC1783AD897C1B5953`
 
 ## Observed facts
 
@@ -26,6 +29,25 @@ present in the archived group-call captures.
 - Outgoing H.264 media did not flow in that run because the web example attempted
   1920×1080 with AVC Baseline Level 3.1. The browser rejected the encoder
   configuration before it produced a frame.
+- In subsequent live call `14F2B768B13898CC1783AD897C1B5953`, the relay
+  delivered participant H.264 on the participant's slot-2 SSRC with RTP payload
+  type 97. Meowcaller authenticated, depacketized, and emitted 42 Annex-B access
+  units. The first access unit contains H.264 SPS, PPS, and IDR NAL units.
+- WhatsApp Web's captured group-video Allocate contains these attributes in order:
+  relay token `0x4000`, sender subscriptions `0x4025`, receiver subscriptions
+  `0x4021`, local stream descriptors `0x4024`, participant count `0x805a`, relay
+  endpoint `0x0016`, and message integrity `0x0008`.
+- The captured sender-subscription protobuf groups the local slot-2/3/5 video
+  SSRCs, slot-7/8/6 secondary-video SSRCs, slot-0/1/4 audio SSRCs, and slot-6
+  app-data SSRC. Connected remote PIDs 1 and 2 are attached to primary video,
+  audio, and app-data; the secondary-video group has no PID targets.
+- The captured receiver-subscription protobuf is the ordered pair
+  `12 02 08 01 12 02 08 02`, selecting connected remote PIDs 1 and 2. Attribute
+  `0x805a` carries `02`, matching the two selected remote participants.
+- Meowcaller's existing group relay refresh only rotates credentials and repeats
+  local stream descriptors. It omits all three captured participant-subscription
+  attributes. In a later live call, both peers signaled enabled video but the
+  relay forwarded no participant PT-97 packets, while audio continued.
 
 ## Inferences to validate live
 
@@ -37,7 +59,8 @@ present in the archived group-call captures.
 
 The remaining inferences must stay marked unvalidated until a live add-person video
 call proves the offer is accepted and bidirectional video flows for original and
-added participants.
+added participants. A live retest must also prove that adding the captured
+participant-subscription attributes makes group-video forwarding deterministic.
 
 ## Go envelope
 
@@ -80,7 +103,11 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
   state.
 - Media tests must prove participant metadata and frame bytes survive dispatch
   without aliasing.
+- Relay tests must prove a committed connected roster emits the exact captured
+  sender/receiver subscription protobufs for remote PIDs, and that the subscription
+  update shares the roster/relay atomic commit boundary.
 - Web tests must prove tagged participant video messages and sender-attributed
   reaction rendering are present.
-- Initial group-video signaling is live-accepted. Bidirectional H.264, video
-  add-person acceptance, and live group reactions remain pending.
+- Initial group-video signaling and participant H.264 receive are live-accepted.
+  Deterministic subscription refresh, bidirectional multi-participant H.264,
+  video add-person acceptance, and live group reactions remain pending.

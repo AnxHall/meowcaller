@@ -20,6 +20,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   participants. Corrected the web camera encoder to request and enforce the
   1280×720 coded-area limit advertised by AVC Baseline Level 3.1, avoiding the
   1920×1080 configuration failure that closed the encoder before its first frame.
+- Recorded the capture-backed group-video relay subscription contract. Real
+  WhatsApp refreshes its Allocate with participant-specific sender and receiver
+  subscriptions plus the connected remote count; the current Meowcaller refresh
+  omits those attributes. A later live call authenticated and emitted 42
+  participant H.264 access units, confirming H.264 receive independently of the
+  intermittent forwarding failure.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:
