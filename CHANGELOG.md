@@ -12,6 +12,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   feedback. Each authenticated group SSRC retains independent sequence, loss,
   jitter, and sender-report timing state, while the live engine reuses the
   existing verified single-reception-block SRTCP wire format per participant.
+- Scaffolded the synchronized SSRC-indexed reception set and its two-stream KAT;
+  the KAT remains skipped until the stub bodies are implemented.
 
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person
