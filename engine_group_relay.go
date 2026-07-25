@@ -49,23 +49,23 @@ func (s *groupRelayAllocateState) Apply(
 	send func([]byte) error,
 ) (bool, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L64-L92
-	if endpoint == nil || endpoint.RelayName == "" || endpoint.IPv4 == "" || endpoint.Port == 0 {
-		return false, fmt.Errorf("meowcaller: active relay endpoint is incomplete")
-	}
 	if relay == nil {
 		return false, nil
-	}
-	if len(relay.Key) == 0 {
-		return false, fmt.Errorf("meowcaller: group relay has no key")
-	}
-	if send == nil {
-		return false, fmt.Errorf("meowcaller: group relay send is nil")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.hasGroup && relay.TransactionID <= s.transactionID {
 		return false, nil
+	}
+	if endpoint == nil || endpoint.RelayName == "" || endpoint.IPv4 == "" || endpoint.Port == 0 {
+		return false, fmt.Errorf("meowcaller: active relay endpoint is incomplete")
+	}
+	if len(relay.Key) == 0 {
+		return false, fmt.Errorf("meowcaller: group relay has no key")
+	}
+	if send == nil {
+		return false, fmt.Errorf("meowcaller: group relay send is nil")
 	}
 
 	var matched *types.GroupCallRelayEndpoint

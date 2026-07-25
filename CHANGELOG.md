@@ -256,6 +256,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   refresh so a control packet using old credentials cannot leave after a rotated
   Apply commits. Deterministic blocked-send KATs cover both orderings; the
   binding-key choice remains synthetic and the module remains partial.
+- Applied the transaction cutoff before validating newer relay payload fields,
+  so malformed stale/duplicate snapshots are ignored without disturbing the
+  committed allocation. A focused KAT covers a stale snapshot with no endpoint,
+  key, or send callback.
 
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-

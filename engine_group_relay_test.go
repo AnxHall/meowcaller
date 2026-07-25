@@ -81,6 +81,43 @@ func TestGroupRelayAllocateStateRotatesCredentialsOnExistingTransport(t *testing
 	}
 }
 
+func TestGroupRelayAllocateStateIgnoresMalformedStaleTransaction(t *testing.T) {
+	initial := []byte{0x00, 0x01, 0x02}
+	state := newGroupRelayAllocateState(initial, bytes.Repeat([]byte{0x12}, 16))
+	endpoint := &types.RelayEndpoint{
+		RelayName: "zrh1c01",
+		IPv4:      "157.240.17.62",
+		Port:      3478,
+	}
+	current := &types.GroupCallRelay{
+		TransactionID: 2,
+		Key:           bytes.Repeat([]byte{0x24}, 16),
+		Tokens:        [][]byte{bytes.Repeat([]byte{0x42}, 174)},
+		Endpoints: []types.GroupCallRelayEndpoint{{
+			RelayName: "zrh1c01",
+			TokenID:   0,
+		}},
+	}
+	if changed, err := state.Apply(endpoint, current, [9]uint32{}, [12]byte{}, func([]byte) error {
+		return nil
+	}); err != nil || !changed {
+		t.Fatalf("apply current relay = (%v, %v), want (true, nil)", changed, err)
+	}
+	committed := state.Current()
+
+	stale := &types.GroupCallRelay{TransactionID: 1}
+	changed, err := state.Apply(nil, stale, [9]uint32{}, [12]byte{}, nil)
+	if err != nil {
+		t.Fatalf("malformed stale relay returned error: %v", err)
+	}
+	if changed {
+		t.Fatal("malformed stale relay reported a change")
+	}
+	if got := state.Current(); !bytes.Equal(got, committed) {
+		t.Fatalf("malformed stale relay changed allocate = %x, want %x", got, committed)
+	}
+}
+
 func TestGroupRelayAllocateStateSendFailureKeepsPriorCredentialsRetryable(t *testing.T) {
 	initial := []byte{0x00, 0x01, 0x02}
 	initialKey := bytes.Repeat([]byte{0x12}, 16)
