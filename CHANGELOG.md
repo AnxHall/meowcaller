@@ -177,6 +177,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Added the capture-pinned contract and implementation for rotating group relay
   credentials over the existing active DataChannel while preserving RTP and
   stream identity.
+- Refined the contract so the refreshed Allocate packet, committed transaction,
+  and binding-response integrity key advance together only after the immediate
+  relay send succeeds; a failed send leaves the prior credentials retryable.
 - The critical group update now selects the active relay's rotated token,
   rebuilds and immediately sends Allocate under the group relay key, and
   atomically replaces the one-second keepalive packet. Focused/full tests, race,

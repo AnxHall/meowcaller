@@ -52,19 +52,24 @@ endpoint, and MESSAGE-INTEGRITY under the group relay key.
 
 ```go
 type groupRelayAllocateState struct {
-	// current encoded Allocate and latest group relay transaction
+	// current encoded Allocate, integrity key, and latest committed group relay transaction
 }
 
-func newGroupRelayAllocateState(initial []byte) *groupRelayAllocateState
+func newGroupRelayAllocateState(initial, initialKey []byte) *groupRelayAllocateState
 
 func (s *groupRelayAllocateState) Current() []byte
+
+func (s *groupRelayAllocateState) CurrentKey() []byte
 
 func (s *groupRelayAllocateState) Apply(
 	endpoint *types.RelayEndpoint,
 	relay *types.GroupCallRelay,
 	streamSSRCs [9]uint32,
 	transactionID [12]byte,
-) (packet []byte, changed bool, err error)
+	send func([]byte) error,
+) (changed bool, err error)
+
+func buildRelayBindingSuccess(request, integrityKey []byte) (response []byte, ok bool)
 ```
 
 ## Required behavior
@@ -75,15 +80,26 @@ func (s *groupRelayAllocateState) Apply(
 3. Rebuild Allocate with the group relay key, the existing active endpoint, and
    the original stream SSRC set.
 4. Send it immediately on the existing DataChannel.
-5. Atomically replace the packet used by the one-second Allocate keepalive.
+5. Only after that send succeeds, atomically replace both the packet used by the
+   one-second Allocate keepalive and the integrity key used for binding-success
+   responses.
 6. Ignore stale or duplicate group relay transaction IDs.
 7. Reject missing active-relay, token, key, or endpoint data without silently
    retaining a mismatched allocation.
+8. A failed immediate send must preserve the prior packet, key, and committed
+   transaction so the same group relay transaction remains retryable.
+9. Authenticate later binding-success responses with the currently committed
+   relay key, not the endpoint's original 1:1 key.
 
 ## Validation boundaries
 
-- The focused KAT proves that applying relay transaction 1 replaces the initial
-  1:1 Allocate with a packet containing the selected rotated token and group key.
+- The focused KAT proves that successfully applying relay transaction 1 replaces
+  the initial 1:1 Allocate and integrity key with the selected rotated token and
+  group key.
+- A failed immediate send leaves the initial packet and key intact and permits
+  retrying the same group relay transaction.
+- A binding-success encoded after the successful transition validates under the
+  rotated key and differs from the response authenticated by the initial key.
 - The active address, stream SSRCs, RTP pipeline, SSRC, sequence, timestamp, and
   DataChannel remain untouched.
 - Active-relay migration is not proven by this capture and is outside this
