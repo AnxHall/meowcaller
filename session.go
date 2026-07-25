@@ -196,9 +196,7 @@ func (p *MediaPipeline) RekeySendFromRaw(rawE2E []byte, selfJID string) error {
 	if err != nil {
 		return err
 	}
-	p.sendMu.Lock()
-	p.sendKeys = sendKeys
-	p.sendMu.Unlock()
+	p.installSendKeys(sendKeys)
 	return nil
 }
 
@@ -210,10 +208,22 @@ func (p *MediaPipeline) RekeyRecvFromRawPreservingROC(rawE2E []byte, peerJID str
 	if err != nil {
 		return err
 	}
+	p.installRecvKeysPreservingROC(recvKeys)
+	return nil
+}
+
+func (p *MediaPipeline) installSendKeys(sendKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	p.sendKeys = sendKeys
+	p.sendMu.Unlock()
+}
+
+func (p *MediaPipeline) installRecvKeysPreservingROC(recvKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
 	p.recvMu.Lock()
 	p.recvKeys = recvKeys
 	p.recvMu.Unlock()
-	return nil
 }
 
 func (p *MediaPipeline) installRecvKeys(recvKeys srtp.E2eSrtpKeys) {

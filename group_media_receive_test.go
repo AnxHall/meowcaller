@@ -124,37 +124,180 @@ func protectRawParticipantAudio(t *testing.T, rawKey []byte, sender types.JID, p
 	return srtp.AppendWarpMITag(keys.AuthKey[:], packet, 0, srtp.WarpMITagLen), ssrc
 }
 
-func protectParticipantAudioAt(
-	t *testing.T,
-	callKey []byte,
-	sender types.JID,
-	sequence uint16,
-	roc uint32,
-	payload []byte,
-) []byte {
-	t.Helper()
-	participantID := rtp.FormatE2ESrtpParticipantID(sender.String())
-	ssrc, err := rtp.DeriveWasmParticipantSsrc("CID", participantID, 0)
+func TestParticipantReceiveRegistryAppliesSharedRawEpochToSenderAndEveryReceiver(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0xa5}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
 	if err != nil {
-		t.Fatalf("derive sender SSRC: %v", err)
+		t.Fatalf("new registry: %v", err)
 	}
-	keys, err := srtp.DeriveE2eKeys(callKey, participantID)
+	const selfSSRC = 0x10203040
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), selfSSRC, FrameSamples)
 	if err != nil {
-		t.Fatalf("derive participant keys: %v", err)
+		t.Fatalf("sender pipeline: %v", err)
 	}
-	header := rtp.RtpHeader{
-		PayloadType:    rtp.RtpPayloadTypeOpus,
-		SequenceNumber: sequence,
-		Timestamp:      uint32(sequence) * FrameSamples,
-		Ssrc:           ssrc,
+	registry.attachSendPipeline(sender)
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply group roster: %v", err)
 	}
-	packet := rtp.EncodeRtpHeader(&header)
-	encrypted, err := srtp.CryptPayload(&keys, ssrc, sequence, roc, payload)
+
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply shared raw epoch: %v", err)
+	}
+	for _, participant := range []types.JID{peer, added} {
+		packet, _ := protectRawParticipantAudio(t, rawKey, participant, []byte{byte(participant.Device + 1)})
+		audio, ok := registry.DecodeAudio(packet)
+		if !ok || audio.DeviceJID != participant {
+			t.Fatalf("raw epoch did not activate receiver %s: %+v", participant, audio)
+		}
+		oldPacket, _ := protectParticipantAudio(t, callKey, self, participant, []byte{0xee})
+		if _, ok = registry.DecodeAudio(oldPacket); ok {
+			t.Fatalf("old call-key packet authenticated for %s", participant)
+		}
+	}
+
+	remoteUnderRaw, err := NewMediaPipeline(callKey, peer.String(), self.String(), selfSSRC, FrameSamples)
 	if err != nil {
-		t.Fatalf("encrypt participant packet: %v", err)
+		t.Fatalf("remote raw receiver: %v", err)
 	}
-	packet = append(packet, encrypted...)
-	return srtp.AppendWarpMITag(keys.AuthKey[:], packet, roc, srtp.WarpMITagLen)
+	if err = remoteUnderRaw.RekeyRecvFromRawPreservingROC(rawKey, self.String()); err != nil {
+		t.Fatalf("remote raw receive epoch: %v", err)
+	}
+	remoteUnderCallKey, err := NewMediaPipeline(callKey, peer.String(), self.String(), selfSSRC, FrameSamples)
+	if err != nil {
+		t.Fatalf("remote call-key receiver: %v", err)
+	}
+	outbound, err := sender.ProtectAudio([]byte{7, 8, 9})
+	if err != nil {
+		t.Fatalf("protect outbound after epoch: %v", err)
+	}
+	if _, _, ok := remoteUnderCallKey.UnprotectAudio(outbound); ok {
+		t.Fatal("outbound packet remained under the old call key")
+	}
+	if _, got, ok := remoteUnderRaw.UnprotectAudio(outbound); !ok || !bytes.Equal(got, []byte{7, 8, 9}) {
+		t.Fatal("outbound packet did not use the shared raw epoch")
+	}
+
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("identical epoch duplicate: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, bytes.Repeat([]byte{0x5a}, 32)); err == nil {
+		t.Fatal("conflicting transaction-wide epoch was accepted")
+	}
+}
+
+func TestParticipantReceiveRegistryBuffersSharedRawEpochUntilRoster(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0xb6}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), 0x10203040, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender pipeline: %v", err)
+	}
+	registry.attachSendPipeline(sender)
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("buffer shared raw epoch: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply matching roster: %v", err)
+	}
+	for _, participant := range []types.JID{peer, added} {
+		packet, _ := protectRawParticipantAudio(t, rawKey, participant, []byte{1})
+		if _, ok := registry.DecodeAudio(packet); !ok {
+			t.Fatalf("buffered shared epoch did not activate %s", participant)
+		}
+	}
+}
+
+func TestParticipantReceiveRegistryCarriesCurrentEpochToNewRosterMembers(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0xc7}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), 0x10203040, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender pipeline: %v", err)
+	}
+	registry.attachSendPipeline(sender)
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, false)); err != nil {
+		t.Fatalf("apply initial roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply current epoch: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 18, true)); err != nil {
+		t.Fatalf("apply expanded roster: %v", err)
+	}
+	addedPacket, _ := protectRawParticipantAudio(t, rawKey, added, []byte{1})
+	if _, ok := registry.DecodeAudio(addedPacket); !ok {
+		t.Fatal("new roster member did not inherit the current shared epoch")
+	}
+	staleKey := bytes.Repeat([]byte{0xd8}, 32)
+	if err = registry.ApplyGroupRawEpoch(16, staleKey); err != nil {
+		t.Fatalf("stale epoch: %v", err)
+	}
+	peerPacket, _ := protectRawParticipantAudio(t, rawKey, peer, []byte{2})
+	if _, ok := registry.DecodeAudio(peerPacket); !ok {
+		t.Fatal("stale epoch replaced the current shared epoch")
+	}
+}
+
+func TestParticipantReceiveRegistryRejectsMalformedEpochWithoutChangingMedia(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	const selfSSRC = 0x10203040
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), selfSSRC, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender pipeline: %v", err)
+	}
+	registry.attachSendPipeline(sender)
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, bytes.Repeat([]byte{1}, 31)); err == nil {
+		t.Fatal("short group raw epoch was accepted")
+	}
+	peerPacket, _ := protectParticipantAudio(t, callKey, self, peer, []byte{3})
+	if _, ok := registry.DecodeAudio(peerPacket); !ok {
+		t.Fatal("malformed epoch changed a working receive key")
+	}
+	remote, err := NewMediaPipeline(callKey, peer.String(), self.String(), selfSSRC, FrameSamples)
+	if err != nil {
+		t.Fatalf("remote call-key receiver: %v", err)
+	}
+	outbound, err := sender.ProtectAudio([]byte{4})
+	if err != nil {
+		t.Fatalf("protect after malformed epoch: %v", err)
+	}
+	if _, got, ok := remote.UnprotectAudio(outbound); !ok || !bytes.Equal(got, []byte{4}) {
+		t.Fatal("malformed epoch changed a working send key")
+	}
 }
 
 func TestParticipantReceiveRegistryPreservesFallbackAcrossPrePIDGroupUpdate(t *testing.T) {
@@ -253,143 +396,6 @@ func TestParticipantReceiveRegistryPrePIDUpdatePrunesNonFallbackReceivers(t *tes
 	}
 	if _, ok := registry.bySSRC[addedReceiver.ssrc]; ok {
 		t.Fatal("pre-PID update retained non-fallback participant SSRC")
-	}
-}
-
-func TestParticipantReceiveRegistryBuffersAndAppliesParticipantRawRekey(t *testing.T) {
-	callKey := iota32()
-	rawKey := bytes.Repeat([]byte{0xa5}, 32)
-	self := mediaTestJID("111111111111111", 14)
-	peer := mediaTestJID("222222222222222", 0)
-	added := mediaTestJID("333333333333333", 43)
-	pending := mediaTestJID("444444444444444", 63)
-	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
-		return &recordingParticipantDecoder{}
-	})
-	if err != nil {
-		t.Fatalf("new registry: %v", err)
-	}
-	if err = registry.ApplyParticipantRawRekey(17, added, rawKey); err != nil {
-		t.Fatalf("buffer participant rekey: %v", err)
-	}
-	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
-		t.Fatalf("apply matching roster: %v", err)
-	}
-
-	rawPacket, _ := protectRawParticipantAudio(t, rawKey, added, []byte{0x61})
-	audio, ok := registry.DecodeAudio(rawPacket)
-	if !ok {
-		t.Fatal("matching roster did not activate the buffered participant rekey")
-	}
-	if audio.DeviceJID != added || len(audio.PCM) != 1 || audio.PCM[0] != 0x61 {
-		t.Fatalf("raw-key participant audio = %+v", audio)
-	}
-	peerPacket, _ := protectParticipantAudio(t, callKey, self, peer, []byte{0x62})
-	if _, ok = registry.DecodeAudio(peerPacket); !ok {
-		t.Fatal("participant rekey modified the original peer's receive keys")
-	}
-	if err = registry.ApplyParticipantRawRekey(17, added, rawKey); err != nil {
-		t.Fatalf("identical duplicate rekey: %v", err)
-	}
-	conflicting := bytes.Repeat([]byte{0x5a}, 32)
-	if err = registry.ApplyParticipantRawRekey(17, added, conflicting); err == nil {
-		t.Fatal("conflicting duplicate participant rekey was accepted")
-	}
-}
-
-func TestParticipantReceiveRegistryDoesNotFallThroughUnknownDeviceToSoleRemote(t *testing.T) {
-	callKey := iota32()
-	rawKey := bytes.Repeat([]byte{0xa5}, 32)
-	self := mediaTestJID("111111111111111", 14)
-	peer := mediaTestJID("222222222222222", 0)
-	added := mediaTestJID("333333333333333", 43)
-	pending := mediaTestJID("444444444444444", 63)
-	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
-		return &recordingParticipantDecoder{}
-	})
-	if err != nil {
-		t.Fatalf("new registry: %v", err)
-	}
-	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, false)); err != nil {
-		t.Fatalf("apply sole-remote roster: %v", err)
-	}
-	unknownDevice := mediaTestJID(peer.User, 7)
-	if err = registry.ApplyParticipantRawRekey(17, unknownDevice, rawKey); err == nil {
-		t.Fatal("unknown author device fell through to sole active remote")
-	}
-	peerPacket, _ := protectParticipantAudio(t, callKey, self, peer, []byte{0x62})
-	if _, ok := registry.DecodeAudio(peerPacket); !ok {
-		t.Fatal("rejected unknown-device rekey modified sole remote receive keys")
-	}
-}
-
-func TestParticipantReceiveRegistryAppliesDelayedRekeyForStillActiveAuthor(t *testing.T) {
-	callKey := iota32()
-	rawKey := bytes.Repeat([]byte{0xa5}, 32)
-	self := mediaTestJID("111111111111111", 14)
-	peer := mediaTestJID("222222222222222", 0)
-	added := mediaTestJID("333333333333333", 43)
-	pending := mediaTestJID("444444444444444", 63)
-	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
-		return &recordingParticipantDecoder{}
-	})
-	if err != nil {
-		t.Fatalf("new registry: %v", err)
-	}
-	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 18, true)); err != nil {
-		t.Fatalf("apply newer roster: %v", err)
-	}
-	if err = registry.ApplyParticipantRawRekey(17, added, rawKey); err != nil {
-		t.Fatalf("apply delayed participant rekey: %v", err)
-	}
-	rawPacket, _ := protectRawParticipantAudio(t, rawKey, added, []byte{0x63})
-	if _, ok := registry.DecodeAudio(rawPacket); !ok {
-		t.Fatal("delayed participant rekey was dropped solely because roster was newer")
-	}
-}
-
-func TestParticipantReceiveRegistryRekeyPreservesOtherParticipantRolloverAndDecoder(t *testing.T) {
-	callKey := iota32()
-	rawKey := bytes.Repeat([]byte{0xa5}, 32)
-	self := mediaTestJID("111111111111111", 14)
-	peer := mediaTestJID("222222222222222", 0)
-	added := mediaTestJID("333333333333333", 43)
-	pending := mediaTestJID("444444444444444", 63)
-	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
-		return &recordingParticipantDecoder{}
-	})
-	if err != nil {
-		t.Fatalf("new registry: %v", err)
-	}
-	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
-		t.Fatalf("apply group roster: %v", err)
-	}
-	peerReceiver := registry.byPID[0]
-	peerDecoder := peerReceiver.decoder
-	for _, sequence := range []uint16{0xfffe, 0xffff} {
-		packet := protectParticipantAudioAt(t, callKey, peer, sequence, 0, []byte{0x64})
-		if _, ok := registry.DecodeAudio(packet); !ok {
-			t.Fatalf("peer packet sequence %d was rejected before other participant rekey", sequence)
-		}
-	}
-
-	if err = registry.ApplyParticipantRawRekey(17, added, rawKey); err != nil {
-		t.Fatalf("apply added participant rekey: %v", err)
-	}
-	addedCallKeyPacket, _ := protectParticipantAudio(t, callKey, self, added, []byte{0x65})
-	if _, ok := registry.DecodeAudio(addedCallKeyPacket); ok {
-		t.Fatal("added participant's old call-key packet authenticated after raw rekey")
-	}
-	addedRawPacket, _ := protectRawParticipantAudio(t, rawKey, added, []byte{0x66})
-	if _, ok := registry.DecodeAudio(addedRawPacket); !ok {
-		t.Fatal("added participant's raw-key packet was rejected after rekey")
-	}
-	peerWrapped := protectParticipantAudioAt(t, callKey, peer, 0, 1, []byte{0x67})
-	if _, ok := registry.DecodeAudio(peerWrapped); !ok {
-		t.Fatal("rekeying added participant reset original peer rollover state")
-	}
-	if registry.byPID[0] != peerReceiver || registry.byPID[0].decoder != peerDecoder {
-		t.Fatal("rekeying added participant replaced original peer receiver or decoder")
 	}
 }
 

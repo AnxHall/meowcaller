@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### media/group_key_epoch — `partial`
+### media/group_key_epoch — `KAT-verified`
 - Added the corrective two-sided-capture contract for one transaction-wide raw
   media epoch. The elected `enc_rekey` author distributes one shared root; local
   send keys derive with the self device ID and every receive key derives with
@@ -18,7 +18,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Implemented concurrency-safe raw-epoch installation on both media directions.
   Focused KATs prove new-key authentication, old-key rejection, unchanged SSRC,
   continued sequence/timestamp state, and receive ROC continuity across
-  `0xffff → 0`. Registry-wide and live-engine installation remain pending.
+  `0xffff → 0`.
+- Replaced the superseded author-only registry path with one transaction-wide
+  epoch installed into the live sender and every active receiver. The registry
+  buffers future/pre-roster epochs, carries the current epoch to new roster
+  members, rejects conflicts and malformed roots without partial mutation,
+  ignores stale epochs, and clears queued key material at call end. Focused/full
+  tests, race, build, and vet pass; live WhatsApp E2E remains pending.
   CodeRabbit review was unavailable because its CLI is not installed.
 
 ### voip/group_invite_accept — `planned`

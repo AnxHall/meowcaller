@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
-	"sort"
 	"sync"
 
 	"github.com/purpshell/meowcaller/mlow"
 	"github.com/purpshell/meowcaller/rtp"
+	"github.com/purpshell/meowcaller/srtp"
 	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow/types"
 )
@@ -40,13 +40,7 @@ type participantAudioReceiver struct {
 	decoder       participantAudioDecoder
 }
 
-type participantRawRekey struct {
-	transactionID uint32
-	author        types.JID
-	rawKey        []byte
-}
-
-type installedParticipantRawRekey struct {
+type installedGroupRawEpoch struct {
 	transactionID uint32
 	rawKey        []byte
 }
@@ -64,8 +58,10 @@ type participantReceiveRegistry struct {
 	byDeviceID     map[string]*participantAudioReceiver
 	byPID          map[uint32]*participantAudioReceiver
 	bySSRC         map[uint32]*participantAudioReceiver
-	pendingRekeys  map[uint32]map[string]participantRawRekey
-	installedKeys  map[string]installedParticipantRawRekey
+	sendPipe       *MediaPipeline
+	pendingEpochs  map[uint32][]byte
+	installedEpoch installedGroupRawEpoch
+	hasEpoch       bool
 	log            zerolog.Logger
 }
 
@@ -92,8 +88,7 @@ func newParticipantReceiveRegistry(
 		byDeviceID:     make(map[string]*participantAudioReceiver),
 		byPID:          make(map[uint32]*participantAudioReceiver),
 		bySSRC:         make(map[uint32]*participantAudioReceiver),
-		pendingRekeys:  make(map[uint32]map[string]participantRawRekey),
-		installedKeys:  make(map[string]installedParticipantRawRekey),
+		pendingEpochs:  make(map[uint32][]byte),
 		log:            resolveConfig(opts).log,
 	}
 	peerJID, err := types.ParseJID(peerLID)
@@ -200,41 +195,33 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 		next.receiver.hasPID = true
 		next.receiver.mu.Unlock()
 	}
-	nextInstalledKeys := make(map[string]installedParticipantRawRekey)
-	for participantID := range nextByDeviceID {
-		if installed, ok := r.installedKeys[participantID]; ok {
-			nextInstalledKeys[participantID] = installed
-		}
-	}
 	r.byDeviceID = nextByDeviceID
 	r.byPID = nextByPID
 	r.bySSRC = nextBySSRC
-	r.installedKeys = nextInstalledKeys
 	r.transactionID = update.TransactionID
 	r.hasGroupUpdate = true
-	var matching []participantRawRekey
-	for transactionID, byAuthor := range r.pendingRekeys {
-		if transactionID <= update.TransactionID {
-			for _, rekey := range byAuthor {
-				matching = append(matching, rekey)
+	var newestPendingEpoch installedGroupRawEpoch
+	var hasNewestPendingEpoch bool
+	for transactionID, rawKey := range r.pendingEpochs {
+		if transactionID > update.TransactionID {
+			continue
+		}
+		if !hasNewestPendingEpoch || transactionID > newestPendingEpoch.transactionID {
+			newestPendingEpoch = installedGroupRawEpoch{
+				transactionID: transactionID,
+				rawKey:        bytes.Clone(rawKey),
 			}
-			delete(r.pendingRekeys, transactionID)
+			hasNewestPendingEpoch = true
 		}
+		delete(r.pendingEpochs, transactionID)
 	}
-	sort.Slice(matching, func(i, j int) bool {
-		if matching[i].transactionID != matching[j].transactionID {
-			return matching[i].transactionID < matching[j].transactionID
+	if hasNewestPendingEpoch {
+		if err := r.applyGroupRawEpochLocked(newestPendingEpoch.transactionID, newestPendingEpoch.rawKey); err != nil {
+			return err
 		}
-		return matching[i].author.String() < matching[j].author.String()
-	})
-	for _, rekey := range matching {
-		if err := r.applyParticipantRawRekeyLocked(rekey); err != nil {
-			r.log.Warn().
-				Err(err).
-				Str("call_id", r.callID).
-				Uint32("transaction_id", rekey.transactionID).
-				Str("author", rekey.author.String()).
-				Msg("discarding participant rekey that does not match active roster")
+	} else if r.hasEpoch {
+		if err := r.installGroupRawEpochLocked(r.installedEpoch.rawKey); err != nil {
+			return err
 		}
 	}
 	r.log.Info().
@@ -245,93 +232,84 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 	return nil
 }
 
-// ApplyParticipantRawRekey installs or buffers one participant-scoped keygen-v2
-// receive key according to the authoritative group roster transaction.
-func (r *participantReceiveRegistry) ApplyParticipantRawRekey(transactionID uint32, author types.JID, rawKey []byte) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L64-L93
-	if author.IsEmpty() {
-		return fmt.Errorf("meowcaller: participant rekey author is empty")
-	}
+func (r *participantReceiveRegistry) attachSendPipeline(sendPipe *MediaPipeline) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L78-L86
+	r.mu.Lock()
+	r.sendPipe = sendPipe
+	r.mu.Unlock()
+}
+
+// ApplyGroupRawEpoch installs or buffers one shared keygen-v2 media epoch
+// according to the authoritative group roster transaction.
+func (r *participantReceiveRegistry) ApplyGroupRawEpoch(transactionID uint32, rawKey []byte) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L88-L120
 	if len(rawKey) != 32 {
-		return fmt.Errorf("meowcaller: participant raw rekey has %d bytes, want 32", len(rawKey))
-	}
-	rekey := participantRawRekey{
-		transactionID: transactionID,
-		author:        author,
-		rawKey:        bytes.Clone(rawKey),
+		return fmt.Errorf("meowcaller: group raw epoch has %d bytes, want 32", len(rawKey))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.hasGroupUpdate || transactionID > r.transactionID {
-		return r.bufferParticipantRawRekeyLocked(rekey)
+		if existing, ok := r.pendingEpochs[transactionID]; ok {
+			if bytes.Equal(existing, rawKey) {
+				return nil
+			}
+			return fmt.Errorf("meowcaller: conflicting group raw epoch for transaction %d", transactionID)
+		}
+		r.pendingEpochs[transactionID] = bytes.Clone(rawKey)
+		return nil
 	}
-	return r.applyParticipantRawRekeyLocked(rekey)
+	return r.applyGroupRawEpochLocked(transactionID, rawKey)
 }
 
-func (r *participantReceiveRegistry) bufferParticipantRawRekeyLocked(rekey participantRawRekey) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L70-L86
-	authorID := rtp.FormatE2ESrtpParticipantID(rekey.author.String())
-	byAuthor := r.pendingRekeys[rekey.transactionID]
-	if byAuthor == nil {
-		byAuthor = make(map[string]participantRawRekey)
-		r.pendingRekeys[rekey.transactionID] = byAuthor
-	}
-	if existing, ok := byAuthor[authorID]; ok {
-		if bytes.Equal(existing.rawKey, rekey.rawKey) {
+func (r *participantReceiveRegistry) applyGroupRawEpochLocked(transactionID uint32, rawKey []byte) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L101-L120
+	if r.hasEpoch {
+		if transactionID < r.installedEpoch.transactionID {
 			return nil
 		}
-		return fmt.Errorf("meowcaller: conflicting participant rekey for transaction %d and author %s", rekey.transactionID, rekey.author)
+		if transactionID == r.installedEpoch.transactionID {
+			if bytes.Equal(r.installedEpoch.rawKey, rawKey) {
+				return nil
+			}
+			return fmt.Errorf("meowcaller: conflicting group raw epoch for transaction %d", transactionID)
+		}
 	}
-	byAuthor[authorID] = rekey
+	if err := r.installGroupRawEpochLocked(rawKey); err != nil {
+		return err
+	}
+	r.installedEpoch = installedGroupRawEpoch{
+		transactionID: transactionID,
+		rawKey:        bytes.Clone(rawKey),
+	}
+	r.hasEpoch = true
 	return nil
 }
 
-func (r *participantReceiveRegistry) applyParticipantRawRekeyLocked(rekey participantRawRekey) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L80-L93
-	authorID := rtp.FormatE2ESrtpParticipantID(rekey.author.String())
-	receiver := r.byDeviceID[authorID]
-	if receiver == nil && rekey.author.Device == 0 && rekey.author.RawAgent == 0 {
-		var candidate *participantAudioReceiver
-		authorUser := rekey.author.ToNonAD()
-		for _, active := range r.byDeviceID {
-			if active.userJID.ToNonAD() != authorUser {
-				continue
-			}
-			if candidate != nil {
-				return fmt.Errorf("meowcaller: participant rekey author %s is ambiguous in active roster", rekey.author)
-			}
-			candidate = active
-		}
-		receiver = candidate
+func (r *participantReceiveRegistry) installGroupRawEpochLocked(rawKey []byte) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	if r.sendPipe == nil {
+		return fmt.Errorf("meowcaller: group media sender is not attached")
 	}
-	if receiver == nil {
-		return fmt.Errorf("meowcaller: participant rekey author %s is not active in roster", rekey.author)
-	}
-	participantID := receiver.participantID
-	if installed, ok := r.installedKeys[participantID]; ok {
-		if rekey.transactionID < installed.transactionID {
-			return nil
-		}
-		if rekey.transactionID == installed.transactionID {
-			if bytes.Equal(installed.rawKey, rekey.rawKey) {
-				return nil
-			}
-			return fmt.Errorf("meowcaller: conflicting participant rekey for transaction %d and author %s", rekey.transactionID, rekey.author)
-		}
-	}
-	receiver.mu.Lock()
-	// ASSUMPTION: the target receiver ROC resets with its key. The live newly
-	// activated participant had no authenticated ROC state; an active rollover
-	// requires a packet vector to decide whether WhatsApp preserves the ROC.
-	err := receiver.pipe.RekeyRecvFromRaw(rekey.rawKey, receiver.deviceJID.String())
-	receiver.mu.Unlock()
+	sendKeys, err := srtp.DeriveE2eKeysFromRaw(rawKey, r.selfID)
 	if err != nil {
-		return fmt.Errorf("meowcaller: install participant raw rekey: %w", err)
+		return fmt.Errorf("meowcaller: derive group send epoch: %w", err)
 	}
-	r.installedKeys[participantID] = installedParticipantRawRekey{
-		transactionID: rekey.transactionID,
-		rawKey:        bytes.Clone(rekey.rawKey),
+	receiveKeys := make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(r.byDeviceID))
+	for _, receiver := range r.byDeviceID {
+		keys, deriveErr := srtp.DeriveE2eKeysFromRaw(rawKey, receiver.participantID)
+		if deriveErr != nil {
+			return fmt.Errorf("meowcaller: derive group receive epoch: %w", deriveErr)
+		}
+		receiveKeys[receiver] = keys
 	}
+	r.sendPipe.installSendKeys(sendKeys)
+	for receiver, keys := range receiveKeys {
+		receiver.pipe.installRecvKeysPreservingROC(keys)
+	}
+	r.log.Info().
+		Str("call_id", r.callID).
+		Int("remote_participants", len(receiveKeys)).
+		Msg("installed shared group media key epoch")
 	return nil
 }
 

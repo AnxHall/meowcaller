@@ -212,7 +212,7 @@ func TestEngineGroupUpdatePreservesOriginalPeerAndQueuesLatestRoster(t *testing.
 	}
 }
 
-func TestEngineQueuesAndRoutesParticipantRekeyByAuthor(t *testing.T) {
+func TestEngineQueuesAndRoutesSharedGroupEpochWithDistributorMetadata(t *testing.T) {
 	eng, call := testEngineWithOutgoingCall()
 	m := eng.calls[call.ID()]
 	author := mediaTestJID("333333333333333", 43)
@@ -228,10 +228,10 @@ func TestEngineQueuesAndRoutesParticipantRekeyByAuthor(t *testing.T) {
 	eng.onEncRekey(event)
 	rawKey[0] ^= 0xff
 	if len(m.pendingGroupRekeys) != 1 {
-		t.Fatalf("queued participant rekeys = %d, want 1", len(m.pendingGroupRekeys))
+		t.Fatalf("queued group epochs = %d, want 1", len(m.pendingGroupRekeys))
 	}
 	if m.pendingGroupRekeys[0].From != author || m.pendingGroupRekeys[0].RawKey[0] != 0xa5 {
-		t.Fatalf("queued participant rekey = %+v", m.pendingGroupRekeys[0])
+		t.Fatalf("queued group epoch = %+v", m.pendingGroupRekeys[0])
 	}
 
 	var applied events.CallEncRekey
@@ -248,17 +248,17 @@ func TestEngineQueuesAndRoutesParticipantRekeyByAuthor(t *testing.T) {
 	}
 	eng.onEncRekey(next)
 	if applied.From != author || applied.From == creator || applied.Rekey.TransactionID != 18 {
-		t.Fatalf("applied participant rekey = %+v", applied)
+		t.Fatalf("applied group epoch = %+v", applied)
 	}
 
 	m.applyGroupRekey = nil
 	eng.onEncRekey(next)
 	if len(m.pendingGroupRekeys) != 2 {
-		t.Fatalf("queued participant rekeys before end = %d, want 2", len(m.pendingGroupRekeys))
+		t.Fatalf("queued group epochs before end = %d, want 2", len(m.pendingGroupRekeys))
 	}
 	eng.finishCall(call.ID(), "ended")
 	if len(m.pendingGroupRekeys) != 0 || m.applyGroupRekey != nil {
-		t.Fatal("call end retained pending participant key material or callback")
+		t.Fatal("call end retained pending group key material or callback")
 	}
 	applied = events.CallEncRekey{}
 	eng.onEncRekey(next)

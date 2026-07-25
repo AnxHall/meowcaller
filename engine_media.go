@@ -266,6 +266,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	if err != nil {
 		return err
 	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L78-L86
+	audioReceivers.attachSendPipeline(txPipe)
 	audioRtcp, err := newMediaSrtcpSender(callKey, selfLID, ssrc, false)
 	if err != nil {
 		return err
@@ -483,10 +485,9 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return nil
 	}
 	applyGroupRekey := func(rekey events.CallEncRekey) error {
-		// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L80-L93
-		return audioReceivers.ApplyParticipantRawRekey(
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L56-L112
+		return audioReceivers.ApplyGroupRawEpoch(
 			rekey.Rekey.TransactionID,
-			rekey.From,
 			rekey.RawKey,
 		)
 	}
