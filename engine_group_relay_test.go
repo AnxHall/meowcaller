@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/purpshell/meowcaller/stun"
 	"go.mau.fi/whatsmeow/types"
@@ -60,9 +61,6 @@ func TestGroupRelayAllocateStateRotatesCredentialsOnExistingTransport(t *testing
 	if got := state.Current(); !bytes.Equal(got, want) {
 		t.Fatalf("current allocate = %x, want %x", got, want)
 	}
-	if got := state.CurrentKey(); !bytes.Equal(got, groupKey) {
-		t.Fatalf("current key = %x, want %x", got, groupKey)
-	}
 	if bytes.Equal(state.Current(), initial) {
 		t.Fatal("keepalive retained the initial one-to-one allocate")
 	}
@@ -118,8 +116,20 @@ func TestGroupRelayAllocateStateSendFailureKeepsPriorCredentialsRetryable(t *tes
 	if got := state.Current(); !bytes.Equal(got, initial) {
 		t.Fatalf("current allocate after failure = %x, want %x", got, initial)
 	}
-	if got := state.CurrentKey(); !bytes.Equal(got, initialKey) {
-		t.Fatalf("current key after failure = %x, want %x", got, initialKey)
+	bindingTransactionID := [12]byte{11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
+	request := stun.EncodeStunRequest(stun.MsgBindingRequest, bindingTransactionID, nil, nil, false)
+	response, answered, err := state.SendBindingSuccess(request, func([]byte) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("send binding success after failed refresh: %v", err)
+	}
+	if !answered {
+		t.Fatal("binding request was not answered after failed refresh")
+	}
+	wantInitial := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, initialKey, true)
+	if !bytes.Equal(response, wantInitial) {
+		t.Fatalf("binding success after failed refresh = %x, want initial-key response %x", response, wantInitial)
 	}
 
 	changed, err = state.Apply(endpoint, groupRelay, streamSSRCs, transactionID, func([]byte) error {
@@ -166,8 +176,13 @@ func TestGroupRelayBindingSuccessUsesCommittedRotatedKey(t *testing.T) {
 
 	bindingTransactionID := [12]byte{11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
 	request := stun.EncodeStunRequest(stun.MsgBindingRequest, bindingTransactionID, nil, nil, false)
-	response, ok := buildRelayBindingSuccess(request, state.CurrentKey())
-	if !ok {
+	response, answered, err := state.SendBindingSuccess(request, func([]byte) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("send binding success: %v", err)
+	}
+	if !answered {
 		t.Fatal("binding request was not answered")
 	}
 	wantRotated := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, rotatedKey, true)
@@ -177,5 +192,170 @@ func TestGroupRelayBindingSuccessUsesCommittedRotatedKey(t *testing.T) {
 	wantInitial := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, initialKey, true)
 	if bytes.Equal(response, wantInitial) {
 		t.Fatal("binding success still authenticates with the initial one-to-one key")
+	}
+}
+
+func TestGroupRelayKeepaliveWaitsForRotatedApplyCommit(t *testing.T) {
+	initial := []byte{0x00, 0x01, 0x02}
+	initialKey := bytes.Repeat([]byte{0x12}, 16)
+	rotatedKey := bytes.Repeat([]byte{0x24}, 16)
+	groupToken := bytes.Repeat([]byte{0x42}, 174)
+	state := newGroupRelayAllocateState(initial, initialKey)
+	endpoint := &types.RelayEndpoint{
+		RelayName: "zrh1c01",
+		IPv4:      "157.240.17.62",
+		Port:      3478,
+	}
+	groupRelay := &types.GroupCallRelay{
+		TransactionID: 1,
+		Key:           rotatedKey,
+		Tokens:        [][]byte{groupToken},
+		Endpoints: []types.GroupCallRelayEndpoint{{
+			RelayName: "zrh1c01",
+			TokenID:   0,
+		}},
+	}
+	streamSSRCs := [9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	allocateTransactionID := [12]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	endpointXOR, ok := stun.EncodeXorRelayEndpoint(endpoint.IPv4, endpoint.Port)
+	if !ok {
+		t.Fatal("encode relay endpoint")
+	}
+	wantRotated := stun.BuildWasmStunAllocateRequestWithStreamSsrcs(
+		allocateTransactionID,
+		groupToken,
+		endpointXOR,
+		streamSSRCs,
+		rotatedKey,
+	)
+
+	applySendStarted := make(chan struct{})
+	releaseApplySend := make(chan struct{})
+	applyReleased := false
+	defer func() {
+		if !applyReleased {
+			close(releaseApplySend)
+		}
+	}()
+	applyDone := make(chan error, 1)
+	go func() {
+		_, err := state.Apply(endpoint, groupRelay, streamSSRCs, allocateTransactionID, func([]byte) error {
+			close(applySendStarted)
+			<-releaseApplySend
+			return nil
+		})
+		applyDone <- err
+	}()
+	<-applySendStarted
+
+	keepaliveCallStarted := make(chan struct{})
+	keepaliveSent := make(chan []byte, 1)
+	keepaliveDone := make(chan error, 1)
+	go func() {
+		close(keepaliveCallStarted)
+		keepaliveDone <- state.SendCurrent(func(packet []byte) error {
+			keepaliveSent <- append([]byte(nil), packet...)
+			return nil
+		})
+	}()
+	<-keepaliveCallStarted
+
+	select {
+	case packet := <-keepaliveSent:
+		t.Fatalf("keepalive sent before rotated Apply committed: %x", packet)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(releaseApplySend)
+	applyReleased = true
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply group relay: %v", err)
+	}
+	if err := <-keepaliveDone; err != nil {
+		t.Fatalf("send current allocate: %v", err)
+	}
+	if got := <-keepaliveSent; !bytes.Equal(got, wantRotated) {
+		t.Fatalf("post-commit keepalive = %x, want rotated allocate %x", got, wantRotated)
+	}
+}
+
+func TestGroupRelayBindingWaitsForRotatedApplyCommit(t *testing.T) {
+	initial := []byte{0x00, 0x01, 0x02}
+	initialKey := bytes.Repeat([]byte{0x12}, 16)
+	rotatedKey := bytes.Repeat([]byte{0x24}, 16)
+	state := newGroupRelayAllocateState(initial, initialKey)
+	endpoint := &types.RelayEndpoint{
+		RelayName: "zrh1c01",
+		IPv4:      "157.240.17.62",
+		Port:      3478,
+	}
+	groupRelay := &types.GroupCallRelay{
+		TransactionID: 1,
+		Key:           rotatedKey,
+		Tokens:        [][]byte{bytes.Repeat([]byte{0x42}, 174)},
+		Endpoints: []types.GroupCallRelayEndpoint{{
+			RelayName: "zrh1c01",
+			TokenID:   0,
+		}},
+	}
+	streamSSRCs := [9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	allocateTransactionID := [12]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+
+	applySendStarted := make(chan struct{})
+	releaseApplySend := make(chan struct{})
+	applyReleased := false
+	defer func() {
+		if !applyReleased {
+			close(releaseApplySend)
+		}
+	}()
+	applyDone := make(chan error, 1)
+	go func() {
+		_, err := state.Apply(endpoint, groupRelay, streamSSRCs, allocateTransactionID, func([]byte) error {
+			close(applySendStarted)
+			<-releaseApplySend
+			return nil
+		})
+		applyDone <- err
+	}()
+	<-applySendStarted
+
+	bindingTransactionID := [12]byte{11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
+	request := stun.EncodeStunRequest(stun.MsgBindingRequest, bindingTransactionID, nil, nil, false)
+	bindingCallStarted := make(chan struct{})
+	bindingSent := make(chan []byte, 1)
+	bindingDone := make(chan error, 1)
+	go func() {
+		close(bindingCallStarted)
+		_, _, err := state.SendBindingSuccess(request, func(packet []byte) error {
+			bindingSent <- append([]byte(nil), packet...)
+			return nil
+		})
+		bindingDone <- err
+	}()
+	<-bindingCallStarted
+
+	select {
+	case packet := <-bindingSent:
+		t.Fatalf("binding success sent before rotated Apply committed: %x", packet)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(releaseApplySend)
+	applyReleased = true
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply group relay: %v", err)
+	}
+	if err := <-bindingDone; err != nil {
+		t.Fatalf("send binding success: %v", err)
+	}
+	wantRotated := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, rotatedKey, true)
+	got := <-bindingSent
+	if !bytes.Equal(got, wantRotated) {
+		t.Fatalf("post-commit binding success = %x, want rotated-key response %x", got, wantRotated)
+	}
+	wantInitial := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, initialKey, true)
+	if bytes.Equal(got, wantInitial) {
+		t.Fatal("post-commit binding success used the initial one-to-one key")
 	}
 }

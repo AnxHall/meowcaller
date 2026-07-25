@@ -31,11 +31,14 @@ func (s *groupRelayAllocateState) Current() []byte {
 	return append([]byte(nil), s.packet...)
 }
 
-func (s *groupRelayAllocateState) CurrentKey() []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L62
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return append([]byte(nil), s.key...)
+func (s *groupRelayAllocateState) SendCurrent(send func([]byte) error) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bcfb7f0c076b131422c22f024dfff080448e70f4/datasheets/group-media-relay-refresh.md#L59-L67
+	if send == nil {
+		return fmt.Errorf("meowcaller: relay keepalive send is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return send(s.packet)
 }
 
 func (s *groupRelayAllocateState) Apply(
@@ -102,6 +105,9 @@ func (s *groupRelayAllocateState) Apply(
 
 func buildRelayBindingSuccess(request, integrityKey []byte) ([]byte, bool) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L72-L92
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bcfb7f0c076b131422c22f024dfff080448e70f4/datasheets/group-media-relay-refresh.md#L52-L54
+	// ASSUMPTION: binding-success uses the committed Allocate integrity key; a live
+	// post-rotation binding-success authenticated by another key invalidates this.
 	messageType, ok := stun.StunMessageType(request)
 	if !ok || messageType != stun.MsgBindingRequest || len(integrityKey) == 0 {
 		return nil, false
@@ -113,4 +119,26 @@ func buildRelayBindingSuccess(request, integrityKey []byte) ([]byte, bool) {
 	var transaction [12]byte
 	copy(transaction[:], transactionID)
 	return stun.EncodeStunRequest(stun.MsgBindingSuccess, transaction, nil, integrityKey, true), true
+}
+
+func (s *groupRelayAllocateState) SendBindingSuccess(
+	request []byte,
+	send func([]byte) error,
+) ([]byte, bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bcfb7f0c076b131422c22f024dfff080448e70f4/datasheets/group-media-relay-refresh.md#L77-L111
+	// ASSUMPTION: binding-success uses the committed Allocate integrity key; a live
+	// post-rotation binding-success authenticated by another key invalidates this.
+	if send == nil {
+		return nil, false, fmt.Errorf("meowcaller: relay binding-success send is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	response, ok := buildRelayBindingSuccess(request, s.key)
+	if !ok {
+		return nil, false, nil
+	}
+	if err := send(response); err != nil {
+		return response, true, err
+	}
+	return response, true, nil
 }

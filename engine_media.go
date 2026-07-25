@@ -346,8 +346,11 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			var tx [12]byte
 			_, _ = rand.Read(tx[:])
 			ping := stun.BuildWhatsappPing(tx, log)
-			// Source of truth: https://github.com/purpshell/meowcaller/blob/6b568ebf25068e2720ba474a7092d482f53e3091/datasheets/group-media-relay-refresh.md#L77-L79
-			if _, err := ch.Send(allocateState.Current()); err != nil {
+			// Source of truth: https://github.com/purpshell/meowcaller/blob/bcfb7f0c076b131422c22f024dfff080448e70f4/datasheets/group-media-relay-refresh.md#L59-L67
+			if err := allocateState.SendCurrent(func(packet []byte) error {
+				_, sendErr := ch.Send(packet)
+				return sendErr
+			}); err != nil {
 				return
 			}
 			_, _ = ch.Send(ping[:])
@@ -677,13 +680,18 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		case relay.RelayPacketStun:
 			mt, isStun := stun.StunMessageType(pkt)
 			if isStun && mt == stun.MsgBindingRequest {
-				// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L72-L92
-				resp, ok := buildRelayBindingSuccess(pkt, allocateState.CurrentKey())
-				if !ok {
-					continue
-				}
-				if _, err := ch.Send(resp); err != nil {
+				// Source of truth: https://github.com/purpshell/meowcaller/blob/bcfb7f0c076b131422c22f024dfff080448e70f4/datasheets/group-media-relay-refresh.md#L79-L111
+				// ASSUMPTION: binding-success uses the committed Allocate integrity
+				// key; a live post-rotation response using another key invalidates this.
+				resp, answered, err := allocateState.SendBindingSuccess(pkt, func(packet []byte) error {
+					_, sendErr := ch.Send(packet)
+					return sendErr
+				})
+				if err != nil {
 					return fmt.Errorf("relay send binding-success: %w", err)
+				}
+				if !answered {
+					continue
 				}
 				e.c.diag.Emit("stun", map[string]any{
 					"event":     "binding_request_answered",

@@ -210,6 +210,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   succeeds. Failed sends retain the prior credentials and remain retryable.
   The capture contains no post-rotation binding-success packet, so the
   binding-response key remains an explicit protocol inference pending live E2E.
+- Serialized keepalive and binding-response build/send operations with relay
+  refresh so a control packet using old credentials cannot leave after a rotated
+  Apply commits. Deterministic blocked-send KATs cover both orderings; the
+  binding-key choice remains synthetic and the module remains partial.
 
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-
