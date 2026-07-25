@@ -55,7 +55,11 @@ different LID.
   only the sanitized public roster.
 - Track invite targets before signaling starts so a fast group update cannot
   race ahead of correlation.
-- Remove failed submissions from pending correlation.
+- While the per-target signaling result is still in flight, stage a matching
+  connected PID-bearing roster outcome instead of publishing it.
+- Publish the `participant_invite` result first. On success, publish any staged
+  join afterward; on failure, discard the staged join and remove the target from
+  pending correlation.
 - Publish `participant_join` only when state is `connected` and at least one
   device has `HasPID`; preserve PID zero.
 - Publish at most one join outcome per submitted target.
@@ -77,7 +81,8 @@ different LID.
 ## Validation boundaries
 
 - KATs cover target normalization/deduplication, LID and PN alias matching, PID
-  zero, intermediate states, failed invite removal, one-shot joins, stale-call
-  suppression, failed-answer cleanup, generic state serialization,
+  zero, intermediate states, synchronous roster/result ordering, failed invite
+  removal without a false join, one-shot joins, stale-call suppression,
+  failed-answer cleanup, generic state serialization,
   lifecycle/roster reconnect replay, and page presentation.
 - Live WhatsApp behavior remains the final end-to-end gate.

@@ -97,6 +97,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Hardened the controller against stale old-call callbacks, duplicate normalized
   targets, PN/LID alias double joins, failed-answer busy state, and SSE
   reconnects that previously lost the latest authoritative roster.
+- Staged PID-bearing joins that race synchronously with an in-flight invite
+  result, publishing them only after success and discarding them after failure
+  so the console cannot report both a failed invite and a false join.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 
