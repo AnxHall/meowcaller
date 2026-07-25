@@ -8,6 +8,7 @@ independently observed group audio SSRCs and sequence spans below.
 
 **Reference pinned at:**
 
+- capture SHA-256 `d565e26f2ca48483525c5bf4dcc2c1bf5ae616299190d128f5f35f74ac50d6c6`
 - capture SHA-256 `9d6463714430c55ddb3ccb95e153f1d06d11a1feea7a153d1ea95f39f48b6889`
 - capture version `wa-voip-diag/v2`
 - RTCP reception-state commit `d37b1756d05fb34c9b6c2410c48dd20d27394929`
@@ -34,14 +35,18 @@ call. The pinned RTCP reception implementation defines one
 `RtcpReceptionStats` instance as the state for one inbound SSRC: changing its
 SSRC resets sequence, loss, jitter, and sender-report timing.
 
-The capture records a direct-call sender report at raw JSONL line 7846 and
-post-group-recreation sender reports at lines 16751, 16841, and 16929:
+The add-people capture records a direct-call sender report at raw JSONL line
+2181 and a post-group-commit sender report at line 7079. The two-sided capture
+independently records the same transition at direct line 7846 and group lines
+16751, 16841, and 16929:
 
 ```text
-line 7846:  122 protected bytes, first bytes 81 c8 00 12
-line 16751:  74 protected bytes, first bytes 81 c8 00 0e
-line 16841:  74 protected bytes, first bytes 81 c8 00 0e
-line 16929:  74 protected bytes, first bytes 81 c8 00 0e
+add-people line 2181: 122 protected bytes, first bytes 81 c8 00 12
+add-people line 7079: 74 protected bytes, first bytes 81 c8 00 0e
+two-sided line 7846:  122 protected bytes, first bytes 81 c8 00 12
+two-sided line 16751: 74 protected bytes, first bytes 81 c8 00 0e
+two-sided line 16841: 74 protected bytes, first bytes 81 c8 00 0e
+two-sided line 16929: 74 protected bytes, first bytes 81 c8 00 0e
 ```
 
 The SRTCP trailer is 14 bytes, so every group packet carries exactly 60 bytes
@@ -69,6 +74,13 @@ by a 32-byte SDES section and the 14-byte SRTCP trailer. Reusing that 1:1
 `SR + 24-byte WhatsApp extension + SDES` builder for group audio therefore
 produces the wrong 122-byte wire shape.
 
+Reception reports exist in both phases, so their presence is not a group-mode
+signal. The live sender must retain the direct 108-byte plaintext / 122-byte
+protected form until a newer group roster transaction has committed
+successfully. A validation failure, external relay-allocation failure, or stale
+transaction does not cross that boundary. After the commit, each non-empty
+audio reception report uses the 60-byte group form.
+
 The capture does not show one sender reporting two simultaneous remote SSRCs in
 one RTCP packet. Emitting one 60-byte group report per active remote SSRC remains
 an explicit inference until a multi-receiver capture or live validation proves
@@ -83,7 +95,7 @@ type RtcpReceptionStatsSet struct {
 	// Internal synchronized SSRC-to-reception-state map.
 }
 
-type RtcpGroupReportExtension [8]byte
+type RTCPGroupReportExtension [8]byte
 
 func (s *RtcpReceptionStatsSet) Observe(
 	ssrc uint32,
@@ -109,15 +121,18 @@ func BuildGroupSenderReport(
 	stats *RtcpSenderStats,
 	nowMs uint64,
 	report *RtcpReceptionReport,
-	extension RtcpGroupReportExtension,
+	extension RTCPGroupReportExtension,
 ) []byte
 ```
 
-The live engine emits one 60-byte group Sender Report for every returned audio
-report. The current engine has no authoritative source for the opaque extension
-values, so it uses the all-zero unavailable representation while preserving the
-observed eight-byte slot. This is an assumption: a peer that requires non-zero
-values or a specific calculation invalidates it.
+Before a committed group roster exists, the live engine emits one direct
+108-byte `SR + SDES` plaintext even when its direct peer has produced a
+reception report. After a successful accepted group-roster commit, it emits one
+60-byte group Sender Report for every returned audio report. The current engine
+has no authoritative source for the opaque extension values, so it uses the
+all-zero unavailable representation while preserving the observed eight-byte
+slot. This is an assumption: a peer that requires non-zero values or a specific
+calculation invalidates it.
 
 When the set is empty, the engine retains the existing 1:1 baseline
 `SR + SDES` report. No capture proves the empty group-call report shape, so that
@@ -130,9 +145,15 @@ compatibility behavior also remains an assumption.
   sender-report timing state.
 - Return snapshots in ascending SSRC order so output and KATs are deterministic.
 - Feed an inbound Sender Report only to the state matching its sender SSRC.
-- On every authoritative roster update, retain only the registry's active remote
-  primary-audio SSRCs. A departed SSRC loses its interval state; a later rejoin
+- Before the first authoritative roster commit, accept first-seen authenticated
+  SSRCs for direct-call compatibility. On every later authoritative roster
+  update, atomically replace the allowed SSRC set and retain only those active
+  remote primary-audio SSRCs. Observations outside that set must not recreate a
+  departed stream; a later roster may re-allow it, and its next observation
   begins a fresh report interval.
+- Select the wire builder from committed group-media state, not from whether
+  reception reports are present. Preserve one direct 108/122-byte report until
+  the roster transaction's infallible commit, then use the group builder.
 - Encode each non-empty group report as the observed single 60-byte SR: one RFC
   block, exactly eight extension bytes, and no SDES.
 - Keep the eight extension bytes opaque. Use zero as the unavailable live value
@@ -149,8 +170,9 @@ compatibility behavior also remains an assumption.
 
 The exact sanitized plaintext KAT proves the 60-byte group builder, header,
 field order, opaque extension placement, and absence of SDES. Focused tests
-also prove independent state, deterministic pruning, leave/rejoin reset, SRTCP
-protection length, and retryable first/partial send failures.
+also prove the capture-observed 122-to-74-byte committed transition, independent
+state, authoritative pruning under interleaving observations, leave/rejoin
+reset, SRTCP protection length, and retryable first/partial send failures.
 
 The module remains `partial`: the opaque extension calculation, empty-set group
 shape, multi-report aggregation policy, and peer acceptance of zero extension
