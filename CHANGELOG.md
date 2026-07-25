@@ -7,6 +7,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### api/initial_group_call — `planned`
+- Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
+  preselected group start, a selected-only public roster seed, stable public
+  peer identity, and authoritative connected-device media readiness.
+- The focused KAT envelope covers normalization, strict optional group-JID
+  parsing, one-shot Whatsmeow delegation, incoming roster replay, group peer
+  stability, and roster/key ordering. Implementation remains pending.
+
 ### voip/initial_group_call — `partial`
 - Added the immutable capture contract for one initial preselected group offer:
   call-scoped routing, ordered self-plus-selected roster, Opus 8/16 kHz,
