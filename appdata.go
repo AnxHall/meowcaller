@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/purpshell/meowcaller/rtp"
+	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -150,13 +151,22 @@ func (r *appDataReceiver) receive(payload []byte) (appDataReaction, bool, error)
 }
 
 func handleAppDataReaction(call *Call, receiver *appDataReceiver, payload []byte) (bool, error) {
+	var sender types.JID
+	if call != nil {
+		sender = call.Peer()
+	}
+	return handleAppDataReactionFrom(call, receiver, sender, payload)
+}
+
+func handleAppDataReactionFrom(call *Call, receiver *appDataReceiver, sender types.JID, payload []byte) (bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
 	reaction, ok, err := receiver.receive(payload)
 	if err != nil || !ok || call == nil {
 		return false, err
 	}
 	value := CallReaction{
 		Emoji:   reaction.emoji,
-		Sender:  call.Peer(),
+		Sender:  sender,
 		Removed: reaction.emoji == "",
 	}
 	if fn := call.onReactionFn(); fn != nil {

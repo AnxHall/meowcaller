@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/purpshell/meowcaller/rtp"
+	"go.mau.fi/whatsmeow/types"
 )
 
 func TestAppDataReactionMatchesCapturedWirePayload(t *testing.T) {
@@ -69,6 +70,26 @@ func TestIncomingAppDataDispatchesOneTransientCallReaction(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Emoji != "😂" || got[0].Sender != call.Peer() || got[0].Removed {
 		t.Fatalf("dispatched reactions = %+v", got)
+	}
+}
+
+func TestIncomingGroupAppDataAttributesSelectedParticipant(t *testing.T) {
+	_, call := testEngineWithOutgoingCall()
+	var receiver appDataReceiver
+	var got CallReaction
+	call.OnReaction(func(reaction CallReaction) { got = reaction })
+	sender := types.JID{User: "333333333333333", Device: 43, Server: types.HiddenUserServer}
+
+	if handled, err := handleAppDataReactionFrom(
+		call,
+		&receiver,
+		sender.ToNonAD(),
+		encodeAppDataReaction(1, "👍"),
+	); err != nil || !handled {
+		t.Fatalf("group app-data reaction = (handled=%v, err=%v)", handled, err)
+	}
+	if got.Sender != sender.ToNonAD() || got.Emoji != "👍" {
+		t.Fatalf("group reaction = %+v, want sender %s", got, sender.ToNonAD())
 	}
 }
 

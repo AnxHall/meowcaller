@@ -28,6 +28,17 @@ type decodedParticipantAudio struct {
 	PCM           []float32
 }
 
+type unprotectedParticipantMedia struct {
+	ParticipantID string
+	UserJID       types.JID
+	DeviceJID     types.JID
+	PID           uint32
+	HasPID        bool
+	Header        rtp.RtpHeader
+	Payload       []byte
+	receiver      *participantAudioReceiver
+}
+
 type participantAudioReceiver struct {
 	mu            sync.Mutex
 	userJID       types.JID
@@ -36,7 +47,13 @@ type participantAudioReceiver struct {
 	pid           uint32
 	hasPID        bool
 	ssrc          uint32
+	streamSSRCs   [9]uint32
+	videoSSRC     uint32
+	appDataSSRC   uint32
 	pipe          *MediaPipeline
+	videoPipe     *MediaPipeline
+	appDataPipe   *MediaPipeline
+	srtcp         *mediaSrtcpReceiver
 	decoder       participantAudioDecoder
 }
 
@@ -58,7 +75,11 @@ type participantReceiveRegistry struct {
 	byDeviceID     map[string]*participantAudioReceiver
 	byPID          map[uint32]*participantAudioReceiver
 	bySSRC         map[uint32]*participantAudioReceiver
-	sendPipe       *MediaPipeline
+	byVideoSSRC    map[uint32]*participantAudioReceiver
+	byAppDataSSRC  map[uint32]*participantAudioReceiver
+	bySRTCPSSRC    map[uint32]*participantAudioReceiver
+	sendPipes      []*MediaPipeline
+	srtcpSenders   []*mediaSrtcpSender
 	pendingEpochs  map[uint32][]byte
 	installedEpoch installedGroupRawEpoch
 	hasEpoch       bool
@@ -88,6 +109,9 @@ func newParticipantReceiveRegistry(
 		byDeviceID:     make(map[string]*participantAudioReceiver),
 		byPID:          make(map[uint32]*participantAudioReceiver),
 		bySSRC:         make(map[uint32]*participantAudioReceiver),
+		byVideoSSRC:    make(map[uint32]*participantAudioReceiver),
+		byAppDataSSRC:  make(map[uint32]*participantAudioReceiver),
+		bySRTCPSSRC:    make(map[uint32]*participantAudioReceiver),
 		pendingEpochs:  make(map[uint32][]byte),
 		log:            resolveConfig(opts).log,
 	}
@@ -102,23 +126,52 @@ func newParticipantReceiveRegistry(
 	r.fallbackID = receiver.participantID
 	r.byDeviceID[receiver.participantID] = receiver
 	r.bySSRC[receiver.ssrc] = receiver
+	r.byVideoSSRC[receiver.videoSSRC] = receiver
+	r.byAppDataSSRC[receiver.appDataSSRC] = receiver
+	for _, streamSSRC := range receiver.streamSSRCs {
+		r.bySRTCPSSRC[streamSSRC] = receiver
+	}
 	return r, nil
 }
 
 func (r *participantReceiveRegistry) newReceiver(userJID, deviceJID types.JID, pid uint32, hasPID bool) (*participantAudioReceiver, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L37-L44
 	participantID := rtp.FormatE2ESrtpParticipantID(deviceJID.String())
-	ssrc, err := rtp.DeriveWasmParticipantSsrc(r.callID, participantID, 0, r.log)
+	streamSSRCs, err := rtp.DeriveWasmRelayStreamSsrcs(r.callID, participantID, r.log)
 	if err != nil {
-		return nil, fmt.Errorf("meowcaller: derive participant audio SSRC: %w", err)
+		return nil, fmt.Errorf("meowcaller: derive participant stream SSRCs: %w", err)
+	}
+	ssrc := streamSSRCs[0]
+	videoSSRC, err := rtp.DeriveWasmParticipantSsrc(r.callID, participantID, rtp.VideoSlotWord, r.log)
+	if err != nil {
+		return nil, fmt.Errorf("meowcaller: derive participant video SSRC: %w", err)
+	}
+	appDataSSRC, err := rtp.DeriveWasmParticipantSsrc(r.callID, participantID, rtp.AppDataSlotWord, r.log)
+	if err != nil {
+		return nil, fmt.Errorf("meowcaller: derive participant app-data SSRC: %w", err)
 	}
 	pipe, err := NewMediaPipeline(r.callKey, r.selfLID, deviceJID.String(), ssrc, FrameSamples, WithLogger(r.log))
 	if err != nil {
 		return nil, fmt.Errorf("meowcaller: create participant receive pipeline: %w", err)
 	}
+	videoPipe, err := NewMediaPipeline(r.callKey, r.selfLID, deviceJID.String(), videoSSRC, FrameSamples, WithLogger(r.log))
+	if err != nil {
+		return nil, fmt.Errorf("meowcaller: create participant video receive pipeline: %w", err)
+	}
+	appDataPipe, err := NewMediaPipeline(r.callKey, r.selfLID, deviceJID.String(), appDataSSRC, FrameSamples, WithLogger(r.log))
+	if err != nil {
+		return nil, fmt.Errorf("meowcaller: create participant app-data receive pipeline: %w", err)
+	}
+	srtcpReceiver, err := newMediaSrtcpReceiver(r.callKey, deviceJID.String())
+	if err != nil {
+		return nil, fmt.Errorf("meowcaller: create participant SRTCP receiver: %w", err)
+	}
 	return &participantAudioReceiver{
 		userJID: userJID, deviceJID: deviceJID, participantID: participantID,
-		pid: pid, hasPID: hasPID, ssrc: ssrc, pipe: pipe, decoder: r.decoderFactory(),
+		pid: pid, hasPID: hasPID, ssrc: ssrc, streamSSRCs: streamSSRCs,
+		videoSSRC: videoSSRC, appDataSSRC: appDataSSRC,
+		pipe: pipe, videoPipe: videoPipe, appDataPipe: appDataPipe,
+		srtcp: srtcpReceiver, decoder: r.decoderFactory(),
 	}, nil
 }
 
@@ -133,6 +186,9 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 	nextByDeviceID := make(map[string]*participantAudioReceiver)
 	nextByPID := make(map[uint32]*participantAudioReceiver)
 	nextBySSRC := make(map[uint32]*participantAudioReceiver)
+	nextByVideoSSRC := make(map[uint32]*participantAudioReceiver)
+	nextByAppDataSSRC := make(map[uint32]*participantAudioReceiver)
+	nextBySRTCPSSRC := make(map[uint32]*participantAudioReceiver)
 	type receiverMetadata struct {
 		receiver  *participantAudioReceiver
 		userJID   types.JID
@@ -171,9 +227,23 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			if _, exists := nextBySSRC[receiver.ssrc]; exists {
 				return fmt.Errorf("meowcaller: duplicate group participant SSRC %d", receiver.ssrc)
 			}
+			if _, exists := nextByVideoSSRC[receiver.videoSSRC]; exists {
+				return fmt.Errorf("meowcaller: duplicate group participant video SSRC %d", receiver.videoSSRC)
+			}
+			if _, exists := nextByAppDataSSRC[receiver.appDataSSRC]; exists {
+				return fmt.Errorf("meowcaller: duplicate group participant app-data SSRC %d", receiver.appDataSSRC)
+			}
+			for _, streamSSRC := range receiver.streamSSRCs {
+				if _, exists := nextBySRTCPSSRC[streamSSRC]; exists {
+					return fmt.Errorf("meowcaller: duplicate group participant stream SSRC %d", streamSSRC)
+				}
+				nextBySRTCPSSRC[streamSSRC] = receiver
+			}
 			nextByDeviceID[participantID] = receiver
 			nextByPID[device.PID] = receiver
 			nextBySSRC[receiver.ssrc] = receiver
+			nextByVideoSSRC[receiver.videoSSRC] = receiver
+			nextByAppDataSSRC[receiver.appDataSSRC] = receiver
 			metadata = append(metadata, receiverMetadata{
 				receiver: receiver, userJID: participant.JID,
 				deviceJID: device.JID, pid: device.PID,
@@ -185,6 +255,11 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 		if fallback != nil {
 			nextByDeviceID[r.fallbackID] = fallback
 			nextBySSRC[fallback.ssrc] = fallback
+			nextByVideoSSRC[fallback.videoSSRC] = fallback
+			nextByAppDataSSRC[fallback.appDataSSRC] = fallback
+			for _, streamSSRC := range fallback.streamSSRCs {
+				nextBySRTCPSSRC[streamSSRC] = fallback
+			}
 		}
 	}
 	for _, next := range metadata {
@@ -198,6 +273,9 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 	r.byDeviceID = nextByDeviceID
 	r.byPID = nextByPID
 	r.bySSRC = nextBySSRC
+	r.byVideoSSRC = nextByVideoSSRC
+	r.byAppDataSSRC = nextByAppDataSSRC
+	r.bySRTCPSSRC = nextBySRTCPSSRC
 	r.transactionID = update.TransactionID
 	r.hasGroupUpdate = true
 	var newestPendingEpoch installedGroupRawEpoch
@@ -228,15 +306,44 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 		Str("call_id", r.callID).
 		Uint32("transaction_id", update.TransactionID).
 		Int("remote_participants", len(nextByPID)).
-		Msg("applied group audio receive roster")
+		Msg("applied group media receive roster")
 	return nil
 }
 
-func (r *participantReceiveRegistry) attachSendPipeline(sendPipe *MediaPipeline) {
+func (r *participantReceiveRegistry) attachSendPipeline(sendPipe *MediaPipeline) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L78-L86
+	if sendPipe == nil {
+		return fmt.Errorf("meowcaller: nil media send pipeline")
+	}
 	r.mu.Lock()
-	r.sendPipe = sendPipe
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if r.hasEpoch {
+		keys, err := srtp.DeriveE2eKeysFromRaw(r.installedEpoch.rawKey, r.selfID, r.log)
+		if err != nil {
+			return fmt.Errorf("meowcaller: derive late group send epoch: %w", err)
+		}
+		sendPipe.installSendKeys(keys)
+	}
+	r.sendPipes = append(r.sendPipes, sendPipe)
+	return nil
+}
+
+func (r *participantReceiveRegistry) attachSRTCPSender(sender *mediaSrtcpSender) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L78-L120
+	if sender == nil {
+		return fmt.Errorf("meowcaller: nil SRTCP sender")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hasEpoch {
+		keys, err := srtp.DeriveE2eSRTCPKeysFromRaw(r.installedEpoch.rawKey, r.selfID, r.log)
+		if err != nil {
+			return fmt.Errorf("meowcaller: derive late group SRTCP send epoch: %w", err)
+		}
+		sender.installKeys(keys)
+	}
+	r.srtcpSenders = append(r.srtcpSenders, sender)
+	return nil
 }
 
 // ApplyGroupRawEpoch installs or buffers one shared keygen-v2 media epoch
@@ -287,24 +394,42 @@ func (r *participantReceiveRegistry) applyGroupRawEpochLocked(transactionID uint
 
 func (r *participantReceiveRegistry) installGroupRawEpochLocked(rawKey []byte) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
-	if r.sendPipe == nil {
+	if len(r.sendPipes) == 0 {
 		return fmt.Errorf("meowcaller: group media sender is not attached")
 	}
 	sendKeys, err := srtp.DeriveE2eKeysFromRaw(rawKey, r.selfID)
 	if err != nil {
 		return fmt.Errorf("meowcaller: derive group send epoch: %w", err)
 	}
+	sendRTCPKeys, err := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, r.selfID, r.log)
+	if err != nil {
+		return fmt.Errorf("meowcaller: derive group SRTCP send epoch: %w", err)
+	}
 	receiveKeys := make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(r.byDeviceID))
+	receiveRTCPKeys := make(map[*participantAudioReceiver]srtp.E2eSrtpKeys, len(r.byDeviceID))
 	for _, receiver := range r.byDeviceID {
 		keys, deriveErr := srtp.DeriveE2eKeysFromRaw(rawKey, receiver.participantID)
 		if deriveErr != nil {
 			return fmt.Errorf("meowcaller: derive group receive epoch: %w", deriveErr)
 		}
 		receiveKeys[receiver] = keys
+		srtcpKeys, deriveErr := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, receiver.participantID, r.log)
+		if deriveErr != nil {
+			return fmt.Errorf("meowcaller: derive group SRTCP receive epoch: %w", deriveErr)
+		}
+		receiveRTCPKeys[receiver] = srtcpKeys
 	}
-	r.sendPipe.installSendKeys(sendKeys)
+	for _, sendPipe := range r.sendPipes {
+		sendPipe.installSendKeys(sendKeys)
+	}
+	for _, sender := range r.srtcpSenders {
+		sender.installKeys(sendRTCPKeys)
+	}
 	for receiver, keys := range receiveKeys {
 		receiver.pipe.installRecvKeysPreservingROC(keys)
+		receiver.videoPipe.installRecvKeysPreservingROC(keys)
+		receiver.appDataPipe.installRecvKeysPreservingROC(keys)
+		receiver.srtcp.installKeys(receiveRTCPKeys[receiver])
 	}
 	r.log.Info().
 		Str("call_id", r.callID).
@@ -335,9 +460,85 @@ func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error {
 	}
 	r.byDeviceID = map[string]*participantAudioReceiver{participantID: receiver}
 	r.bySSRC = map[uint32]*participantAudioReceiver{receiver.ssrc: receiver}
+	r.byVideoSSRC = map[uint32]*participantAudioReceiver{receiver.videoSSRC: receiver}
+	r.byAppDataSSRC = map[uint32]*participantAudioReceiver{receiver.appDataSSRC: receiver}
+	r.bySRTCPSSRC = make(map[uint32]*participantAudioReceiver, len(receiver.streamSSRCs))
+	for _, streamSSRC := range receiver.streamSSRCs {
+		r.bySRTCPSSRC[streamSSRC] = receiver
+	}
 	r.byPID = make(map[uint32]*participantAudioReceiver)
 	r.fallbackID = participantID
 	return nil
+}
+
+func (r *participantReceiveRegistry) UnprotectVideo(packet []byte) (unprotectedParticipantMedia, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	header, ok := rtp.ParseRtpHeader(packet)
+	if !ok {
+		return unprotectedParticipantMedia{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	receiver := r.byVideoSSRC[header.Ssrc]
+	if receiver == nil {
+		r.log.Debug().Uint32("ssrc", header.Ssrc).Msg("dropping video from inactive participant SSRC")
+		return unprotectedParticipantMedia{}, false
+	}
+	receiver.mu.Lock()
+	defer receiver.mu.Unlock()
+	authenticatedHeader, payload, ok := receiver.videoPipe.UnprotectAudio(packet)
+	if !ok {
+		return unprotectedParticipantMedia{}, false
+	}
+	return receiver.unprotectedMedia(authenticatedHeader, payload), true
+}
+
+func (r *participantReceiveRegistry) UnprotectAppData(packet []byte) (unprotectedParticipantMedia, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	header, ok := rtp.ParseRtpHeader(packet)
+	if !ok {
+		return unprotectedParticipantMedia{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	receiver := r.byAppDataSSRC[header.Ssrc]
+	if receiver == nil {
+		r.log.Debug().Uint32("ssrc", header.Ssrc).Msg("dropping app-data from inactive participant SSRC")
+		return unprotectedParticipantMedia{}, false
+	}
+	receiver.mu.Lock()
+	defer receiver.mu.Unlock()
+	authenticatedHeader, payload, ok := receiver.appDataPipe.UnprotectAudio(packet)
+	if !ok {
+		return unprotectedParticipantMedia{}, false
+	}
+	return receiver.unprotectedMedia(authenticatedHeader, payload), true
+}
+
+func (r *participantAudioReceiver) unprotectedMedia(header rtp.RtpHeader, payload []byte) unprotectedParticipantMedia {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	return unprotectedParticipantMedia{
+		ParticipantID: r.participantID,
+		UserJID:       r.userJID,
+		DeviceJID:     r.deviceJID,
+		PID:           r.pid,
+		HasPID:        r.hasPID,
+		Header:        header,
+		Payload:       payload,
+		receiver:      r,
+	}
+}
+
+func (r *participantReceiveRegistry) UnprotectSRTCP(senderSSRC uint32, packet []byte) ([]byte, uint32, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	receiver := r.bySRTCPSSRC[senderSSRC]
+	if receiver == nil {
+		r.log.Debug().Uint32("ssrc", senderSSRC).Msg("dropping SRTCP from inactive participant SSRC")
+		return nil, 0, false
+	}
+	return receiver.srtcp.unprotect(senderSSRC, packet)
 }
 
 func (r *participantReceiveRegistry) ActiveParticipantIDs() []string {

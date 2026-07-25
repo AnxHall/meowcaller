@@ -74,6 +74,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   ignores stale epochs, and clears queued key material at call end. Focused/full
   tests, race, build, and vet pass; live WhatsApp E2E remains pending.
   CodeRabbit review was unavailable because its CLI is not installed.
+- Extended the same accepted epoch through the SRTCP key schedule. Audio and
+  video sender reports rotate in place without resetting their SRTCP index or
+  CNAME, late-attached senders inherit the current epoch, and incoming control
+  packets exact-route to active participants across all nine deterministic
+  relay-stream SSRCs. Video and app-data RTP now rotate with the same epoch,
+  exact-route through independent per-participant contexts, and preserve
+  participant-specific reassembly/deduplication state. Focused SRTCP derivation,
+  all-stream send/receive, direct fallback, roster carry/departure, unknown
+  SSRC, late-attachment, and concurrent-rekey KATs pass.
 
 ### voip/group_invite_accept — `planned`
 - Added the capture contract for accepting a directed invitation into an

@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,6 +125,66 @@ func protectRawParticipantAudio(t *testing.T, rawKey []byte, sender types.JID, p
 	return srtp.AppendWarpMITag(keys.AuthKey[:], packet, 0, srtp.WarpMITagLen), ssrc
 }
 
+func protectRawParticipantRTP(
+	t *testing.T,
+	rawKey []byte,
+	sender types.JID,
+	slot uint32,
+	payloadType uint8,
+	payload []byte,
+) ([]byte, uint32) {
+	t.Helper()
+	participantID := rtp.FormatE2ESrtpParticipantID(sender.String())
+	ssrc, err := rtp.DeriveWasmParticipantSsrc("CID", participantID, slot)
+	if err != nil {
+		t.Fatalf("derive raw participant stream SSRC: %v", err)
+	}
+	keys, err := srtp.DeriveE2eKeysFromRaw(rawKey, participantID)
+	if err != nil {
+		t.Fatalf("derive raw participant keys: %v", err)
+	}
+	header := rtp.RtpHeader{
+		PayloadType:    payloadType,
+		SequenceNumber: 1,
+		Timestamp:      3000,
+		Ssrc:           ssrc,
+	}
+	packet := rtp.EncodeRtpHeader(&header)
+	encrypted, err := srtp.CryptPayload(&keys, ssrc, header.SequenceNumber, 0, payload)
+	if err != nil {
+		t.Fatalf("encrypt raw participant packet: %v", err)
+	}
+	packet = append(packet, encrypted...)
+	return srtp.AppendWarpMITag(keys.AuthKey[:], packet, 0, srtp.WarpMITagLen), ssrc
+}
+
+func protectParticipantRTP(
+	t *testing.T,
+	callKey []byte,
+	self, sender types.JID,
+	slot uint32,
+	payloadType uint8,
+	payload []byte,
+) ([]byte, uint32) {
+	t.Helper()
+	participantID := rtp.FormatE2ESrtpParticipantID(sender.String())
+	ssrc, err := rtp.DeriveWasmParticipantSsrc("CID", participantID, slot)
+	if err != nil {
+		t.Fatalf("derive participant stream SSRC: %v", err)
+	}
+	pipe, err := NewMediaPipeline(callKey, sender.String(), self.String(), ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("new participant stream pipeline: %v", err)
+	}
+	packet, err := pipe.ProtectRTP(&rtp.RtpHeader{
+		PayloadType: payloadType, SequenceNumber: 1, Timestamp: 3000, Ssrc: ssrc,
+	}, payload)
+	if err != nil {
+		t.Fatalf("protect participant RTP: %v", err)
+	}
+	return packet, ssrc
+}
+
 func TestParticipantReceiveRegistryAppliesSharedRawEpochToSenderAndEveryReceiver(t *testing.T) {
 	callKey := iota32()
 	rawKey := bytes.Repeat([]byte{0xa5}, 32)
@@ -189,6 +250,456 @@ func TestParticipantReceiveRegistryAppliesSharedRawEpochToSenderAndEveryReceiver
 	}
 	if err = registry.ApplyGroupRawEpoch(17, bytes.Repeat([]byte{0x5a}, 32)); err == nil {
 		t.Fatal("conflicting transaction-wide epoch was accepted")
+	}
+}
+
+func TestParticipantReceiveRegistryAppliesSharedRawEpochToSRTCP(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x6d}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+
+	const selfAudioSSRC = 0x10203040
+	audioRTCP, err := newMediaSrtcpSender(callKey, self.String(), selfAudioSSRC, false)
+	if err != nil {
+		t.Fatalf("new audio SRTCP sender: %v", err)
+	}
+	if err = registry.attachSRTCPSender(audioRTCP); err != nil {
+		t.Fatalf("attach audio SRTCP sender: %v", err)
+	}
+	if _, err = audioRTCP.senderReport(rtp.RtcpSenderStats{}, 1, nil); err != nil {
+		t.Fatalf("send pre-epoch report: %v", err)
+	}
+
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), selfAudioSSRC, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender pipeline: %v", err)
+	}
+	registry.attachSendPipeline(sender)
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply group roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply shared raw epoch: %v", err)
+	}
+
+	rawSelfKeys, err := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, rtp.FormatE2ESrtpParticipantID(self.String()))
+	if err != nil {
+		t.Fatalf("derive raw self SRTCP keys: %v", err)
+	}
+	oldSelfKeys, err := srtp.DeriveE2eSrtcpKeys(callKey, rtp.FormatE2ESrtpParticipantID(self.String()))
+	if err != nil {
+		t.Fatalf("derive old self SRTCP keys: %v", err)
+	}
+	outbound, err := audioRTCP.senderReport(rtp.RtcpSenderStats{}, 2, nil)
+	if err != nil {
+		t.Fatalf("send post-epoch report: %v", err)
+	}
+	if _, _, ok := srtp.UnprotectSrtcp(&oldSelfKeys, selfAudioSSRC, outbound); ok {
+		t.Fatal("post-epoch SRTCP sender report authenticated under the old call key")
+	}
+	if _, index, ok := srtp.UnprotectSrtcp(&rawSelfKeys, selfAudioSSRC, outbound); !ok || index != 2 {
+		t.Fatalf("post-epoch SRTCP report = index %d authenticated %t, want index 2 authenticated", index, ok)
+	}
+
+	for _, tc := range []struct {
+		participant types.JID
+		slot        uint32
+	}{
+		{participant: peer, slot: 0},
+		{participant: added, slot: rtp.VideoSlotWord},
+	} {
+		participantID := rtp.FormatE2ESrtpParticipantID(tc.participant.String())
+		senderSSRC, deriveErr := rtp.DeriveWasmParticipantSsrc("CID", participantID, tc.slot)
+		if deriveErr != nil {
+			t.Fatalf("derive remote stream SSRC: %v", deriveErr)
+		}
+		keys, deriveErr := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, participantID)
+		if deriveErr != nil {
+			t.Fatalf("derive remote SRTCP keys: %v", deriveErr)
+		}
+		var stats rtp.RtcpSenderStats
+		var cnameEntropy [12]byte
+		cname := rtp.BuildWhatsappRtcpCname(cnameEntropy)
+		plain := rtp.BuildSenderReportWithSdesAndReception(
+			senderSSRC,
+			&stats,
+			3,
+			&cname,
+			nil,
+			tc.slot == rtp.VideoSlotWord,
+		)
+		protected, protectErr := srtp.ProtectSrtcp(&keys, senderSSRC, 7, plain)
+		if protectErr != nil {
+			t.Fatalf("protect remote SRTCP: %v", protectErr)
+		}
+		recovered, index, ok := registry.UnprotectSRTCP(senderSSRC, protected)
+		if !ok || index != 7 || !bytes.Equal(recovered, plain) {
+			t.Fatalf("participant %s SRTCP = (%x, %d, %t), want authenticated index 7", tc.participant, recovered, index, ok)
+		}
+	}
+	if _, _, ok := registry.UnprotectSRTCP(0xdeadbeef, outbound); ok {
+		t.Fatal("SRTCP from an unknown stream SSRC authenticated")
+	}
+
+	lateVideoRTCP, err := newMediaSrtcpSender(callKey, self.String(), 0x50607080, true)
+	if err != nil {
+		t.Fatalf("new late video SRTCP sender: %v", err)
+	}
+	if err = registry.attachSRTCPSender(lateVideoRTCP); err != nil {
+		t.Fatalf("attach late video SRTCP sender: %v", err)
+	}
+	latePacket, err := lateVideoRTCP.senderReport(rtp.RtcpSenderStats{}, 4, nil)
+	if err != nil {
+		t.Fatalf("send late-attached report: %v", err)
+	}
+	if _, index, ok := srtp.UnprotectSrtcp(&rawSelfKeys, 0x50607080, latePacket); !ok || index != 1 {
+		t.Fatalf("late-attached SRTCP report = index %d authenticated %t, want index 1 authenticated", index, ok)
+	}
+}
+
+func TestParticipantReceiveRegistryAppliesSharedRawEpochToAllRTPStreams(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x91}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+
+	newSendPipe := func(ssrc uint32) *MediaPipeline {
+		t.Helper()
+		pipe, pipeErr := NewMediaPipeline(callKey, self.String(), peer.String(), ssrc, FrameSamples)
+		if pipeErr != nil {
+			t.Fatalf("new send pipeline: %v", pipeErr)
+		}
+		registry.attachSendPipeline(pipe)
+		return pipe
+	}
+	audioSend := newSendPipe(0x10101010)
+	videoSend := newSendPipe(0x20202020)
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply raw epoch: %v", err)
+	}
+
+	videoPacket, videoSSRC := protectRawParticipantRTP(
+		t, rawKey, added, rtp.VideoSlotWord, rtp.RtpPayloadTypeH264, []byte{0x65, 0x01},
+	)
+	video, ok := registry.UnprotectVideo(videoPacket)
+	if !ok || video.DeviceJID != added || video.Header.Ssrc != videoSSRC || !bytes.Equal(video.Payload, []byte{0x65, 0x01}) {
+		t.Fatalf("added participant video = %+v authenticated %t", video, ok)
+	}
+	oldVideoPacket, _ := protectParticipantRTP(
+		t, callKey, self, added, rtp.VideoSlotWord, rtp.RtpPayloadTypeH264, []byte{0x65, 0x02},
+	)
+	if _, ok = registry.UnprotectVideo(oldVideoPacket); ok {
+		t.Fatal("added participant video authenticated under the old call key")
+	}
+	appPacket, appSSRC := protectRawParticipantRTP(
+		t, rawKey, peer, rtp.AppDataSlotWord, rtp.RtpPayloadTypeAppData, []byte{0x08, 0x01},
+	)
+	appData, ok := registry.UnprotectAppData(appPacket)
+	if !ok || appData.DeviceJID != peer || appData.Header.Ssrc != appSSRC || !bytes.Equal(appData.Payload, []byte{0x08, 0x01}) {
+		t.Fatalf("peer app-data = %+v authenticated %t", appData, ok)
+	}
+	oldAppPacket, _ := protectParticipantRTP(
+		t, callKey, self, peer, rtp.AppDataSlotWord, rtp.RtpPayloadTypeAppData, []byte{0x08, 0x02},
+	)
+	if _, ok = registry.UnprotectAppData(oldAppPacket); ok {
+		t.Fatal("peer app-data authenticated under the old call key")
+	}
+	unknown := mediaTestJID("555555555555555", 7)
+	unknownAppPacket, _ := protectRawParticipantRTP(
+		t, rawKey, unknown, rtp.AppDataSlotWord, rtp.RtpPayloadTypeAppData, []byte{0x08, 0x03},
+	)
+	if _, ok = registry.UnprotectAppData(unknownAppPacket); ok {
+		t.Fatal("unknown participant app-data authenticated")
+	}
+
+	assertRawOutbound := func(pipe *MediaPipeline, ssrc uint32, payloadType uint8) {
+		t.Helper()
+		header := &rtp.RtpHeader{
+			PayloadType: payloadType, SequenceNumber: 1, Timestamp: 3000, Ssrc: ssrc,
+		}
+		packet, protectErr := pipe.ProtectRTP(header, []byte{7, 8, 9})
+		if protectErr != nil {
+			t.Fatalf("protect outbound RTP: %v", protectErr)
+		}
+		oldReceiver, receiverErr := NewMediaPipeline(callKey, peer.String(), self.String(), ssrc, FrameSamples)
+		if receiverErr != nil {
+			t.Fatalf("new old-key receiver: %v", receiverErr)
+		}
+		if _, _, ok := oldReceiver.UnprotectAudio(packet); ok {
+			t.Fatal("post-epoch outbound RTP authenticated under the old call key")
+		}
+		rawReceiver, receiverErr := NewMediaPipeline(callKey, peer.String(), self.String(), ssrc, FrameSamples)
+		if receiverErr != nil {
+			t.Fatalf("new raw-key receiver: %v", receiverErr)
+		}
+		if receiverErr = rawReceiver.RekeyRecvFromRawPreservingROC(rawKey, self.String()); receiverErr != nil {
+			t.Fatalf("rekey raw receiver: %v", receiverErr)
+		}
+		if _, payload, ok := rawReceiver.UnprotectAudio(packet); !ok || !bytes.Equal(payload, []byte{7, 8, 9}) {
+			t.Fatal("post-epoch outbound RTP did not authenticate under the raw root")
+		}
+	}
+	assertRawOutbound(audioSend, 0x10101010, rtp.RtpPayloadTypeOpus)
+	assertRawOutbound(videoSend, 0x20202020, rtp.RtpPayloadTypeH264)
+
+	lateAppDataSend := newSendPipe(0x30303030)
+	assertRawOutbound(lateAppDataSend, 0x30303030, rtp.RtpPayloadTypeAppData)
+}
+
+func TestParticipantReceiveRegistryRekeysDirectFallbackToAnsweringDevice(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	offeredPeer := mediaTestJID("222222222222222", 0)
+	answeringPeer := mediaTestJID("222222222222222", 23)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), offeredPeer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	if err = registry.RekeyFallback(answeringPeer.String()); err != nil {
+		t.Fatalf("rekey fallback: %v", err)
+	}
+
+	protect := func(peer types.JID) (uint32, []byte) {
+		t.Helper()
+		participantID := rtp.FormatE2ESrtpParticipantID(peer.String())
+		ssrc, deriveErr := rtp.DeriveWasmParticipantSsrc("CID", participantID, 0)
+		if deriveErr != nil {
+			t.Fatalf("derive peer SSRC: %v", deriveErr)
+		}
+		keys, deriveErr := srtp.DeriveE2eSrtcpKeys(callKey, participantID)
+		if deriveErr != nil {
+			t.Fatalf("derive peer SRTCP keys: %v", deriveErr)
+		}
+		var stats rtp.RtcpSenderStats
+		var entropy [12]byte
+		cname := rtp.BuildWhatsappRtcpCname(entropy)
+		plain := rtp.BuildSenderReportWithSdesAndReception(ssrc, &stats, 1, &cname, nil, false)
+		packet, protectErr := srtp.ProtectSrtcp(&keys, ssrc, 1, plain)
+		if protectErr != nil {
+			t.Fatalf("protect peer SRTCP: %v", protectErr)
+		}
+		return ssrc, packet
+	}
+	answeringSSRC, answeringPacket := protect(answeringPeer)
+	if _, _, ok := registry.UnprotectSRTCP(answeringSSRC, answeringPacket); !ok {
+		t.Fatal("answering device SRTCP did not authenticate through fallback registry")
+	}
+	offeredSSRC, offeredPacket := protect(offeredPeer)
+	if _, _, ok := registry.UnprotectSRTCP(offeredSSRC, offeredPacket); ok {
+		t.Fatal("superseded offered device SRTCP remained active")
+	}
+	for _, tc := range []struct {
+		name        string
+		slot        uint32
+		payloadType uint8
+		unprotect   func([]byte) (unprotectedParticipantMedia, bool)
+	}{
+		{
+			name: "video", slot: rtp.VideoSlotWord, payloadType: rtp.RtpPayloadTypeH264,
+			unprotect: registry.UnprotectVideo,
+		},
+		{
+			name: "app-data", slot: rtp.AppDataSlotWord, payloadType: rtp.RtpPayloadTypeAppData,
+			unprotect: registry.UnprotectAppData,
+		},
+	} {
+		answeringPacket, _ := protectParticipantRTP(
+			t, callKey, self, answeringPeer, tc.slot, tc.payloadType, []byte{1, 2, 3},
+		)
+		if media, ok := tc.unprotect(answeringPacket); !ok || media.DeviceJID != answeringPeer {
+			t.Fatalf("answering device %s = %+v authenticated %t", tc.name, media, ok)
+		}
+		offeredPacket, _ := protectParticipantRTP(
+			t, callKey, self, offeredPeer, tc.slot, tc.payloadType, []byte{4, 5, 6},
+		)
+		if _, ok := tc.unprotect(offeredPacket); ok {
+			t.Fatalf("superseded offered device %s remained active", tc.name)
+		}
+	}
+}
+
+func TestParticipantReceiveRegistryCarriesSRTCPEpochAcrossRosterChanges(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x7e}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), 0x10203040, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender pipeline: %v", err)
+	}
+	registry.attachSendPipeline(sender)
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, false)); err != nil {
+		t.Fatalf("apply initial roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply group epoch: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 18, true)); err != nil {
+		t.Fatalf("apply expanded roster: %v", err)
+	}
+
+	addedID := rtp.FormatE2ESrtpParticipantID(added.String())
+	addedVideoSSRC, err := rtp.DeriveWasmParticipantSsrc("CID", addedID, rtp.VideoSlotWord)
+	if err != nil {
+		t.Fatalf("derive added video SSRC: %v", err)
+	}
+	addedKeys, err := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, addedID)
+	if err != nil {
+		t.Fatalf("derive added SRTCP keys: %v", err)
+	}
+	var stats rtp.RtcpSenderStats
+	var entropy [12]byte
+	cname := rtp.BuildWhatsappRtcpCname(entropy)
+	plain := rtp.BuildSenderReportWithSdesAndReception(addedVideoSSRC, &stats, 5, &cname, nil, true)
+	packet, err := srtp.ProtectSrtcp(&addedKeys, addedVideoSSRC, 9, plain)
+	if err != nil {
+		t.Fatalf("protect added SRTCP: %v", err)
+	}
+	if _, index, ok := registry.UnprotectSRTCP(addedVideoSSRC, packet); !ok || index != 9 {
+		t.Fatalf("new participant SRTCP = index %d authenticated %t, want index 9 authenticated", index, ok)
+	}
+	addedVideo, _ := protectRawParticipantRTP(
+		t, rawKey, added, rtp.VideoSlotWord, rtp.RtpPayloadTypeH264, []byte{0x65, 0x03},
+	)
+	if _, ok := registry.UnprotectVideo(addedVideo); !ok {
+		t.Fatal("new participant video did not inherit the current raw epoch")
+	}
+	addedAppData, _ := protectRawParticipantRTP(
+		t, rawKey, added, rtp.AppDataSlotWord, rtp.RtpPayloadTypeAppData, []byte{0x08, 0x04},
+	)
+	if _, ok := registry.UnprotectAppData(addedAppData); !ok {
+		t.Fatal("new participant app-data did not inherit the current raw epoch")
+	}
+
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 19, false)); err != nil {
+		t.Fatalf("apply participant departure: %v", err)
+	}
+	if _, _, ok := registry.UnprotectSRTCP(addedVideoSSRC, packet); ok {
+		t.Fatal("departed participant SRTCP remained active")
+	}
+	if _, ok := registry.UnprotectVideo(addedVideo); ok {
+		t.Fatal("departed participant video remained active")
+	}
+	if _, ok := registry.UnprotectAppData(addedAppData); ok {
+		t.Fatal("departed participant app-data remained active")
+	}
+}
+
+func TestParticipantReceiveRegistrySRTCPRekeyIsConcurrentSafe(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x8f}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), nil)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	const selfSSRC = 0x10203040
+	sender, err := NewMediaPipeline(callKey, self.String(), peer.String(), selfSSRC, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender pipeline: %v", err)
+	}
+	registry.attachSendPipeline(sender)
+	srtcpSender, err := newMediaSrtcpSender(callKey, self.String(), selfSSRC, false)
+	if err != nil {
+		t.Fatalf("new SRTCP sender: %v", err)
+	}
+	if err = registry.attachSRTCPSender(srtcpSender); err != nil {
+		t.Fatalf("attach SRTCP sender: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply initial roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply initial epoch: %v", err)
+	}
+
+	peerID := rtp.FormatE2ESrtpParticipantID(peer.String())
+	peerSSRC, err := rtp.DeriveWasmParticipantSsrc("CID", peerID, 0)
+	if err != nil {
+		t.Fatalf("derive peer SSRC: %v", err)
+	}
+	peerKeys, err := srtp.DeriveE2eSRTCPKeysFromRaw(rawKey, peerID)
+	if err != nil {
+		t.Fatalf("derive peer SRTCP keys: %v", err)
+	}
+	var stats rtp.RtcpSenderStats
+	var entropy [12]byte
+	cname := rtp.BuildWhatsappRtcpCname(entropy)
+	plain := rtp.BuildSenderReportWithSdesAndReception(peerSSRC, &stats, 1, &cname, nil, false)
+	peerPacket, err := srtp.ProtectSrtcp(&peerKeys, peerSSRC, 1, plain)
+	if err != nil {
+		t.Fatalf("protect peer SRTCP: %v", err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if _, reportErr := srtcpSender.senderReport(rtp.RtcpSenderStats{}, uint64(i), nil); reportErr != nil {
+				errs <- reportErr
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			_, _, _ = registry.UnprotectSRTCP(peerSSRC, peerPacket)
+		}
+	}()
+	for transactionID := uint32(18); transactionID <= 28; transactionID++ {
+		update := mediaTestGroupUpdate(self, peer, added, pending, transactionID, true)
+		if err = registry.ApplyGroupUpdate(update); err != nil {
+			t.Fatalf("apply roster transaction %d: %v", transactionID, err)
+		}
+		nextRaw := bytes.Repeat([]byte{byte(transactionID)}, 32)
+		if err = registry.ApplyGroupRawEpoch(transactionID, nextRaw); err != nil {
+			t.Fatalf("apply raw epoch transaction %d: %v", transactionID, err)
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for concurrentErr := range errs {
+		t.Fatalf("concurrent SRTCP operation: %v", concurrentErr)
+	}
+	if srtcpSender.index != 201 {
+		t.Fatalf("SRTCP sender index = %d, want 201", srtcpSender.index)
+	}
+	if got := registry.installedEpoch.transactionID; got != 28 {
+		t.Fatalf("installed epoch transaction = %d, want 28", got)
+	}
+	if len(registry.bySRTCPSSRC) != 18 {
+		t.Fatalf("active participant stream SSRCs = %d, want 18", len(registry.bySRTCPSSRC))
+	}
+	if !registry.hasEpoch {
+		t.Fatal("group epoch was lost during concurrent SRTCP traffic")
 	}
 }
 

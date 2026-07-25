@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 )
@@ -155,6 +156,38 @@ func TestSrtcpRoundTripsAndAuthenticates(t *testing.T) {
 	protected[len(protected)-1] ^= 1
 	if _, _, ok := UnprotectSrtcp(&keys, ssrc, protected); ok {
 		t.Fatal("forged SRTCP tag accepted")
+	}
+}
+
+func TestDeriveE2eSRTCPKeysFromRawMatchesRawRootDerivation(t *testing.T) {
+	rawE2E := make([]byte, 32)
+	for i := range rawE2E {
+		rawE2E[i] = byte(0xa0 + i)
+	}
+	const participantID = "111111111111111:14@lid"
+
+	got, err := DeriveE2eSRTCPKeysFromRaw(rawE2E, participantID)
+	if err != nil {
+		t.Fatalf("derive SRTCP keys from raw E2E root: %v", err)
+	}
+	if want := mustHex(t, "96ec6c38976e1561a01929ef61627fd9"); !bytes.Equal(got.CipherKey[:], want) {
+		t.Fatalf("raw-root SRTCP cipher key = %x, want %x", got.CipherKey, want)
+	}
+	if want := mustHex(t, "b033e3437b17edaa45863a19a6a3969633353bc7"); !bytes.Equal(got.AuthKey[:], want) {
+		t.Fatalf("raw-root SRTCP auth key = %x, want %x", got.AuthKey, want)
+	}
+	if want := mustHex(t, "d66012ec5832edc623a9fd742ff1"); !bytes.Equal(got.Salt[:], want) {
+		t.Fatalf("raw-root SRTCP salt = %x, want %x", got.Salt, want)
+	}
+	want, err := DeriveE2eSrtcpKeys(rawE2E, participantID)
+	if err != nil {
+		t.Fatalf("derive equivalent SRTCP keys: %v", err)
+	}
+	if got != want {
+		t.Fatalf("raw-root SRTCP keys = %#v, want %#v", got, want)
+	}
+	if _, err = DeriveE2eSRTCPKeysFromRaw(rawE2E[:31], participantID); !errors.Is(err, errShortKey) {
+		t.Fatalf("short raw-root error = %v, want %v", err, errShortKey)
 	}
 }
 

@@ -127,6 +127,27 @@ func DeriveE2eKeysFromRaw(rawE2e []byte, participantLid string, log ...zerolog.L
 	return deriveSessionKeysFromMaster(master)
 }
 
+// DeriveE2eSRTCPKeysFromRaw derives per-participant SRTCP keys from a keygen-v2
+// raw E2E root using the RFC 3711 SRTCP labels.
+func DeriveE2eSRTCPKeysFromRaw(rawE2E []byte, participantLID string, log ...zerolog.Logger) (E2eSrtpKeys, error) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	lg := pickLog(log)
+	if len(rawE2E) < 32 {
+		lg.Debug().Err(errShortKey).Int("raw_e2e_bytes", len(rawE2E)).Str("participant_lid", participantLID).Msg("e2e srtcp key derivation rejected: short raw blob")
+		return E2eSrtpKeys{}, errShortKey
+	}
+	master, err := util.HKDFSHA256(make([]byte, 32), rawE2E[:32], []byte(participantLID), 46)
+	if err != nil {
+		lg.Debug().Err(err).Str("participant_lid", participantLID).Msg("e2e srtcp master hkdf failed")
+		return E2eSrtpKeys{}, err
+	}
+	keys, err := deriveSessionKeysFromMasterLabels(master, 0x03, 0x04, 0x05)
+	if err != nil {
+		lg.Debug().Err(err).Str("participant_lid", participantLID).Msg("e2e srtcp key derivation failed")
+	}
+	return keys, err
+}
+
 // BuildE2eRtpIV builds the E2E RTP IV: salt right-aligned into 16 bytes, SSRC XORed
 // at bytes 4-7, and the 48-bit packet index (ROC<<16 | seq) XORed at bytes 8-13.
 func BuildE2eRtpIV(salt []byte, ssrc uint32, roc uint32, seq uint16) [16]byte {

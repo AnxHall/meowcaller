@@ -267,14 +267,15 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L78-L86
-	audioReceivers.attachSendPipeline(txPipe)
+	if err = audioReceivers.attachSendPipeline(txPipe); err != nil {
+		return fmt.Errorf("attach audio RTP sender: %w", err)
+	}
 	audioRtcp, err := newMediaSrtcpSender(callKey, selfLID, ssrc, false)
 	if err != nil {
 		return err
 	}
-	peerRtcp, err := newMediaSrtcpReceiver(callKey, peerLID)
-	if err != nil {
-		return err
+	if err = audioReceivers.attachSRTCPSender(audioRtcp); err != nil {
+		return fmt.Errorf("attach audio SRTCP sender: %w", err)
 	}
 	// The derived E2E-SRTP keys live inside MediaPipeline; record the derivation INPUTS
 	// (callKey + participant-ID info strings) so a reference can re-derive and compare.
@@ -387,51 +388,15 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	// Receive: DataChannel → classify. RTP → unprotect → decode → sink. A non-RTP STUN
 	// binding request gets a binding-success reply (ICE consent freshness, RFC 7675);
 	// without it the relay drops the binding and the peer's call fails.
-	// Video receive (meowcaller-native): a second WARP pipeline keyed on the video SSRC
-	// (participant slot 2), demuxed off the relay by H.264 payload type 97. NALUs are
-	// reassembled into Annex-B access units and emitted on the RTP marker bit, per WaCalls.
+	// Video receive (meowcaller-native): participant-scoped WARP pipelines keyed on
+	// each video SSRC (participant slot 2), demuxed off the relay by H.264 payload
+	// type 97. NALUs are reassembled into Annex-B access units and emitted on the
+	// RTP marker bit, per WaCalls.
 	//
 	// NOT VALIDATED: no live video-RTP vector; assumes video shares the audio E2E keys and
 	// WARP framing, and that the relay bridges the video SSRC.
-	rxVideoPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, videoSelfSsrc, FrameSamples, WithLogger(log))
-	if err != nil {
-		return err
-	}
-	rxAppDataPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, appDataSelfSsrc, FrameSamples, WithLogger(log))
-	if err != nil {
-		return err
-	}
-	var peerAppDataSsrc atomic.Uint32
-	setPeerAppDataSsrc := func(peer string) error {
-		ssrc, err := rtp.DeriveWasmParticipantSsrc(
-			callID,
-			rtp.FormatE2ESrtpParticipantID(peer),
-			rtp.AppDataSlotWord,
-			log,
-		)
-		if err != nil {
-			return err
-		}
-		peerAppDataSsrc.Store(ssrc)
-		return nil
-	}
-	if err := setPeerAppDataSsrc(peerLID); err != nil {
-		return err
-	}
 	rekeyPeer := func(answeringPeer string) error {
 		if err := audioReceivers.RekeyFallback(answeringPeer); err != nil {
-			return err
-		}
-		if err := rxVideoPipe.RekeyRecv(callKey, answeringPeer); err != nil {
-			return err
-		}
-		if err := rxAppDataPipe.RekeyRecv(callKey, answeringPeer); err != nil {
-			return err
-		}
-		if err := setPeerAppDataSsrc(answeringPeer); err != nil {
-			return err
-		}
-		if err := peerRtcp.rekey(callKey, answeringPeer); err != nil {
 			return err
 		}
 		audioMixer.Retain(audioReceivers.ActiveParticipantIDs())
@@ -542,11 +507,14 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		}
 		e.mu.Unlock()
 	}()
-	var videoDepack rtp.H264Depacketizer
-	var videoAU []byte
-	var appDataRx appDataReceiver
+	type videoReceiveState struct {
+		depacketizer rtp.H264Depacketizer
+		accessUnit   []byte
+		orientation  int
+	}
+	videoReceiveStates := make(map[*participantAudioReceiver]*videoReceiveState)
+	appDataReceivers := make(map[*participantAudioReceiver]*appDataReceiver)
 	var videoWirePacket, videoWireFrame uint64
-	videoOrientation := -1
 
 	// Video send: a second WARP pipeline on our video SSRC, registered on the call so
 	// Call.SendVideoFrame can push encoded H.264 to the relay. Cleared when the loop exits.
@@ -554,9 +522,15 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	if err != nil {
 		return err
 	}
+	if err = audioReceivers.attachSendPipeline(txVideoPipe); err != nil {
+		return fmt.Errorf("attach video RTP sender: %w", err)
+	}
 	videoRtcp, err := newMediaSrtcpSender(callKey, selfLID, videoSelfSsrc, true)
 	if err != nil {
 		return err
+	}
+	if err = audioReceivers.attachSRTCPSender(videoRtcp); err != nil {
+		return fmt.Errorf("attach video SRTCP sender: %w", err)
 	}
 	vsender := &videoSender{
 		pipe: txVideoPipe, stream: rtp.NewVideoRtpStream(videoSelfSsrc, defaultVideoRtpStepSamples),
@@ -566,6 +540,9 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	txAppDataPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, appDataSelfSsrc, FrameSamples, WithLogger(log))
 	if err != nil {
 		return err
+	}
+	if err = audioReceivers.attachSendPipeline(txAppDataPipe); err != nil {
+		return fmt.Errorf("attach app-data RTP sender: %w", err)
 	}
 	appSender := newAppDataSender(txAppDataPipe, appDataSelfSsrc, func(packet []byte) (int, error) {
 		if header, ok := rtp.ParseRtpHeader(packet); ok {
@@ -668,7 +645,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			if !ok {
 				continue
 			}
-			plain, index, ok := peerRtcp.unprotect(senderSsrc, pkt)
+			plain, index, ok := audioReceivers.UnprotectSRTCP(senderSsrc, pkt)
 			if !ok {
 				if rtcpAuthFail++; rtcpAuthFail == 1 {
 					log.Warn().Uint32("ssrc", senderSsrc).Msg("peer SRTCP failed authentication")
@@ -741,15 +718,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		}
 		kind := classifyMediaPayload(vh)
 		if kind == mediaPayloadAppData {
-			wantSsrc := peerAppDataSsrc.Load()
-			if vh.Ssrc != wantSsrc {
-				log.Warn().Uint32("ssrc", vh.Ssrc).Uint32("expected_ssrc", wantSsrc).Msg("dropping app-data RTP from unexpected SSRC")
-				e.c.diag.Emit("app_data", map[string]any{
-					"event": "ssrc_mismatch", "ssrc": vh.Ssrc, "expected_ssrc": wantSsrc,
-				})
-				continue
-			}
-			hdr, payload, ok := rxAppDataPipe.UnprotectAudio(pkt)
+			media, ok := audioReceivers.UnprotectAppData(pkt)
 			if !ok {
 				if appDataUnprotectFail++; appDataUnprotectFail == 1 {
 					log.Warn().Uint32("ssrc", vh.Ssrc).Uint16("seq", vh.SequenceNumber).Msg("app-data RTP arrived but failed to unprotect")
@@ -757,22 +726,28 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				e.c.diag.Emit("app_data", map[string]any{"event": "unprotect_failed", "ssrc": vh.Ssrc, "seq": vh.SequenceNumber})
 				continue
 			}
-			handled, err := handleAppDataReaction(call, &appDataRx, payload)
+			receiver := appDataReceivers[media.receiver]
+			if receiver == nil {
+				receiver = &appDataReceiver{}
+				appDataReceivers[media.receiver] = receiver
+			}
+			handled, err := handleAppDataReactionFrom(call, receiver, media.UserJID, media.Payload)
 			if err != nil {
-				log.Warn().Err(err).Uint32("ssrc", hdr.Ssrc).Uint16("seq", hdr.SequenceNumber).Msg("invalid RTC app-data payload")
+				log.Warn().Err(err).Uint32("ssrc", media.Header.Ssrc).Uint16("seq", media.Header.SequenceNumber).Msg("invalid RTC app-data payload")
 				e.c.diag.Emit("app_data", map[string]any{
-					"event": "decode_failed", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-					"payload_hex": hex.EncodeToString(payload), "error": err.Error(),
+					"event": "decode_failed", "ssrc": media.Header.Ssrc, "seq": media.Header.SequenceNumber,
+					"payload_hex": hex.EncodeToString(media.Payload), "error": err.Error(),
 				})
 				continue
 			}
 			e.c.diag.Emit("app_data", map[string]any{
-				"event": "in", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-				"ts": hdr.Timestamp, "handled": handled, "payload_hex": hex.EncodeToString(payload),
+				"event": "in", "ssrc": media.Header.Ssrc, "seq": media.Header.SequenceNumber,
+				"ts": media.Header.Timestamp, "handled": handled, "payload_hex": hex.EncodeToString(media.Payload),
+				"participant_id": media.ParticipantID,
 			})
 			if handled {
 				if appDataIn++; appDataIn == 1 {
-					log.Info().Uint32("ssrc", hdr.Ssrc).Msg("first RTC call reaction received")
+					log.Info().Uint32("ssrc", media.Header.Ssrc).Msg("first RTC call reaction received")
 				}
 			}
 			continue
@@ -780,7 +755,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		// Demux H.264 (PT 97) to video and emit Annex-B access units on the marker bit.
 		// Source of truth: https://github.com/JotaDev66/WaCalls/blob/2d6a1f666426049a89ef9541414e771acdcf8a16/internal/voip/call/callmanager_video.go#L86-L126
 		if kind == mediaPayloadVideo {
-			_, vpayload, vunok := rxVideoPipe.UnprotectAudio(pkt)
+			media, vunok := audioReceivers.UnprotectVideo(pkt)
 			if !vunok {
 				if videoUnprotectFail++; videoUnprotectFail == 1 {
 					log.Warn().
@@ -791,11 +766,17 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				e.c.diag.Emit("video", map[string]any{"event": "unprotect_failed", "ssrc": vh.Ssrc, "seq": vh.SequenceNumber})
 				continue
 			}
+			vh = media.Header
+			videoState := videoReceiveStates[media.receiver]
+			if videoState == nil {
+				videoState = &videoReceiveState{orientation: -1}
+				videoReceiveStates[media.receiver] = videoState
+			}
 			videoReception.Observe(vh.Ssrc, vh.SequenceNumber, vh.Timestamp, uint64(time.Now().UnixMilli()), 90000)
 			if vh.VideoExtension != nil {
 				orientation := vh.VideoExtension.DisplayOrientation()
-				if orientation != videoOrientation {
-					videoOrientation = orientation
+				if orientation != videoState.orientation {
+					videoState.orientation = orientation
 					if sink, ok := callVideoSink(call).(VideoOrientationSink); ok {
 						sink.SetOrientation(orientation)
 					}
@@ -818,17 +799,18 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 					"ssrc": vh.Ssrc, "seq": vh.SequenceNumber, "rtp_ts": vh.Timestamp,
 					"marker": vh.Marker, "header_hex": hex.EncodeToString(pkt[:headerLen]),
 					"extension_hex": hex.EncodeToString(extension),
-					"payload_hex":   hex.EncodeToString(vpayload), "protected_hex": hex.EncodeToString(pkt),
+					"payload_hex":   hex.EncodeToString(media.Payload), "protected_hex": hex.EncodeToString(pkt),
+					"participant_id": media.ParticipantID,
 				})
 			}
 			videoWirePacket++
-			for _, nalu := range videoDepack.Depacketize(vpayload) {
-				videoAU = append(videoAU, 0x00, 0x00, 0x00, 0x01)
-				videoAU = append(videoAU, nalu...)
+			for _, nalu := range videoState.depacketizer.Depacketize(media.Payload) {
+				videoState.accessUnit = append(videoState.accessUnit, 0x00, 0x00, 0x00, 0x01)
+				videoState.accessUnit = append(videoState.accessUnit, nalu...)
 			}
-			if vh.Marker && len(videoAU) > 0 {
-				frame := videoAU
-				videoAU = nil
+			if vh.Marker && len(videoState.accessUnit) > 0 {
+				frame := videoState.accessUnit
+				videoState.accessUnit = nil
 				if videoWireFrame < videoWireFrameLimit {
 					e.c.diag.Emit("video_wire", map[string]any{
 						"event": "access_unit", "direction": "in", "call_id": callID,
@@ -1019,6 +1001,13 @@ func (r *mediaSrtcpReceiver) rekey(callKey []byte, peerLID string) error {
 	return nil
 }
 
+func (r *mediaSrtcpReceiver) installKeys(keys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	r.mu.Lock()
+	r.keys = keys
+	r.mu.Unlock()
+}
+
 func (r *mediaSrtcpReceiver) unprotect(senderSSRC uint32, packet []byte) ([]byte, uint32, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1036,6 +1025,13 @@ func newMediaSrtcpSender(callKey []byte, selfLID string, ssrc uint32, profile bo
 		keys: keys, ssrc: ssrc, cname: rtp.BuildWhatsappRtcpCname(entropy),
 		profile: profile, index: 1,
 	}, nil
+}
+
+func (s *mediaSrtcpSender) installKeys(keys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	s.mu.Lock()
+	s.keys = keys
+	s.mu.Unlock()
 }
 
 func (s *mediaSrtcpSender) senderReport(stats rtp.RtcpSenderStats, nowMs uint64, report *rtp.RtcpReceptionReport) ([]byte, error) {
