@@ -16,6 +16,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   participant/device-attributed H.264 and reaction callbacks, and independent
   participant decoders/reaction overlays in the web example. Builder, dispatch,
   aliasing, controller, bridge, and existing media KATs pass.
+- Live initial group-video signaling reached ready with three connected
+  participants. Corrected the web camera encoder to request and enforce the
+  1280×720 coded-area limit advertised by AVC Baseline Level 3.1, avoiding the
+  1920×1080 configuration failure that closed the encoder before its first frame.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

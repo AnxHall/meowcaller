@@ -1,6 +1,6 @@
 # Group video and reactions
 
-**Status:** implementation authorized; live group-video acceptance pending
+**Status:** initial group-video signaling accepted live; encoded media validation pending
 
 **Reference pinned at:** UNMAPPED — WhatsApp Web group-video signaling was not
 present in the archived group-call captures.
@@ -17,20 +17,27 @@ present in the archived group-call captures.
   participant media pipeline, not from the protobuf payload.
 - Whatsmeow's verified direct-call offer places the H.264 `video` capability after
   the audio capabilities and before `net`.
+- On 2026-07-26, initial video group call
+  `E9707AFBD7A2DCD45B4BAA54EAB1017F` was accepted by WhatsApp. All three
+  participants reached connected PID-backed roster state, the call reached media
+  ready with `video=true`, and peers exchanged enabled/orientation video-state
+  stanzas. This validates initial group-video signaling and the offer's H.264
+  capability placement.
+- Outgoing H.264 media did not flow in that run because the web example attempted
+  1920×1080 with AVC Baseline Level 3.1. The browser rejected the encoder
+  configuration before it produced a frame.
 
 ## Inferences to validate live
 
-- An initial group-video offer uses the same H.264 `video` child as a direct offer,
-  in the same media-capability position.
 - A singular add-person offer for an active video call carries that same `video`
   child and advertises the video capability to the invited device.
 - A participant added to a video call joins the existing shared group relay/key
   epoch and receives subsequent group updates rather than negotiating a separate
   media session.
 
-These inferences must remain marked unvalidated until a capture or live call proves
-the offer is accepted and bidirectional video flows for original and added
-participants.
+The remaining inferences must stay marked unvalidated until a live add-person video
+call proves the offer is accepted and bidirectional video flows for original and
+added participants.
 
 ## Go envelope
 
@@ -75,4 +82,5 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
   without aliasing.
 - Web tests must prove tagged participant video messages and sender-attributed
   reaction rendering are present.
-- Live WhatsApp group-video and add-person acceptance remain pending.
+- Initial group-video signaling is live-accepted. Bidirectional H.264, video
+  add-person acceptance, and live group reactions remain pending.

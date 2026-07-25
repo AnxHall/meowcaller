@@ -50,7 +50,7 @@ func TestWebCallStateIncludesReactionEmoji(t *testing.T) {
 func TestVideoBridgePageDisplaysIncomingReactions(t *testing.T) {
 	for _, behavior := range []string{
 		`id="reactions"`,
-		"showReaction(s.emoji)",
+		"showReaction(s.emoji,s.sender)",
 		"s.event==='reaction'",
 	} {
 		if !strings.Contains(videoBridgePage, behavior) {
@@ -89,8 +89,9 @@ func TestVideoBridgePageRotatesPixelsInsideStableStage(t *testing.T) {
 
 func TestVideoBridgePageUsesCapturedFrameDimensions(t *testing.T) {
 	for _, behavior := range []string{
-		"f.displayWidth!==encodedWidth",
-		"width:encodedWidth,height:encodedHeight",
+		"const size=avcLevel31Size(f.displayWidth,f.displayHeight)",
+		"size.width!==encodedWidth||size.height!==encodedHeight",
+		"width:size.width,height:size.height",
 		"forceKeyframe=true",
 	} {
 		if !strings.Contains(videoBridgePage, behavior) {

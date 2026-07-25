@@ -152,9 +152,27 @@ func TestVideoBridgePageSeparatesStartGroupAndAddPeopleControls(t *testing.T) {
 		"s.event==='ready'||(s.event==='phase'&&s.phase===4)",
 		"s.event==='idle'||s.event==='ended'",
 		"['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'",
-		"$('startGroupAudio').disabled=true;$('addParticipants').disabled=false",
-		"$('startGroupAudio').disabled=true;$('addParticipants').disabled=true",
+		"$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=false",
+		"$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=true",
 		"updatePeopleControls(s)",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("page does not contain %q", behavior)
+		}
+	}
+}
+
+func TestVideoBridgePageClampsCameraToAVCLevel31(t *testing.T) {
+	// Source of truth: live web example failure on group call
+	// E9707AFBD7A2DCD45B4BAA54EAB1017F at 2026-07-26 00:19:57 Europe/Zurich.
+	for _, behavior := range []string{
+		"const avcLevel31MaxWidth=1280,avcLevel31MaxHeight=720",
+		"width:{ideal:1280,max:1280}",
+		"height:{ideal:720,max:720}",
+		"function avcLevel31Size(width,height)",
+		"const size=avcLevel31Size(f.displayWidth,f.displayHeight)",
+		"width:size.width,height:size.height",
+		"encoder.state==='configured'",
 	} {
 		if !strings.Contains(videoBridgePage, behavior) {
 			t.Errorf("page does not contain %q", behavior)
