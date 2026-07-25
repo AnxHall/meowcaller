@@ -940,6 +940,7 @@ func (e *engine) activateGroupMedia(
 	e.mu.Unlock()
 
 	firstBatch := true
+	var rejectedPublicTransactionID *uint32
 	for {
 		e.mu.Lock()
 		current := e.calls[callID]
@@ -949,14 +950,18 @@ func (e *engine) activateGroupMedia(
 			return
 		}
 		var pendingGroupUpdate *types.GroupCallUpdate
+		pendingGroupUpdateWasPublic := false
 		if firstBatch && m.pendingGroupUpdate != nil {
 			update := cloneGroupCallUpdate(*m.pendingGroupUpdate)
 			pendingGroupUpdate = &update
+			pendingGroupUpdateWasPublic = m.groupUpdate != nil &&
+				m.groupUpdate.TransactionID == update.TransactionID
 			clearGroupCallUpdateKeyMaterial(m.pendingGroupUpdate)
 			m.pendingGroupUpdate = nil
 		} else if firstBatch && m.groupUpdate != nil {
 			update := cloneGroupCallUpdate(*m.groupUpdate)
 			pendingGroupUpdate = &update
+			pendingGroupUpdateWasPublic = true
 		} else if len(m.queuedGroupUpdates) > 0 {
 			update := cloneGroupCallUpdate(m.queuedGroupUpdates[0])
 			pendingGroupUpdate = &update
@@ -991,6 +996,10 @@ func (e *engine) activateGroupMedia(
 		if pendingGroupUpdate != nil {
 			if err := applyGroupUpdate(*pendingGroupUpdate); err != nil {
 				pendingGroupUpdateAccepted = false
+				if pendingGroupUpdateWasPublic {
+					rejectedTransactionID := pendingGroupUpdate.TransactionID
+					rejectedPublicTransactionID = &rejectedTransactionID
+				}
 				e.c.log.Warn().
 					Err(err).
 					Uint32("transaction_id", pendingGroupUpdate.TransactionID).
@@ -1017,6 +1026,7 @@ func (e *engine) activateGroupMedia(
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
 		var call *Call
 		var publishedGroupUpdate *types.GroupCallUpdate
+		var rejectedTransactionID *uint32
 		if pendingGroupUpdate != nil && pendingGroupUpdateAccepted &&
 			(m.groupUpdate == nil ||
 				pendingGroupUpdate.TransactionID > m.groupUpdate.TransactionID) {
@@ -1027,6 +1037,13 @@ func (e *engine) activateGroupMedia(
 				call = m.call
 				published := cloneGroupCallUpdate(*pendingGroupUpdate)
 				publishedGroupUpdate = &published
+				if rejectedPublicTransactionID != nil &&
+					pendingGroupUpdate.TransactionID <
+						*rejectedPublicTransactionID {
+					rejected := *rejectedPublicTransactionID
+					rejectedTransactionID = &rejected
+				}
+				rejectedPublicTransactionID = nil
 			}
 		}
 		if m.groupUpdate != nil {
@@ -1037,7 +1054,12 @@ func (e *engine) activateGroupMedia(
 		}
 		e.mu.Unlock()
 		if call != nil && publishedGroupUpdate != nil {
-			call.setGroupState(groupCallStateFromUpdate(*publishedGroupUpdate))
+			state := groupCallStateFromUpdate(*publishedGroupUpdate)
+			if rejectedTransactionID != nil {
+				call.setGroupStateAfterRejected(*rejectedTransactionID, state)
+			} else {
+				call.setGroupState(state)
+			}
 		}
 	}
 }

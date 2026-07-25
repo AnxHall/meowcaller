@@ -28,6 +28,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   rejects empty call IDs before placeholder allocation, and separates
   engine-owned from media-goroutine-owned credential lifetimes so every cloned
   call/relay secret is zeroed at its final use.
+- Final review adds exact-match public roster recovery: a media-accepted lower
+  transaction may replace only the precise pre-published transaction that media
+  rejected, while any concurrent different or newer public state stays intact.
 - Focused review/compatibility KATs, full tests, the full race suite, vet, and
   diff checks pass. CodeRabbit review was unavailable because its CLI is not
   installed. Live WhatsApp group audio E2E remains pending.

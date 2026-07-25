@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -316,6 +317,68 @@ func TestCallGroupStateNotifiesOnlyAcceptedNewerTransactions(t *testing.T) {
 	})
 	if !slices.Equal(transactions, []uint32{17, 19}) {
 		t.Fatalf("ended call notified group state: %v", transactions)
+	}
+}
+
+func TestCallGroupStateValidationRecoveryRequiresExactRejectedTransaction(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	t.Run("exact rejected state", func(t *testing.T) {
+		call := &Call{}
+		var callbacks []uint32
+		call.OnGroupState(func(state GroupCallState) {
+			callbacks = append(callbacks, state.TransactionID)
+		})
+		call.setGroupState(GroupCallState{TransactionID: 20})
+		recovery := GroupCallState{
+			TransactionID: 19,
+			Participants: []GroupCallParticipant{{
+				State: "connected",
+			}},
+		}
+
+		if !call.setGroupStateAfterRejected(20, recovery) {
+			t.Fatal("exact rejected transaction did not allow recovery")
+		}
+		recovery.Participants[0].State = "mutated"
+		state, ok := call.GroupState()
+		if !ok || state.TransactionID != 19 ||
+			state.Participants[0].State != "connected" {
+			t.Fatalf("recovered public state = (%+v, %t)", state, ok)
+		}
+		if !slices.Equal(callbacks, []uint32{20, 19}) {
+			t.Fatalf("recovery callbacks = %v, want [20 19]", callbacks)
+		}
+	})
+
+	for _, currentTransactionID := range []uint32{18, 21} {
+		t.Run(fmt.Sprintf("protect current %d", currentTransactionID), func(t *testing.T) {
+			call := &Call{}
+			var callbacks []uint32
+			call.OnGroupState(func(state GroupCallState) {
+				callbacks = append(callbacks, state.TransactionID)
+			})
+			call.setGroupState(GroupCallState{
+				TransactionID: currentTransactionID,
+			})
+
+			if call.setGroupStateAfterRejected(
+				20,
+				GroupCallState{TransactionID: 19},
+			) {
+				t.Fatal("different current transaction allowed recovery")
+			}
+			state, ok := call.GroupState()
+			if !ok || state.TransactionID != currentTransactionID {
+				t.Fatalf("protected public state = (%+v, %t)", state, ok)
+			}
+			if !slices.Equal(callbacks, []uint32{currentTransactionID}) {
+				t.Fatalf(
+					"protected callbacks = %v, want [%d]",
+					callbacks,
+					currentTransactionID,
+				)
+			}
+		})
 	}
 }
 

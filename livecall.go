@@ -145,6 +145,37 @@ func (c *Call) setGroupState(state GroupCallState) {
 	}
 }
 
+func (c *Call) setGroupStateAfterRejected(
+	rejectedTransactionID uint32,
+	state GroupCallState,
+) bool {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	stored := cloneGroupCallState(state)
+	c.mu.Lock()
+	if c.groupState == nil ||
+		c.groupState.TransactionID != rejectedTransactionID {
+		c.mu.Unlock()
+		return false
+	}
+	c.groupState = &stored
+	fn := c.onGroupState
+	generation := c.groupCallbackGeneration
+	c.mu.Unlock()
+	if fn == nil {
+		return true
+	}
+	c.mu.Lock()
+	current := c.onGroupState != nil &&
+		c.groupCallbackGeneration == generation &&
+		c.groupState != nil &&
+		c.groupState.TransactionID == stored.TransactionID
+	c.mu.Unlock()
+	if current {
+		fn(cloneGroupCallState(stored))
+	}
+	return true
+}
+
 func groupCallStateFromUpdate(update types.GroupCallUpdate) GroupCallState {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L68
 	state := GroupCallState{

@@ -887,9 +887,24 @@ func TestActivateGroupMediaRejectedRosterAllowsLowerRecovery(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
 	eng, call := testEngineWithOutgoingCall()
 	m := eng.calls[call.ID()]
-	m.group = true
-	m.groupUpdate = &types.GroupCallUpdate{
-		CallID: call.ID(), TransactionID: 20,
+	var publicMu sync.Mutex
+	var publicTransactions []uint32
+	call.OnGroupState(func(state GroupCallState) {
+		publicMu.Lock()
+		publicTransactions = append(publicTransactions, state.TransactionID)
+		publicMu.Unlock()
+	})
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+		Update: types.GroupCallUpdate{
+			CallID: call.ID(), TransactionID: 20,
+		},
+	})
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 20 {
+		t.Fatalf("pre-activation roster cache = %+v, want transaction 20", m.groupUpdate)
+	}
+	if state, ok := call.GroupState(); !ok || state.TransactionID != 20 {
+		t.Fatalf("pre-activation public roster = (%+v, %t), want transaction 20", state, ok)
 	}
 	applyStarted := make(chan struct{})
 	releaseApply := make(chan struct{})
@@ -933,6 +948,15 @@ func TestActivateGroupMediaRejectedRosterAllowsLowerRecovery(t *testing.T) {
 	}
 	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 19 {
 		t.Fatalf("recovery roster cache = %+v, want transaction 19", m.groupUpdate)
+	}
+	publicMu.Lock()
+	gotPublicTransactions := append([]uint32(nil), publicTransactions...)
+	publicMu.Unlock()
+	if !slices.Equal(gotPublicTransactions, []uint32{20, 19}) {
+		t.Fatalf(
+			"public roster transactions = %v, want [20 19]",
+			gotPublicTransactions,
+		)
 	}
 	state, ok := call.GroupState()
 	if !ok || state.TransactionID != 19 {
