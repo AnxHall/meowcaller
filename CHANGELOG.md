@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### web/initial_group_call — `planned`
+- Added the capture-backed web-console contract for one audio-only multi-person
+  start through `Client.GroupCallWithOptions`, separate established-call
+  participant invitations, and incoming roster replay before Answer-driven
+  connecting state. Focused web KATs and live group audio E2E remain pending.
+
 ### api/initial_group_call — `partial`
 - Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
   preselected group start, a selected-only public roster seed, stable public
