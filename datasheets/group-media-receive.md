@@ -11,7 +11,7 @@ constraints below and the existing byte-exact SSRC/SRTP/WARP KATs.
 - capture SHA-256 `d565e26f2ca48483525c5bf4dcc2c1bf5ae616299190d128f5f35f74ac50d6c6`
 - capture SHA-256 `a91028746497b58d962f14fe5ed4d8036f3ca1c7f2091af5caa52f8430947def`
 - whatsmeow commit `7dc1db147f07af4a7b8878a4823e516386547164`
-- authenticated media receive commit `2c358ea`
+- authenticated media receive commit `2c358ea5dfdf2e9a17908790cc57d31d174dfbd6`
 
 The captures were approved by the human reviewer as authoritative on 2026-07-23.
 
@@ -23,6 +23,9 @@ are `diag/analysis/group-call-add-people-v2-20260723-112208.md` and
 
 ```text
 the direct-call ID remains unchanged during the ad-hoc group upgrade
+the initial direct relay ACK assigns the local endpoint self_pid 1
+transactions 8 and 10 retain the local endpoint and original peer as connected
+without assigning a PID to any remote device in those transitional rosters
 the original peer remains connected and becomes PID 0
 the local participant becomes PID 1
 the connected added participant becomes PID 2
@@ -33,6 +36,10 @@ the added participant uses its preallocated device-specific primary-audio SSRC
 both remote participants are simultaneously subscribed after the group update
 participant media/key state is independent and removed with active membership
 ```
+
+The receive invariant derived from that ordering is explicit: a local/self PID is
+not evidence that remote PID routing is ready. The authenticated direct receiver
+remains active until a connected remote device carries a PID.
 
 The existing verified helpers define the byte-level composition:
 

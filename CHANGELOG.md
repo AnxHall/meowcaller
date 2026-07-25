@@ -809,8 +809,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Preserve the authenticated direct receiver across transitional group snapshots
   that contain no connected remote PID-bearing devices. A local/self PID alone no
   longer suppresses that fallback. The transaction still advances, and the first
-  actionable remote PID roster promotes the existing peer without the five-second
-  audio interruption observed during live add-to-call testing.
+  actionable remote PID roster promotes the existing peer. The focused KAT targets
+  the live add-to-call interruption condition by authenticating direct-peer RTP
+  before and after a self-only-PID snapshot; live add-to-call E2E remains pending.
 
 ### media/group-audio-mixer — partial
 - Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
