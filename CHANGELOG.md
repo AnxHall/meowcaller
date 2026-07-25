@@ -7,6 +7,16 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/initial_group_call — `planned`
+- Added the immutable capture contract for one initial preselected group offer:
+  call-scoped routing, ordered self-plus-selected roster, Opus 8/16 kHz,
+  network medium 3, local-only capability, and optional group JID.
+- Recorded the transaction-11 self-only/outgoing gate and transaction-21 first
+  connected-remote-PID plus group-relay readiness boundary. The module must
+  preserve direct-call and singular active-invite behavior, install no state on
+  discovery/send failure, and emit media readiness at most once after a group
+  key epoch exists.
+
 ### web/group_call_outcomes — `KAT-verified`
 - Added the web-test contract for rendering every authoritative roster
   transaction and correlating a successful invite submission to a one-shot
