@@ -102,6 +102,10 @@ func (c *Client) GroupCallWithOptions(
 - Cache a cloned `CallOffer.Group` snapshot and publish it before invoking
   `OnIncomingCall`, so an active ad-hoc invite can replay its roster
   immediately.
+- Coalesce participant-directed offers that reuse an active logical call ID:
+  advance the cloned authoritative roster without invoking `OnIncomingCall`
+  again. Once the logical call has ended, ignore later same-ID offers instead
+  of mutating or redispatching its tombstoned engine entry.
 - Group media readiness supplies the connected PID-bearing device used for
   media key/receiver derivation. Launch media once, then replay the latest
   authoritative roster followed by every queued raw key epoch.
@@ -126,8 +130,9 @@ func (c *Client) GroupCallWithOptions(
 - Focused KATs cover target normalization/deduplication/order, strict optional
   group-JID parsing, one-shot delegation, error preservation, PN/LID handoff,
   the selected-only public seed, incoming snapshot cloning/replay, stable peer
-  behavior, connected-device media identity, one-shot launch, and queued
-  roster/key ordering.
+  behavior, repeated same-ID offer coalescing, post-end offer suppression,
+  connected-device media identity, one-shot launch, and queued roster/key
+  ordering.
 - Review regressions cover strict remote-user JIDs, pointer-safe offer-error
   cleanup, deterministic unknown-placeholder expiry, racing expiry after
   attachment, pre-return roster/rekey/readiness ordering, and arrivals during

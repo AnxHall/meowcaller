@@ -102,6 +102,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Added deterministic incoming roster replay ordering through the controller's
   SSE bridge before Answer-driven connecting state without synthesizing ready.
   Focused and full nested web KATs pass. Live group audio E2E remains pending.
+- Prevented repeated participant-directed offers for the controller's owned
+  logical call from entering the busy-call rejection path and tearing down the
+  underlying group call.
 
 ### api/initial_group_call — `partial`
 - Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
@@ -116,6 +119,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   handling, connected-device media derivation, and deterministic one-shot
   roster-then-key queue activation. Synchronous pre-return roster/key events
   attach to the returned call without losing their authoritative state.
+- Coalesced repeated participant-directed offers for one logical call ID into
+  roster updates without redispatching `OnIncomingCall`, and suppressed
+  same-ID offers after the call has ended so an ended engine entry cannot be
+  reused as a ghost call.
 - Review follow-up adds bounded and pointer-safe placeholder cleanup with
   owned-key zeroing, deep-cloned retained relay credentials, deferred
   pre-attachment readiness, serialized backlog activation, and strict

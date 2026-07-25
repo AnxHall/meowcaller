@@ -168,6 +168,12 @@ func (c *webCallController) publishReaction(state webCallState) {
 func (c *webCallController) onIncomingCall(call *meowcaller.Call) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L102-L120
 	c.mu.Lock()
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/4d5432c1f40af1ce7fab8cd7018ffcf8e76edea7/diag/analysis/capture-corpus-v2-20260723.md#L125-L134
+	if c.call == call || c.pending == call ||
+		(call.ID() != "" && c.activeCallID == call.ID()) {
+		c.mu.Unlock()
+		return
+	}
 	if c.call != nil || c.pending != nil || c.activeCallID != "" {
 		c.mu.Unlock()
 		if c.rejectCall != nil {

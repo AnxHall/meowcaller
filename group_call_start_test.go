@@ -401,6 +401,91 @@ func TestIncomingGroupOfferPublishesClonedSnapshotBeforeCallback(t *testing.T) {
 	}
 }
 
+func TestRepeatedIncomingGroupOfferUpdatesRosterWithoutSecondCallback(t *testing.T) {
+	creator := types.NewJID("222222222222222", types.HiddenUserServer)
+	firstSender := creator
+	firstSender.Device = 7
+	addedSender := types.NewJID("333333333333333", types.HiddenUserServer)
+	addedSender.Device = 43
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	var calls []*Call
+	c.OnIncomingCall(func(call *Call) {
+		calls = append(calls, call)
+	})
+
+	c.eng.onOffer(&events.CallOffer{
+		BasicCallMeta: types.BasicCallMeta{
+			CallID: "GROUP-CID", From: firstSender, CallCreator: creator,
+		},
+		Group: &types.GroupCallUpdate{
+			CallID: "GROUP-CID", TransactionID: 38,
+		},
+	})
+	c.eng.onOffer(&events.CallOffer{
+		BasicCallMeta: types.BasicCallMeta{
+			CallID: "GROUP-CID", From: addedSender, CallCreator: creator,
+		},
+		Group: &types.GroupCallUpdate{
+			CallID: "GROUP-CID", TransactionID: 43,
+		},
+	})
+
+	if len(calls) != 1 {
+		t.Fatalf("incoming callbacks = %d, want one logical call", len(calls))
+	}
+	state, ok := calls[0].GroupState()
+	if !ok || state.TransactionID != 43 {
+		t.Fatalf("coalesced group state = (%+v, %t), want transaction 43", state, ok)
+	}
+}
+
+func TestEndedIncomingGroupCallDoesNotRedispatchSameIDOffer(t *testing.T) {
+	creator := types.NewJID("222222222222222", types.HiddenUserServer)
+	sender := creator
+	sender.Device = 7
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	var calls []*Call
+	c.OnIncomingCall(func(call *Call) {
+		calls = append(calls, call)
+	})
+	offer := &events.CallOffer{
+		BasicCallMeta: types.BasicCallMeta{
+			CallID: "GROUP-CID", From: sender, CallCreator: creator,
+		},
+		Group: &types.GroupCallUpdate{
+			CallID: "GROUP-CID", TransactionID: 38,
+		},
+	}
+
+	c.eng.onOffer(offer)
+	var rosterTransactions []uint32
+	calls[0].OnGroupState(func(state GroupCallState) {
+		rosterTransactions = append(rosterTransactions, state.TransactionID)
+	})
+	c.eng.finishCall("GROUP-CID", "group_call_ended")
+	lateOffer := *offer
+	lateGroup := *offer.Group
+	lateGroup.TransactionID = 43
+	lateOffer.Group = &lateGroup
+	c.eng.onOffer(&lateOffer)
+
+	if len(calls) != 1 {
+		t.Fatalf("incoming callbacks after end = %d, want one", len(calls))
+	}
+	if calls[0].State() != CallPhaseEnded {
+		t.Fatalf("call phase = %d, want ended", calls[0].State())
+	}
+	if !slices.Equal(rosterTransactions, []uint32{38}) {
+		t.Fatalf("post-end roster notifications = %v, want [38]", rosterTransactions)
+	}
+	state, ok := calls[0].GroupState()
+	if !ok || state.TransactionID != 38 {
+		t.Fatalf("post-end group state = (%+v, %t), want transaction 38", state, ok)
+	}
+}
+
 func TestGroupAcceptPreservesSelectedPeerAndDirectRekeyState(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L100-L115
 	eng, call := testEngineWithOutgoingCall()

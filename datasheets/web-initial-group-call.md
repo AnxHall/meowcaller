@@ -120,6 +120,9 @@ The HTTP control envelope adds:
 - Register `Call.OnGroupState` during attach before invoking `Call.Answer`.
   Roster replay is signaling state, not media readiness, and must not publish a
   ready event by itself.
+- Treat a repeated incoming callback for the controller's exact owned call as
+  a roster/signaling refresh, never as a competing call to reject. Different
+  calls remain subject to the existing busy rejection.
 - Keep the group-start button available only in idle UI state. Keep Add people
   disabled until ready or active, and disable it again on ended/idle.
 - Live WhatsApp initial offer, ACK, group rekey, relay readiness, and

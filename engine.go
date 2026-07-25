@@ -739,8 +739,14 @@ func (e *engine) onOffer(ev *events.CallOffer) {
 	call := &Call{eng: e, id: ev.CallID, peer: peer, phase: CallPhaseRinging}
 	e.mu.Lock()
 	m := e.entry(ev.CallID)
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/4d5432c1f40af1ce7fab8cd7018ffcf8e76edea7/diag/analysis/capture-corpus-v2-20260723.md#L125-L134
+	if m.ended {
+		e.mu.Unlock()
+		return
+	}
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
 	cancelPlaceholder := e.attachGroupPlaceholder(m)
+	firstOffer := m.call == nil
 	if m.call == nil {
 		m.call = call
 	} else {
@@ -773,6 +779,10 @@ func (e *engine) onOffer(ev *events.CallOffer) {
 	e.c.diag.Emit("meta", map[string]any{
 		"event": "offer_received", "call_id": ev.CallID, "from": ev.From.String(), "peer": peer.String(), "video": ev.Video,
 	})
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/4d5432c1f40af1ce7fab8cd7018ffcf8e76edea7/diag/analysis/capture-corpus-v2-20260723.md#L125-L134
+	if !firstOffer {
+		return
+	}
 	if fn := e.c.incomingCallHandler(); fn != nil {
 		fn(call)
 	}

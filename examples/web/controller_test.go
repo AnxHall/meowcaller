@@ -1101,6 +1101,30 @@ func TestWebCallControllerRejectsIncomingCallDuringGroupStartReservation(t *test
 	}
 }
 
+func TestWebCallControllerIgnoresRepeatedOfferForOwnedCall(t *testing.T) {
+	incoming := &meowcaller.Call{}
+	var rejected int
+	c := &webCallController{
+		bridge:       &videoBridge{subs: make(map[chan vbMsg]struct{})},
+		log:          zerolog.Nop(),
+		pending:      incoming,
+		activeCallID: incoming.ID(),
+		rejectCall: func(*meowcaller.Call) error {
+			rejected++
+			return nil
+		},
+	}
+
+	c.onIncomingCall(incoming)
+
+	if rejected != 0 {
+		t.Fatalf("same logical call was rejected %d times", rejected)
+	}
+	if c.pending != incoming || c.call != nil {
+		t.Fatalf("repeated offer changed ownership: pending=%p call=%p", c.pending, c.call)
+	}
+}
+
 func TestWebCallControllerStartGroupAudioOwnershipChangeHangsUpReturnedCall(t *testing.T) {
 	call := &meowcaller.Call{}
 	var hangups int
