@@ -7,6 +7,16 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/group_key_epoch_fanout — `planned`
+- Added the two-sided-capture contract for generating one shared 32-byte group
+  epoch when nominated by `rekey="1"`, Signal-encrypting it independently to
+  every other connected PID-bearing device, sending one direct captured-shape
+  `enc_rekey` per recipient, and handing the same root to local media.
+- Added the missing added-participant boundary: a decrypted inbound epoch
+  installs the key on the keyless active-call invite and triggers its first
+  media-ready event; existing active calls rotate in place without a second
+  media-ready event.
+
 ### media/group_key_epoch — `KAT-verified`
 - Added the corrective two-sided-capture contract for one transaction-wide raw
   media epoch. The elected `enc_rekey` author distributes one shared root; local
