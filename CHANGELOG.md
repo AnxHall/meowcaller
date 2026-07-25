@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/group_invite_accept — `planned`
+- Added the capture contract for accepting a directed invitation into an
+  already-active ad-hoc call. The enriched offer seeds transaction-ordered group
+  state before eager preaccept, and both preaccept and deferred accept use
+  `CALLID@call`; ordinary 1:1 offers remain direct.
+
 ### voip/group_rekey_directive — `KAT-verified`
 - Added the immutable two-sided capture contract for preserving the
   endpoint-personalized `group_info rekey="1"` nomination on the typed group
