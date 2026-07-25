@@ -369,6 +369,7 @@ func (r *participantReceiveRegistry) prepareGroupUpdateLocked(
 		}
 		prepared.consumedPendingTransactions = append(prepared.consumedPendingTransactions, transactionID)
 		if !hasNewestPending || transactionID > newestPending.transactionID {
+			clear(newestPending.rawKey)
 			newestPending = installedGroupRawEpoch{
 				transactionID: transactionID,
 				rawKey:        bytes.Clone(rawKey),

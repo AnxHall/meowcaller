@@ -29,6 +29,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   epoch state unchanged for exact retry. Newer updates without a relay commit
   once, while stale updates bypass both the relay and commit callbacks. Focused
   cross-resource, callback-contract, and race KATs pass.
+- Review follow-up zeroes each superseded prospective pending-epoch clone during
+  newest-eligible selection, keeping rollback key lifetime bounded even when
+  several buffered transactions become eligible together.
 
 ### media/group_rtcp_feedback — `partial`
 - Corrected the wire contract from authenticated group traffic. Native
