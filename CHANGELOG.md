@@ -24,6 +24,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   owned-key zeroing, deep-cloned retained relay credentials, deferred
   pre-attachment readiness, serialized backlog activation, and strict
   PN/LID-only explicit group targets.
+- Re-review hardens activation around in-flight roster rejection and recovery,
+  rejects empty call IDs before placeholder allocation, and separates
+  engine-owned from media-goroutine-owned credential lifetimes so every cloned
+  call/relay secret is zeroed at its final use.
 - Focused review/compatibility KATs, full tests, the full race suite, vet, and
   diff checks pass. CodeRabbit review was unavailable because its CLI is not
   installed. Live WhatsApp group audio E2E remains pending.

@@ -27,6 +27,7 @@ type engine struct {
 	setCallMute                    func(context.Context, string, bool) error
 	inviteCallParticipant          func(context.Context, string, types.JID) error
 	startMedia                     func(context.Context, string, *Call, []byte, string, string, *types.RelayEndpoint) error
+	onMediaStopped                 func(string)
 	scheduleGroupPlaceholderExpiry func(string, time.Duration, func()) func()
 }
 
@@ -50,6 +51,7 @@ type engineCall struct {
 	rekeyPeer          func(string) error
 	groupUpdate        *types.GroupCallUpdate
 	pendingGroupUpdate *types.GroupCallUpdate
+	queuedGroupUpdates []types.GroupCallUpdate
 	applyGroupUpdate   func(types.GroupCallUpdate) error
 	pendingGroupRekeys []events.CallEncRekey
 	applyGroupRekey    func(events.CallEncRekey) error
@@ -234,12 +236,19 @@ func clearEngineCallKeyMaterial(m *engineCall) {
 	}
 	m.pendingGroupRekeys = nil
 	clearGroupCallUpdateKeyMaterial(m.groupUpdate)
+	m.groupUpdate = nil
 	clearGroupCallUpdateKeyMaterial(m.pendingGroupUpdate)
+	m.pendingGroupUpdate = nil
+	for i := range m.queuedGroupUpdates {
+		clearGroupCallUpdateKeyMaterial(&m.queuedGroupUpdates[i])
+	}
+	m.queuedGroupUpdates = nil
 	if m.relay != nil {
 		clear(m.relay.Key)
 		clear(m.relay.Token)
 		clear(m.relay.AuthToken)
 	}
+	m.relay = nil
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -268,6 +277,24 @@ func cloneRelayEndpoint(endpoint types.RelayEndpoint) types.RelayEndpoint {
 	clone.Token = bytes.Clone(endpoint.Token)
 	clone.AuthToken = bytes.Clone(endpoint.AuthToken)
 	return clone
+}
+
+func discardQueuedGroupUpdatesAtOrBelow(
+	updates []types.GroupCallUpdate,
+	transactionID uint32,
+) []types.GroupCallUpdate {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	kept := make([]types.GroupCallUpdate, 0, len(updates))
+	for i := range updates {
+		if updates[i].TransactionID <= transactionID {
+			clearGroupCallUpdateKeyMaterial(&updates[i])
+			continue
+		}
+		kept = append(kept, updates[i])
+		updates[i] = types.GroupCallUpdate{}
+	}
+	clear(updates)
+	return kept
 }
 
 func (e *engine) lookup(callID string) *engineCall {
@@ -790,7 +817,8 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 
 func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L85
-	if ev == nil {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
+	if ev == nil || ev.CallID == "" {
 		return
 	}
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L107
@@ -803,6 +831,12 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	}
 	m.group = true
 	if m.ended || (m.call != nil && m.call.State() == CallPhaseEnded) {
+		e.mu.Unlock()
+		return
+	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	if m.groupActivating && m.applyGroupUpdate == nil {
+		m.queuedGroupUpdates = append(m.queuedGroupUpdates, update)
 		e.mu.Unlock()
 		return
 	}
@@ -849,7 +883,8 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 
 func (e *engine) onEncRekey(ev *events.CallEncRekey) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L48-L93
-	if ev == nil || len(ev.RawKey) != 32 {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
+	if ev == nil || ev.CallID == "" || len(ev.RawKey) != 32 {
 		return
 	}
 	rekey := *ev
@@ -914,19 +949,41 @@ func (e *engine) activateGroupMedia(
 			return
 		}
 		var pendingGroupUpdate *types.GroupCallUpdate
-		if m.pendingGroupUpdate != nil {
+		if firstBatch && m.pendingGroupUpdate != nil {
 			update := cloneGroupCallUpdate(*m.pendingGroupUpdate)
 			pendingGroupUpdate = &update
+			clearGroupCallUpdateKeyMaterial(m.pendingGroupUpdate)
+			m.pendingGroupUpdate = nil
 		} else if firstBatch && m.groupUpdate != nil {
 			update := cloneGroupCallUpdate(*m.groupUpdate)
 			pendingGroupUpdate = &update
+		} else if len(m.queuedGroupUpdates) > 0 {
+			update := cloneGroupCallUpdate(m.queuedGroupUpdates[0])
+			pendingGroupUpdate = &update
+			clearGroupCallUpdateKeyMaterial(&m.queuedGroupUpdates[0])
+			m.queuedGroupUpdates[0] = types.GroupCallUpdate{}
+			m.queuedGroupUpdates = m.queuedGroupUpdates[1:]
+			if len(m.queuedGroupUpdates) == 0 {
+				m.queuedGroupUpdates = nil
+			}
+		}
+		if firstBatch && pendingGroupUpdate != nil {
+			clearGroupCallUpdateKeyMaterial(m.groupUpdate)
+			m.groupUpdate = nil
 		}
 		pendingGroupRekeys := append(
 			[]events.CallEncRekey(nil),
 			m.pendingGroupRekeys...,
 		)
-		m.pendingGroupUpdate = nil
 		m.pendingGroupRekeys = nil
+		if pendingGroupUpdate == nil && len(pendingGroupRekeys) == 0 {
+			m.applyGroupUpdate = applyGroupUpdate
+			m.applyGroupRekey = applyGroupRekey
+			m.groupActivating = false
+			m.groupActive = true
+			e.mu.Unlock()
+			return
+		}
 		e.mu.Unlock()
 		firstBatch = false
 
@@ -958,22 +1015,30 @@ func (e *engine) activateGroupMedia(
 			return
 		}
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
-		if pendingGroupUpdate != nil && !pendingGroupUpdateAccepted &&
-			m.groupUpdate != nil &&
-			m.groupUpdate.TransactionID == pendingGroupUpdate.TransactionID {
+		var call *Call
+		var publishedGroupUpdate *types.GroupCallUpdate
+		if pendingGroupUpdate != nil && pendingGroupUpdateAccepted &&
+			(m.groupUpdate == nil ||
+				pendingGroupUpdate.TransactionID > m.groupUpdate.TransactionID) {
 			clearGroupCallUpdateKeyMaterial(m.groupUpdate)
-			m.groupUpdate = nil
+			cached := cloneGroupCallUpdate(*pendingGroupUpdate)
+			m.groupUpdate = &cached
+			if m.call != nil && m.call.State() != CallPhaseEnded {
+				call = m.call
+				published := cloneGroupCallUpdate(*pendingGroupUpdate)
+				publishedGroupUpdate = &published
+			}
 		}
-		if m.pendingGroupUpdate != nil || len(m.pendingGroupRekeys) > 0 {
-			e.mu.Unlock()
-			continue
+		if m.groupUpdate != nil {
+			m.queuedGroupUpdates = discardQueuedGroupUpdatesAtOrBelow(
+				m.queuedGroupUpdates,
+				m.groupUpdate.TransactionID,
+			)
 		}
-		m.applyGroupUpdate = applyGroupUpdate
-		m.applyGroupRekey = applyGroupRekey
-		m.groupActivating = false
-		m.groupActive = true
 		e.mu.Unlock()
-		return
+		if call != nil && publishedGroupUpdate != nil {
+			call.setGroupState(groupCallStateFromUpdate(*publishedGroupUpdate))
+		}
 	}
 }
 
@@ -1152,23 +1217,12 @@ func (e *engine) finishCall(callID, reason string) {
 	}
 	m.ended = true
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/18618f30d0dc7a7bf822354d9a6c9264b275b221/datasheets/group-media-enc-rekey.md#L88-L89
-	for i := range m.pendingGroupRekeys {
-		clear(m.pendingGroupRekeys[i].RawKey)
-	}
-	m.pendingGroupRekeys = nil
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
-	clearGroupCallUpdateKeyMaterial(m.groupUpdate)
-	m.groupUpdate = nil
-	clearGroupCallUpdateKeyMaterial(m.pendingGroupUpdate)
-	m.pendingGroupUpdate = nil
+	clearEngineCallKeyMaterial(m)
 	m.applyGroupUpdate = nil
 	m.applyGroupRekey = nil
 	m.groupActivating = false
 	m.groupActive = false
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
-	}
 	call := m.call
 	e.mu.Unlock()
 	if call == nil || call.State() == CallPhaseEnded {

@@ -891,16 +891,30 @@ func TestActivateGroupMediaRejectedRosterAllowsLowerRecovery(t *testing.T) {
 	m.groupUpdate = &types.GroupCallUpdate{
 		CallID: call.ID(), TransactionID: 20,
 	}
-	eng.activateGroupMedia(
-		call.ID(),
-		func(update types.GroupCallUpdate) error {
-			if update.TransactionID == 20 {
-				return errors.New("rejected roster")
-			}
-			return nil
-		},
-		func(events.CallEncRekey) error { return nil },
-	)
+	applyStarted := make(chan struct{})
+	releaseApply := make(chan struct{})
+	activationDone := make(chan struct{})
+	var appliedMu sync.Mutex
+	var applied []uint32
+	go func() {
+		eng.activateGroupMedia(
+			call.ID(),
+			func(update types.GroupCallUpdate) error {
+				appliedMu.Lock()
+				applied = append(applied, update.TransactionID)
+				appliedMu.Unlock()
+				if update.TransactionID == 20 {
+					close(applyStarted)
+					<-releaseApply
+					return errors.New("rejected roster")
+				}
+				return nil
+			},
+			func(events.CallEncRekey) error { return nil },
+		)
+		close(activationDone)
+	}()
+	<-applyStarted
 
 	eng.onGroupUpdate(&events.CallGroupUpdate{
 		BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
@@ -908,8 +922,79 @@ func TestActivateGroupMediaRejectedRosterAllowsLowerRecovery(t *testing.T) {
 			CallID: call.ID(), TransactionID: 19,
 		},
 	})
+	close(releaseApply)
+	<-activationDone
+
+	appliedMu.Lock()
+	gotApplied := append([]uint32(nil), applied...)
+	appliedMu.Unlock()
+	if !slices.Equal(gotApplied, []uint32{20, 19}) {
+		t.Fatalf("applied roster transactions = %v, want [20 19]", gotApplied)
+	}
 	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 19 {
 		t.Fatalf("recovery roster cache = %+v, want transaction 19", m.groupUpdate)
+	}
+	state, ok := call.GroupState()
+	if !ok || state.TransactionID != 19 {
+		t.Fatalf("public recovery roster = (%+v, %t), want transaction 19", state, ok)
+	}
+}
+
+func TestActivateGroupMediaAcceptedRosterSuppressesLowerAndDrainsNewer(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L119-L122
+	eng, call := testEngineWithOutgoingCall()
+	m := eng.calls[call.ID()]
+	m.group = true
+	m.groupUpdate = &types.GroupCallUpdate{
+		CallID: call.ID(), TransactionID: 20,
+	}
+	applyStarted := make(chan struct{})
+	releaseApply := make(chan struct{})
+	activationDone := make(chan struct{})
+	var appliedMu sync.Mutex
+	var applied []uint32
+	go func() {
+		eng.activateGroupMedia(
+			call.ID(),
+			func(update types.GroupCallUpdate) error {
+				appliedMu.Lock()
+				applied = append(applied, update.TransactionID)
+				appliedMu.Unlock()
+				if update.TransactionID == 20 {
+					close(applyStarted)
+					<-releaseApply
+				}
+				return nil
+			},
+			func(events.CallEncRekey) error { return nil },
+		)
+		close(activationDone)
+	}()
+	<-applyStarted
+
+	for _, transactionID := range []uint32{19, 21} {
+		eng.onGroupUpdate(&events.CallGroupUpdate{
+			BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+			Update: types.GroupCallUpdate{
+				CallID: call.ID(), TransactionID: transactionID,
+			},
+		})
+	}
+	close(releaseApply)
+	<-activationDone
+
+	appliedMu.Lock()
+	gotApplied := append([]uint32(nil), applied...)
+	appliedMu.Unlock()
+	if !slices.Equal(gotApplied, []uint32{20, 21}) {
+		t.Fatalf("applied roster transactions = %v, want [20 21]", gotApplied)
+	}
+	if m.groupUpdate == nil || m.groupUpdate.TransactionID != 21 {
+		t.Fatalf("accepted roster cache = %+v, want transaction 21", m.groupUpdate)
+	}
+	state, ok := call.GroupState()
+	if !ok || state.TransactionID != 21 {
+		t.Fatalf("public accepted roster = (%+v, %t), want transaction 21", state, ok)
 	}
 }
 
@@ -1007,5 +1092,45 @@ func TestUnknownGroupPlaceholderExpiryIsBoundedAndAttachmentSafe(t *testing.T) {
 	}
 	if cancels.Load() < 2 {
 		t.Fatalf("placeholder expiry cancellations = %d, want at least 2", cancels.Load())
+	}
+}
+
+func TestGroupEventsRejectEmptyCallIDBeforePlaceholderAllocation(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L118
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	var scheduled atomic.Int32
+	c.eng.scheduleGroupPlaceholderExpiry = func(
+		string,
+		time.Duration,
+		func(),
+	) func() {
+		scheduled.Add(1)
+		return func() {}
+	}
+	rawKey := bytes.Repeat([]byte{0x55}, 32)
+
+	c.eng.onGroupUpdate(&events.CallGroupUpdate{
+		Update: types.GroupCallUpdate{TransactionID: 1},
+	})
+	c.eng.onEncRekey(&events.CallEncRekey{
+		Rekey:  types.GroupCallEncRekey{TransactionID: 1},
+		RawKey: rawKey,
+	})
+
+	c.eng.mu.Lock()
+	empty := c.eng.calls[""]
+	callCount := len(c.eng.calls)
+	c.eng.mu.Unlock()
+	if empty != nil || callCount != 0 || scheduled.Load() != 0 {
+		t.Fatalf(
+			"empty call ID allocated state = entry:%t calls:%d scheduled:%d",
+			empty != nil,
+			callCount,
+			scheduled.Load(),
+		)
+	}
+	if !allEqual(rawKey, 0x55) {
+		t.Fatal("empty call ID handling mutated the event-owned raw key")
 	}
 }

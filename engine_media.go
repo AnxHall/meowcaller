@@ -1,6 +1,7 @@
 package meowcaller
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -44,7 +45,11 @@ func (e *engine) maybeStartMedia(callID string) {
 	mctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	call := m.call
-	callKey, selfLID, peerLID, endpoint := m.callKey, m.selfLID, m.peerLID, m.relay
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
+	callKey := bytes.Clone(m.callKey)
+	endpointClone := cloneRelayEndpoint(*m.relay)
+	selfLID, peerLID := m.selfLID, m.peerLID
+	onMediaStopped := e.onMediaStopped
 	e.mu.Unlock()
 
 	if call != nil {
@@ -52,7 +57,16 @@ func (e *engine) maybeStartMedia(callID string) {
 	}
 	e.c.log.Info().Str("call_id", callID).Msg("starting media")
 	go func() {
-		if err := startMedia(mctx, callID, call, callKey, selfLID, peerLID, endpoint); err != nil {
+		defer func() {
+			clear(callKey)
+			clear(endpointClone.Key)
+			clear(endpointClone.Token)
+			clear(endpointClone.AuthToken)
+			if onMediaStopped != nil {
+				onMediaStopped(callID)
+			}
+		}()
+		if err := startMedia(mctx, callID, call, callKey, selfLID, peerLID, &endpointClone); err != nil {
 			e.c.log.Warn().Err(err).Str("call_id", callID).Msg("media ended")
 		}
 	}()
@@ -473,7 +487,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}
 	defer func() {
 		e.mu.Lock()
-		if m := e.calls[callID]; m != nil {
+		if m := e.calls[callID]; m != nil && m.call == call {
 			m.rekeyPeer = nil
 			m.applyGroupUpdate = nil
 			m.applyGroupRekey = nil

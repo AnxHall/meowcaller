@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow/types"
@@ -386,6 +387,165 @@ func TestEngineQueuesAndRoutesSharedGroupEpochWithDistributorMetadata(t *testing
 	if applied.Rekey.TransactionID != 0 {
 		t.Fatal("ended call applied a participant rekey")
 	}
+}
+
+func TestFinishCallClearsOwnedMediaCredentials(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0606f5102f94131b3a77a0f979153d9cc72cbfb7/datasheets/api-initial-group-call.md#L111-L122
+	mediaReady := func(
+		callID string,
+		callKey, relayKey, relayToken, relayAuthToken []byte,
+	) *events.CallMediaReady {
+		return &events.CallMediaReady{
+			BasicCallMeta: types.BasicCallMeta{CallID: callID},
+			SelfLID:       mediaTestJID("111111111111111", 14),
+			PeerLID:       mediaTestJID("222222222222222", 7),
+			CallKey:       callKey,
+			Relay: types.RelayEndpoint{
+				IPv4: "157.240.17.133", Port: 3478,
+				Key: relayKey, Token: relayToken, AuthToken: relayAuthToken,
+			},
+			Codec:     types.CallCodecOpus,
+			Direction: types.CallDirectionOutgoing,
+		}
+	}
+	assertInputsUnchanged := func(
+		t *testing.T,
+		callKey, relayKey, relayToken, relayAuthToken []byte,
+	) {
+		t.Helper()
+		if !allEqual(callKey, 0x61) || !allEqual(relayKey, 0x62) ||
+			!allEqual(relayToken, 0x63) || !allEqual(relayAuthToken, 0x64) {
+			t.Fatal("credential cleanup mutated event-owned buffers")
+		}
+	}
+
+	t.Run("unstarted", func(t *testing.T) {
+		eng, call := testEngineWithOutgoingCall()
+		eng.startMedia = nil
+		callKey := bytes.Repeat([]byte{0x61}, 32)
+		relayKey := bytes.Repeat([]byte{0x62}, 32)
+		relayToken := bytes.Repeat([]byte{0x63}, 16)
+		relayAuthToken := bytes.Repeat([]byte{0x64}, 16)
+		eng.onMediaReady(mediaReady(
+			call.ID(),
+			callKey,
+			relayKey,
+			relayToken,
+			relayAuthToken,
+		))
+		m := eng.calls[call.ID()]
+		ownedCallKey := m.callKey
+		ownedRelayKey := m.relay.Key
+		ownedRelayToken := m.relay.Token
+		ownedRelayAuthToken := m.relay.AuthToken
+
+		eng.finishCall(call.ID(), "ended")
+
+		if m.callKey != nil || m.relay != nil {
+			t.Fatalf("ended unstarted call retained credential owners: %+v", m)
+		}
+		if !allZero(ownedCallKey) || !allZero(ownedRelayKey) ||
+			!allZero(ownedRelayToken) || !allZero(ownedRelayAuthToken) {
+			t.Fatal("ended unstarted call retained credential bytes")
+		}
+		assertInputsUnchanged(
+			t,
+			callKey,
+			relayKey,
+			relayToken,
+			relayAuthToken,
+		)
+	})
+
+	t.Run("started", func(t *testing.T) {
+		eng, call := testEngineWithOutgoingCall()
+		mediaStarted := make(chan struct{})
+		releaseMedia := make(chan struct{})
+		mediaStopped := make(chan struct{})
+		var stoppedCallID string
+		eng.onMediaStopped = func(callID string) {
+			stoppedCallID = callID
+			close(mediaStopped)
+		}
+		var mediaCallKey []byte
+		var mediaRelayKey []byte
+		var mediaRelayToken []byte
+		var mediaRelayAuthToken []byte
+		eng.startMedia = func(
+			_ context.Context,
+			_ string,
+			_ *Call,
+			callKey []byte,
+			_ string,
+			_ string,
+			endpoint *types.RelayEndpoint,
+		) error {
+			mediaCallKey = callKey
+			mediaRelayKey = endpoint.Key
+			mediaRelayToken = endpoint.Token
+			mediaRelayAuthToken = endpoint.AuthToken
+			close(mediaStarted)
+			<-releaseMedia
+			return nil
+		}
+		callKey := bytes.Repeat([]byte{0x61}, 32)
+		relayKey := bytes.Repeat([]byte{0x62}, 32)
+		relayToken := bytes.Repeat([]byte{0x63}, 16)
+		relayAuthToken := bytes.Repeat([]byte{0x64}, 16)
+		eng.onMediaReady(mediaReady(
+			call.ID(),
+			callKey,
+			relayKey,
+			relayToken,
+			relayAuthToken,
+		))
+		select {
+		case <-mediaStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("media did not start")
+		}
+		m := eng.calls[call.ID()]
+		ownedCallKey := m.callKey
+		ownedRelayKey := m.relay.Key
+		ownedRelayToken := m.relay.Token
+		ownedRelayAuthToken := m.relay.AuthToken
+
+		eng.finishCall(call.ID(), "ended")
+
+		if m.callKey != nil || m.relay != nil {
+			t.Fatalf("ended started call retained engine credential owners: %+v", m)
+		}
+		if !allZero(ownedCallKey) || !allZero(ownedRelayKey) ||
+			!allZero(ownedRelayToken) || !allZero(ownedRelayAuthToken) {
+			t.Fatal("ended started call retained engine credential bytes")
+		}
+		if !allEqual(mediaCallKey, 0x61) || !allEqual(mediaRelayKey, 0x62) ||
+			!allEqual(mediaRelayToken, 0x63) ||
+			!allEqual(mediaRelayAuthToken, 0x64) {
+			t.Fatal("finishCall cleared credentials still owned by running media")
+		}
+		assertInputsUnchanged(
+			t,
+			callKey,
+			relayKey,
+			relayToken,
+			relayAuthToken,
+		)
+
+		close(releaseMedia)
+		select {
+		case <-mediaStopped:
+		case <-time.After(2 * time.Second):
+			t.Fatal("media completion cleanup did not finish")
+		}
+		if stoppedCallID != call.ID() {
+			t.Fatalf("media stopped call ID = %q, want %q", stoppedCallID, call.ID())
+		}
+		if !allZero(mediaCallKey) || !allZero(mediaRelayKey) ||
+			!allZero(mediaRelayToken) || !allZero(mediaRelayAuthToken) {
+			t.Fatal("media completion retained goroutine-owned credentials")
+		}
+	})
 }
 
 func TestInboundVideoUpgradeWaitsForExplicitAcceptance(t *testing.T) {
