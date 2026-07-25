@@ -161,5 +161,9 @@ For an existing active participant, `CallMediaReady` remains one-shot. The
 - State KATs prove added-participant media readiness, existing-call one-shot
   readiness, stale/duplicate/conflict handling, owned bytes, and no raw key in
   logs.
+- The generic Whatsmeow send-log boundary replaces every nested binary node body
+  with its byte length before formatting. The original node remains unchanged
+  for serialization, while Signal ciphertext, identity data, privacy tokens, and
+  other binary secrets never enter debug output.
 - Live Signal encryption/decryption and server acceptance remain end-to-end
   boundaries.

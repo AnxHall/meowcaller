@@ -51,6 +51,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   rejected, and failed fan-out never rotates local media. Focused/full tests,
   full race, build, and vet pass; live WhatsApp E2E remains pending. CodeRabbit
   review was unavailable because its CLI is not installed.
+- Whatsmeow follow-up `b2f7cf5` recursively replaces binary node bodies with
+  byte-length markers at the send-log boundary, preventing group rekey
+  ciphertext and other binary secrets from entering debug output.
 
 ### media/group_key_epoch — `KAT-verified`
 - Added the corrective two-sided-capture contract for one transaction-wide raw
@@ -86,6 +89,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   `CALLID@call`. Ordinary keyless 1:1 offers remain rejected. Focused/full tests,
   race, build, and vet pass; CodeRabbit was unavailable because its CLI is not
   installed.
+- Whatsmeow follow-up `50f40b0` applies the same call-scoped target to mute,
+  video-state, and hangup controls while preserving direct 1:1 routing.
 
 ### voip/group_rekey_directive — `KAT-verified`
 - Added the immutable two-sided capture contract for preserving the
