@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### voip/group_rekey_directive — `planned`
+- Added the immutable two-sided capture contract for preserving the
+  endpoint-personalized `group_info rekey="1"` nomination on the typed group
+  snapshot. Key generation, recipient fan-out, retries, and media send-key
+  installation remain separate modules.
+
 ### media/group_relay_refresh — `KAT-verified`
 - Added the capture-pinned contract and implementation for rotating group relay
   credentials over the existing active DataChannel while preserving RTP and
