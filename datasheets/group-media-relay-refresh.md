@@ -3,8 +3,9 @@
 Refresh the active relay allocation in place when an ordered group update rotates
 its credentials.
 
-**Validation vector:** `engine_group_relay_test.go`, derived from the immutable v2
-add-people capture.
+**Validation vector:** `engine_group_relay_test.go`. The rotated Allocate fixture
+is derived from the immutable v2 add-people capture; control-send ordering and
+binding-key selection are synthetic protocol KATs.
 
 **Reference pinned at:**
 
@@ -48,6 +49,10 @@ The 336-byte packet is a Web/WASM Allocate request (`0x0003`) carrying the new
 relay token, the existing nine stream descriptors, the same active IPv4 relay
 endpoint, and MESSAGE-INTEGRITY under the group relay key.
 
+The capture does not contain a binding-success packet (`0x0101`, parsed message
+type `257`) after the rotated Allocate. It therefore does not prove which key
+WhatsApp uses to authenticate binding-success after relay credential rotation.
+
 ## Go envelope
 
 ```go
@@ -59,7 +64,7 @@ func newGroupRelayAllocateState(initial, initialKey []byte) *groupRelayAllocateS
 
 func (s *groupRelayAllocateState) Current() []byte
 
-func (s *groupRelayAllocateState) CurrentKey() []byte
+func (s *groupRelayAllocateState) SendCurrent(send func([]byte) error) error
 
 func (s *groupRelayAllocateState) Apply(
 	endpoint *types.RelayEndpoint,
@@ -70,9 +75,14 @@ func (s *groupRelayAllocateState) Apply(
 ) (changed bool, err error)
 
 func buildRelayBindingSuccess(request, integrityKey []byte) (response []byte, ok bool)
+
+func (s *groupRelayAllocateState) SendBindingSuccess(
+	request []byte,
+	send func([]byte) error,
+) (response []byte, answered bool, err error)
 ```
 
-## Required behavior
+## Capture-required behavior
 
 1. Match the already-connected active relay by `relay_name`; do not recreate the
    transport while that relay remains present.
@@ -80,16 +90,25 @@ func buildRelayBindingSuccess(request, integrityKey []byte) (response []byte, ok
 3. Rebuild Allocate with the group relay key, the existing active endpoint, and
    the original stream SSRC set.
 4. Send it immediately on the existing DataChannel.
-5. Only after that send succeeds, atomically replace both the packet used by the
-   one-second Allocate keepalive and the integrity key used for binding-success
-   responses.
+5. Only after that send succeeds, replace the packet used by the one-second
+   Allocate keepalive.
 6. Ignore stale or duplicate group relay transaction IDs.
 7. Reject missing active-relay, token, key, or endpoint data without silently
    retaining a mismatched allocation.
-8. A failed immediate send must preserve the prior packet, key, and committed
+8. A failed immediate send must preserve the prior packet and committed
    transaction so the same group relay transaction remains retryable.
-9. Authenticate later binding-success responses with the currently committed
-   relay key, not the endpoint's original 1:1 key.
+
+## Protocol inferences
+
+- **ASSUMPTION:** the Allocate integrity key is the relay allocation's current
+  STUN credential, so a later binding-success uses the same committed key. This
+  is invalidated if a live capture after rotation shows binding-success
+  authenticated by the original endpoint key or by an independent credential.
+- The packet and inferred current key are committed together only after the
+  refreshed Allocate send succeeds.
+- Keepalive and binding-response snapshot/build/send operations are serialized
+  with Allocate refresh. Once a rotated Apply commits, an older control packet
+  cannot be sent afterward from a snapshot taken before that commit.
 
 ## Validation boundaries
 
@@ -98,11 +117,14 @@ func buildRelayBindingSuccess(request, integrityKey []byte) (response []byte, ok
   group key.
 - A failed immediate send leaves the initial packet and key intact and permits
   retrying the same group relay transaction.
-- A binding-success encoded after the successful transition validates under the
-  rotated key and differs from the response authenticated by the initial key.
+- Synthetic KATs prove the inferred binding-success key choice and deterministic
+  control-send ordering in this implementation. They do not prove WhatsApp's
+  post-rotation binding credential.
 - The active address, stream SSRCs, RTP pipeline, SSRC, sequence, timestamp, and
   DataChannel remain untouched.
 - Active-relay migration is not proven by this capture and is outside this
   module; the observed active relay is stable.
 - HBH key installation is not part of this request. The captured HBH key is
   stable and the existing media path does not enable HBH SRTP.
+- Live group-call E2E remains required to validate the binding-key inference, so
+  this module is `partial`, not capture-verified end to end.

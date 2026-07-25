@@ -196,19 +196,20 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   endpoint KATs, full tests, focused race, build, and vet pass. CodeRabbit review
   was attempted but unavailable because its CLI is not installed.
 
-### media/group_relay_refresh — `KAT-verified`
+### media/group_relay_refresh — `partial`
 - Added the capture-pinned contract and implementation for rotating group relay
   credentials over the existing active DataChannel while preserving RTP and
   stream identity.
 - Refined the contract so the refreshed Allocate packet, committed transaction,
-  and binding-response integrity key advance together only after the immediate
-  relay send succeeds; a failed send leaves the prior credentials retryable.
+  and inferred binding-response integrity key advance together only after the
+  immediate relay send succeeds; a failed send leaves the prior credentials
+  retryable.
 - The critical group update now selects the active relay's rotated token,
   rebuilds and immediately sends Allocate under the group relay key, and commits
   the one-second keepalive packet and binding-response key only after that send
   succeeds. Failed sends retain the prior credentials and remain retryable.
-  Focused/full tests, race, and vet pass. CodeRabbit review was attempted but
-  blocked by its free CLI rate limit.
+  The capture contains no post-rotation binding-success packet, so the
+  binding-response key remains an explicit protocol inference pending live E2E.
 
 ### media/group_enc_rekey — `partial`
 - Added the capture-authoritative participant rekey state machine: transaction-
