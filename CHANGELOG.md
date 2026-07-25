@@ -7,6 +7,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### media/group_video_reactions — `scaffolded`
+- Specified additive group-video signaling, participant-attributed H.264 delivery,
+  and sender-attributed reaction rendering. Existing authenticated group media
+  indexes prove participant attribution; initial/add-person video offer acceptance
+  and live multi-participant video remain explicitly unvalidated.
+
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:
   receiver/PID/SSRC indexes and prepared group epoch keys stay prospective until
