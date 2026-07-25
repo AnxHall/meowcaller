@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -209,6 +210,111 @@ func TestEngineGroupUpdatePreservesOriginalPeerAndQueuesLatestRoster(t *testing.
 	}
 	if len(applied) != 3 || applied[1] != 20 || applied[2] != 19 {
 		t.Fatalf("error/recovery callbacks = %v, want [18 20 19]", applied)
+	}
+}
+
+func TestCallGroupStatePublishesSanitizedAuthoritativeRosterBeforeMedia(t *testing.T) {
+	eng, call := testEngineWithOutgoingCall()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	pending := mediaTestJID("333333333333333", 43)
+	update := types.GroupCallUpdate{
+		CallID: call.ID(), TransactionID: 17, RekeyRequested: true,
+		Relay: &types.GroupCallRelay{
+			Key: []byte("must-not-escape"), Tokens: [][]byte{[]byte("must-not-escape")},
+		},
+		Participants: []types.GroupCallParticipant{
+			{
+				JID: self.ToNonAD(), State: "connected",
+				Devices: []types.GroupCallDevice{{
+					JID: self, PID: 1, HasPID: true, Platform: "web",
+					Capability: []byte("must-not-escape"),
+				}},
+			},
+			{
+				JID: peer.ToNonAD(), PN: types.NewJID("15550002", types.DefaultUserServer),
+				State: "connected",
+				Devices: []types.GroupCallDevice{{
+					JID: peer, PID: 0, HasPID: true, Platform: "iphone",
+				}},
+			},
+			{
+				JID: pending.ToNonAD(), State: "receipt",
+				Devices: []types.GroupCallDevice{{JID: pending}},
+			},
+		},
+	}
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+		Update:        update,
+	})
+
+	state, ok := call.GroupState()
+	if !ok {
+		t.Fatal("call did not cache group state before media startup")
+	}
+	if state.TransactionID != 17 || !state.RekeyRequested || len(state.Participants) != 3 {
+		t.Fatalf("group state = %+v", state)
+	}
+	if got := state.Participants[1].Devices[0]; got.PID != 0 || !got.HasPID || got.Platform != "iphone" {
+		t.Fatalf("PID-zero selected device = %+v", got)
+	}
+	if state.Participants[2].State != "receipt" || state.Participants[2].Devices[0].HasPID {
+		t.Fatalf("receipt participant = %+v", state.Participants[2])
+	}
+	update.Participants[1].State = "mutated"
+	update.Participants[1].Devices[0].Platform = "mutated"
+	if got, _ := call.GroupState(); got.Participants[1].State != "connected" ||
+		got.Participants[1].Devices[0].Platform != "iphone" {
+		t.Fatal("cached public group state aliases the Whatsmeow event")
+	}
+
+	var replay GroupCallState
+	var replayFirstState string
+	call.OnGroupState(func(got GroupCallState) {
+		replay = got
+		replayFirstState = got.Participants[0].State
+		got.Participants[0].State = "callback-mutated"
+	})
+	if replay.TransactionID != 17 || replayFirstState != "connected" {
+		t.Fatalf("late group-state replay = %+v", replay)
+	}
+	if got, _ := call.GroupState(); got.Participants[0].State != "connected" {
+		t.Fatal("callback mutation changed cached group state")
+	}
+}
+
+func TestCallGroupStateNotifiesOnlyAcceptedNewerTransactions(t *testing.T) {
+	eng, call := testEngineWithOutgoingCall()
+	m := eng.calls[call.ID()]
+	var transactions []uint32
+	call.OnGroupState(func(state GroupCallState) {
+		transactions = append(transactions, state.TransactionID)
+	})
+	m.applyGroupUpdate = func(update types.GroupCallUpdate) error {
+		if update.TransactionID == 18 {
+			return errors.New("invalid roster")
+		}
+		return nil
+	}
+	for _, transactionID := range []uint32{17, 17, 18, 16, 19} {
+		eng.onGroupUpdate(&events.CallGroupUpdate{
+			BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+			Update: types.GroupCallUpdate{
+				CallID: call.ID(), TransactionID: transactionID,
+			},
+		})
+	}
+	if !slices.Equal(transactions, []uint32{17, 19}) {
+		t.Fatalf("notified transactions = %v, want [17 19]", transactions)
+	}
+	call.setPhase(CallPhaseEnded)
+	eng.onGroupUpdate(&events.CallGroupUpdate{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID()},
+		Update:        types.GroupCallUpdate{CallID: call.ID(), TransactionID: 20},
+	})
+	if !slices.Equal(transactions, []uint32{17, 19}) {
+		t.Fatalf("ended call notified group state: %v", transactions)
 	}
 }
 

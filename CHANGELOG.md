@@ -7,12 +7,17 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### api/group_call_state — `planned`
+### api/group_call_state — `KAT-verified`
 - Added the capture-backed public contract for replayable, sanitized group roster
   transactions. Only `connected` participants with a PID-bearing selected device
   prove a join; invited/outgoing/receipt remain intermediate states.
 - Relay credentials, key material, ciphertext, identity blobs, and raw
   capabilities are deliberately excluded from the public view.
+- Implemented `Call.GroupState` and replayable `Call.OnGroupState` with deep-copy
+  isolation. The engine publishes accepted snapshots before or after media
+  startup while suppressing stale, rejected, and ended-call updates. Focused/full
+  tests, race, build, and vet pass. CodeRabbit review was unavailable because its
+  CLI is not installed.
 
 ### voip/group_key_epoch_fanout — `KAT-verified`
 - Added the two-sided-capture contract for generating one shared 32-byte group

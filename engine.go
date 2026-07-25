@@ -467,7 +467,9 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	apply := m.applyGroupUpdate
 	if apply == nil {
 		m.groupUpdate = &update
+		call := m.call
 		e.mu.Unlock()
+		call.setGroupState(groupCallStateFromUpdate(update))
 		return
 	}
 	e.mu.Unlock()
@@ -481,11 +483,16 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	}
 	e.mu.Lock()
 	m = e.calls[ev.CallID]
+	var call *Call
 	if m != nil && !m.ended && m.call != nil && m.call.State() != CallPhaseEnded &&
 		(m.groupUpdate == nil || update.TransactionID > m.groupUpdate.TransactionID) {
 		m.groupUpdate = &update
+		call = m.call
 	}
 	e.mu.Unlock()
+	if call != nil {
+		call.setGroupState(groupCallStateFromUpdate(update))
+	}
 }
 
 func (e *engine) onEncRekey(ev *events.CallEncRekey) {

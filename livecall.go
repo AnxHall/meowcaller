@@ -18,21 +18,47 @@ type Call struct {
 	id   string
 	peer types.JID
 
-	mu                     sync.Mutex
-	phase                  CallPhase
-	player                 *Player
-	sink                   AudioSink
-	onReady                func()
-	onEnd                  func(reason string)
-	onState                func(CallPhase)
-	onPeerAccept           func()
-	peerAccepted           bool
-	acceptNotified         bool
-	onMuteState            func(muted bool)
-	videoSink              VideoSink
-	onVideoState           func(VideoState)
-	onVideoKeyframeRequest func()
-	onReaction             func(CallReaction)
+	mu                      sync.Mutex
+	phase                   CallPhase
+	player                  *Player
+	sink                    AudioSink
+	onReady                 func()
+	onEnd                   func(reason string)
+	onState                 func(CallPhase)
+	onPeerAccept            func()
+	peerAccepted            bool
+	acceptNotified          bool
+	onMuteState             func(muted bool)
+	videoSink               VideoSink
+	onVideoState            func(VideoState)
+	onVideoKeyframeRequest  func()
+	onReaction              func(CallReaction)
+	groupState              *GroupCallState
+	onGroupState            func(GroupCallState)
+	groupCallbackGeneration uint64
+}
+
+// GroupCallState is a sanitized authoritative group-call roster transaction.
+type GroupCallState struct {
+	TransactionID  uint32
+	RekeyRequested bool
+	Participants   []GroupCallParticipant
+}
+
+// GroupCallParticipant is one participant in an authoritative group-call roster.
+type GroupCallParticipant struct {
+	JID     types.JID
+	PN      types.JID
+	State   string
+	Devices []GroupCallDevice
+}
+
+// GroupCallDevice is one participant device selected or considered by WhatsApp.
+type GroupCallDevice struct {
+	JID      types.JID
+	Platform string
+	PID      uint32
+	HasPID   bool
 }
 
 // CallReaction is a transient emoji reaction received over the call's RTC app-data stream.
@@ -51,6 +77,108 @@ func (c *Call) Peer() types.JID {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.peer
+}
+
+// GroupState returns the latest authoritative group-call roster, if the direct
+// call has transitioned to an ad-hoc group call.
+func (c *Call) GroupState() (GroupCallState, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.groupState == nil {
+		return GroupCallState{}, false
+	}
+	return cloneGroupCallState(*c.groupState), true
+}
+
+// OnGroupState registers a callback for authoritative group-call roster
+// transactions. A latest cached state is replayed immediately.
+func (c *Call) OnGroupState(fn func(GroupCallState)) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
+	c.mu.Lock()
+	c.onGroupState = fn
+	c.groupCallbackGeneration++
+	generation := c.groupCallbackGeneration
+	var replay *GroupCallState
+	if fn != nil && c.groupState != nil {
+		state := cloneGroupCallState(*c.groupState)
+		replay = &state
+	}
+	c.mu.Unlock()
+	if replay == nil {
+		return
+	}
+	c.mu.Lock()
+	current := c.onGroupState != nil &&
+		c.groupCallbackGeneration == generation &&
+		c.groupState != nil &&
+		c.groupState.TransactionID == replay.TransactionID
+	c.mu.Unlock()
+	if current {
+		fn(*replay)
+	}
+}
+
+func (c *Call) setGroupState(state GroupCallState) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
+	stored := cloneGroupCallState(state)
+	c.mu.Lock()
+	if c.groupState != nil && state.TransactionID <= c.groupState.TransactionID {
+		c.mu.Unlock()
+		return
+	}
+	c.groupState = &stored
+	fn := c.onGroupState
+	generation := c.groupCallbackGeneration
+	c.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	c.mu.Lock()
+	current := c.onGroupState != nil &&
+		c.groupCallbackGeneration == generation &&
+		c.groupState != nil &&
+		c.groupState.TransactionID == stored.TransactionID
+	c.mu.Unlock()
+	if current {
+		fn(cloneGroupCallState(stored))
+	}
+}
+
+func groupCallStateFromUpdate(update types.GroupCallUpdate) GroupCallState {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L68
+	state := GroupCallState{
+		TransactionID:  update.TransactionID,
+		RekeyRequested: update.RekeyRequested,
+		Participants:   make([]GroupCallParticipant, len(update.Participants)),
+	}
+	for participantIndex, participant := range update.Participants {
+		devices := make([]GroupCallDevice, len(participant.Devices))
+		for deviceIndex, device := range participant.Devices {
+			devices[deviceIndex] = GroupCallDevice{
+				JID:      device.JID,
+				Platform: device.Platform,
+				PID:      device.PID,
+				HasPID:   device.HasPID,
+			}
+		}
+		state.Participants[participantIndex] = GroupCallParticipant{
+			JID: participant.JID, PN: participant.PN, State: participant.State,
+			Devices: devices,
+		}
+	}
+	return state
+}
+
+func cloneGroupCallState(state GroupCallState) GroupCallState {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
+	clone := state
+	clone.Participants = make([]GroupCallParticipant, len(state.Participants))
+	for participantIndex, participant := range state.Participants {
+		clone.Participants[participantIndex] = participant
+		clone.Participants[participantIndex].Devices = append([]GroupCallDevice(nil), participant.Devices...)
+	}
+	return clone
 }
 
 func (c *Call) setPeer(peer types.JID) {
