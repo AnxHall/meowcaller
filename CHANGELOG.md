@@ -109,6 +109,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   so the console cannot report both a failed invite and a false join.
 - Implemented call-scoped in-flight/candidate tracking and covered synchronous
   success and failure ordering with focused controller KATs.
+- Specified exact-call result ownership, serialized overlapping submissions, and
+  atomic roster publication so stale callbacks cannot mutate or repopulate a
+  replacement call.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 
