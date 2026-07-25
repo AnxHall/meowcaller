@@ -7,17 +7,396 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### diag/extension — mirror the v4 WhatsApp logger as a headless capture — `implemented`
-- Replaced the minimal page-only logger with the v4 logger's byte-identical WAM,
-  normal logger, VoIP signaling, browser-media, and worker-data-channel hooks.
-- Added the v4 Chrome debugger/CDP auto-attach path and streams both normal logger
-  rows and `wa-voip-diag/v2` events directly to the localhost JSONL collector.
-- Omitted only the viewer, composer, experiments UI, and `.wslc` workflow. Three
-  upstream media hook files match v4 byte-for-byte; `main.js`, `wam.js`, and
-  `voip-capture.js` keep the same capture surface with observer-failure isolation,
-  handled async rejections, accurate WAM sequence/global decoding, and no mutation
-  of live WAM events.
-  JavaScript capture/package tests and the Go collector test pass.
+### media/group_rtcp_feedback — `partial`
+- Added the capture-backed contract for participant-indexed audio reception
+  feedback. Each authenticated group SSRC retains independent sequence, loss,
+  jitter, and sender-report timing state, while the live engine reuses the
+  existing verified single-reception-block SRTCP wire format per participant.
+- Scaffolded the synchronized SSRC-indexed reception set and its two-stream KAT,
+  then enabled the KAT when the stub bodies were implemented.
+- Implemented one synchronized reception tracker per authenticated audio SSRC,
+  deterministic report ordering, and exact sender-report routing. The
+  two-participant KAT passes; live engine integration remains pending.
+
+### web/initial_group_call — `partial`
+- Added the capture-backed web-console contract for one audio-only multi-person
+  start through `Client.GroupCallWithOptions`, separate established-call
+  participant invitations, and incoming roster replay before Answer-driven
+  connecting state.
+- Implemented a distinct `start_group_audio` controller/HTTP/page path with
+  trimmed alias-deduplicated targets, two-person validation, exactly one
+  empty-group-JID API delegation, call ownership reservation, attach rollback,
+  and a separate group-dialing lifecycle state.
+- Gated established-call participant invitations on `CallPhaseActive` before
+  recording pending outcomes, and gated the two People controls in the browser
+  so group start is idle-only while Add people is ready/active-only.
+- Added deterministic incoming roster replay ordering through the controller's
+  SSE bridge before Answer-driven connecting state without synthesizing ready.
+  Focused and full nested web KATs pass. Live group audio E2E remains pending.
+
+### api/initial_group_call — `partial`
+- Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
+  preselected group start, a selected-only public roster seed, stable public
+  peer identity, and authoritative connected-device media readiness.
+- Implemented `GroupCall` and `GroupCallWithOptions` with ordered exact
+  normalization/deduplication, strict optional group-JID parsing, and one-shot
+  delegation to Whatsmeow while leaving PN-to-LID resolution authoritative
+  there.
+- Added explicit group-scoped engine state, a transaction-zero selected-only
+  public seed, cloned pre-callback invite snapshots, stable public peer
+  handling, connected-device media derivation, and deterministic one-shot
+  roster-then-key queue activation. Synchronous pre-return roster/key events
+  attach to the returned call without losing their authoritative state.
+- Review follow-up adds bounded and pointer-safe placeholder cleanup with
+  owned-key zeroing, deep-cloned retained relay credentials, deferred
+  pre-attachment readiness, serialized backlog activation, and strict
+  PN/LID-only explicit group targets.
+- Re-review hardens activation around in-flight roster rejection and recovery,
+  rejects empty call IDs before placeholder allocation, and separates
+  engine-owned from media-goroutine-owned credential lifetimes so every cloned
+  call/relay secret is zeroed at its final use.
+- Final review adds exact-match public roster recovery: a media-accepted lower
+  transaction may replace only the precise pre-published transaction that media
+  rejected, while any concurrent different or newer public state stays intact.
+- Focused review/compatibility KATs, full tests, the full race suite, vet, and
+  diff checks pass. CodeRabbit review was unavailable because its CLI is not
+  installed. Live WhatsApp group audio E2E remains pending.
+
+### voip/initial_group_call — `partial`
+- Added the immutable capture contract for one initial preselected group offer:
+  call-scoped routing, ordered self-plus-selected roster, Opus 8/16 kHz,
+  network medium 3, local-only capability, and optional group JID.
+- Recorded the transaction-11 self-only/outgoing gate and transaction-21 first
+  connected-remote-PID plus group-relay readiness boundary. The module must
+  preserve direct-call and singular active-invite behavior, install no state on
+  discovery/send failure, and emit media readiness at most once after a group
+  key epoch exists.
+- Whatsmeow commit `fe7e4ad` adds the capture-shaped low-level builder and ACK
+  parser, public ordered multi-target start API, immediately call-scoped keyless
+  state, transaction-monotonic group relay readiness, and cloned optional group
+  snapshots on `CallOffer`.
+- Focused capture/orchestration/readiness/compatibility KATs, full tests, the
+  full race suite, and vet pass. The live WhatsApp offer-to-ACK-to-rekey-to-media
+  transition remains explicitly unvalidated. CodeRabbit review was unavailable
+  because its CLI is not installed.
+
+### web/group_call_outcomes — `KAT-verified`
+- Added the web-test contract for rendering every authoritative roster
+  transaction and correlating a successful invite submission to a one-shot
+  `participant_join` only after WhatsApp reports a connected PID-bearing device.
+- Intermediate invited/outgoing/receipt states remain visible without being
+  mislabeled as joined; PID zero is explicitly valid.
+- Implemented transient `group_state` and one-shot `participant_join` events,
+  successful-target tracking, PN/LID correlation, deterministic selected-device
+  reporting, and a live roster status line in the page. Failed submissions are
+  removed from correlation and group transients do not replace lifecycle replay.
+- Hardened the controller against stale old-call callbacks, duplicate normalized
+  targets, PN/LID alias double joins, failed-answer busy state, and SSE
+  reconnects that previously lost the latest authoritative roster.
+  Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
+  because its CLI is not installed.
+
+### api/group_call_state — `KAT-verified`
+- Added the capture-backed public contract for replayable, sanitized group roster
+  transactions. Only `connected` participants with a PID-bearing selected device
+  prove a join; invited/outgoing/receipt remain intermediate states.
+- Relay credentials, key material, ciphertext, identity blobs, and raw
+  capabilities are deliberately excluded from the public view.
+- Implemented `Call.GroupState` and replayable `Call.OnGroupState` with deep-copy
+  isolation. The engine publishes accepted snapshots before or after media
+  startup while suppressing stale, rejected, and ended-call updates. Focused/full
+  tests, race, build, and vet pass. CodeRabbit review was unavailable because its
+  CLI is not installed.
+
+### voip/group_key_epoch_fanout — `KAT-verified`
+- Added the two-sided-capture contract for generating one shared 32-byte group
+  epoch when nominated by `rekey="1"`, Signal-encrypting it independently to
+  every other connected PID-bearing device, sending one direct captured-shape
+  `enc_rekey` per recipient, and handing the same root to local media.
+- Added the missing added-participant boundary: a decrypted inbound epoch
+  installs the key on the keyless active-call invite and triggers its first
+  media-ready event; existing active calls rotate in place without a second
+  media-ready event.
+- Whatsmeow commit `9e3da89` adds the exact direct wire builder, deterministic
+  connected-device selection, one-root Signal fan-out, delayed local handoff,
+  inbound/local epoch state installation, and the added participant's
+  media-ready transition. Stale and identical epochs are ignored, conflicts are
+  rejected, and failed fan-out never rotates local media. Focused/full tests,
+  full race, build, and vet pass; live WhatsApp E2E remains pending. CodeRabbit
+  review was unavailable because its CLI is not installed.
+- Whatsmeow follow-up `b2f7cf5` recursively replaces binary node bodies with
+  byte-length markers at the send-log boundary, preventing group rekey
+  ciphertext and other binary secrets from entering debug output.
+
+### media/group_key_epoch — `KAT-verified`
+- Added the corrective two-sided-capture contract for one transaction-wide raw
+  media epoch. The elected `enc_rekey` author distributes one shared root; local
+  send keys derive with the self device ID and every receive key derives with
+  that sender's device ID.
+- Required in-place, concurrency-safe installation preserves RTP stream identity,
+  sequence/timestamp counters, sender ROC, and receiver ROC. The older
+  participant-scoped module is retained as superseded history.
+- Implemented concurrency-safe raw-epoch installation on both media directions.
+  Focused KATs prove new-key authentication, old-key rejection, unchanged SSRC,
+  continued sequence/timestamp state, and receive ROC continuity across
+  `0xffff → 0`.
+- Replaced the superseded author-only registry path with one transaction-wide
+  epoch installed into the live sender and every active receiver. The registry
+  buffers future/pre-roster epochs, carries the current epoch to new roster
+  members, rejects conflicts and malformed roots without partial mutation,
+  ignores stale epochs, and clears queued key material at call end. Focused/full
+  tests, race, build, and vet pass; live WhatsApp E2E remains pending.
+  CodeRabbit review was unavailable because its CLI is not installed.
+- Extended the same accepted epoch through the SRTCP key schedule. Audio and
+  video sender reports rotate in place without resetting their SRTCP index or
+  CNAME, late-attached senders inherit the current epoch, and incoming control
+  packets exact-route to active participants across all nine deterministic
+  relay-stream SSRCs. Video and app-data RTP now rotate with the same epoch,
+  exact-route through independent per-participant contexts, and preserve
+  participant-specific reassembly/deduplication state. Focused SRTCP derivation,
+  all-stream send/receive, direct fallback, roster carry/departure, unknown
+  SSRC, late-attachment, and concurrent-rekey KATs pass.
+
+### voip/group_invite_accept — `KAT-verified`
+- Added the capture contract for accepting a directed invitation into an
+  already-active ad-hoc call. The enriched offer seeds transaction-ordered group
+  state before eager preaccept, and both preaccept and active-group accept use
+  `CALLID@call`; ordinary 1:1 offers remain direct.
+- Corrected the accept timing from the immutable capture: the added endpoint
+  invokes `acceptCall` and immediately sends exactly `audio`, `net`, and
+  `encopt`, with no direct-call metadata. Its first inbound `mute_v2` arrives
+  later and cannot trigger acceptance; ordinary 1:1 deferred acceptance remains
+  unchanged.
+- Corrected the contract to preserve the capture's missing-key boundary: the
+  enriched offer has no encrypted 1:1 call key, so it registers pending the
+  selected endpoint's later group rekey and cannot emit media-ready early.
+- Whatsmeow commit `81ff60c` parses and validates the enriched offer snapshot,
+  registers the keyless active ad-hoc invite, preserves an installed key across
+  retransmissions, and targets both eager preaccept and deferred accept at
+  `CALLID@call`. Ordinary keyless 1:1 offers remain rejected. Focused/full tests,
+  race, build, and vet pass; CodeRabbit was unavailable because its CLI is not
+  installed.
+- Whatsmeow follow-up `50f40b0` applies the same call-scoped target to mute,
+  video-state, and hangup controls while preserving direct 1:1 routing.
+
+### voip/group_rekey_directive — `KAT-verified`
+- Added the immutable two-sided capture contract for preserving the
+  endpoint-personalized `group_info rekey="1"` nomination on the typed group
+  snapshot. Key generation, recipient fan-out, retries, and media send-key
+  installation remain separate modules.
+- Whatsmeow commit `7c95b5a` adds `RekeyRequested` to the typed snapshot and
+  parses only the captured literal `"1"` as true. The absent and nominated
+  endpoint KATs, full tests, focused race, build, and vet pass. CodeRabbit review
+  was attempted but unavailable because its CLI is not installed.
+
+### media/group_relay_refresh — `KAT-verified`
+- Added the capture-pinned contract and implementation for rotating group relay
+  credentials over the existing active DataChannel while preserving RTP and
+  stream identity.
+- Refined the contract so the refreshed Allocate packet, committed transaction,
+  and binding-response integrity key advance together only after the immediate
+  relay send succeeds; a failed send leaves the prior credentials retryable.
+- The critical group update now selects the active relay's rotated token,
+  rebuilds and immediately sends Allocate under the group relay key, and commits
+  the one-second keepalive packet and binding-response key only after that send
+  succeeds. Failed sends retain the prior credentials and remain retryable.
+  Focused/full tests, race, and vet pass. CodeRabbit review was attempted but
+  blocked by its free CLI rate limit.
+
+### media/group_enc_rekey — `partial`
+- Added the capture-authoritative participant rekey state machine: transaction-
+  ordered buffering, delayed per-author epochs, exact-device/unique-user author
+  resolution, per-receiver raw-key installation, duplicate protection, and
+  departure pruning. The target ROC reset remains explicitly unvalidated for an
+  already-active rollover.
+- Wired typed Whatsmeow rekeys through the engine's pre-media queue into the
+  participant registry. Synthetic RTP KATs prove wrong-key rejection before
+  install, authentication after install, send-key preservation, delayed rekey
+  handling, exact author targeting, sole-remote rejection, other-participant ROC
+  and decoder continuity, and key cleanup when a call ends. Live group audio
+  remains the end-to-end gate.
+
+### web/group_participant_invite — `KAT-verified`
+- Added the capture-authoritative browser-console envelope for a multi-target
+  control request and one transient submitted/failed result event per singular
+  invite.
+- Implemented `add_participants` request decoding, active/non-empty validation,
+  ordered plural delegation, and one transient success/failure event per target
+  without replacing replayed lifecycle state.
+- Added the comma/newline people picker, lifecycle-header protection, and
+  explicit audio-only “submitted, not joined” guidance in both the page and
+  README. Focused/full example tests, race, build, vet, and manual diff review
+  pass. CodeRabbit was invoked twice but blocked by its free CLI rate limit.
+
+### api/group_participant_invite — `KAT-verified`
+- Added the capture-authoritative envelope for singular
+  `Call.AddParticipant(ctx, target)` delegation and an ordered plural
+  convenience loop. The web example will retain one independent singular
+  signaling result per selected person.
+- Added the engine injection point, public singular/plural method stubs, and
+  three skipped KATs for exact delegation, validation/error preservation, and
+  ordered all-target results. Existing tests, build, and vet remain clean.
+- Implemented the engine adapter with active-call validation, shared target
+  parsing, context-preserving singular Whatsmeow delegation, and wrapped
+  failures. Focused/full tests, race, build, and vet pass; CodeRabbit's one test
+  hardening finding was applied.
+- Implemented `Call.AddParticipant` as the context-preserving singular façade.
+  Its validation/delegation KATs, full tests, race, build, vet, and CodeRabbit
+  pass; only the plural convenience stub remains.
+- Implemented `Call.AddParticipants` as an ordered all-target loop with
+  index-aligned errors. All module KATs now run and pass; full tests, focused
+  race, build, vet, and CodeRabbit are clean.
+- Updated the public `Call` description to state that a direct call may become
+  an ad-hoc group call without claiming group media support.
+
+### voip/group_participant_invite — `partial`
+- Added the capture-authoritative datasheet for one active-call participant
+  invitation. The proposed control path captures the established direct-call
+  device capabilities, switches to the latest server roster after group
+  conversion, resolves and discovers one target, builds one verified singular
+  offer, stamps one stanza ID, and sends once.
+- The module is intentionally audio-only and does not invent the unresolved
+  companion-session preparation, optimistic membership, relay, media, or rekey
+  behavior.
+- Whatsmeow commit `0b82057` adds the call-state fields, four approved function
+  envelopes, two sanitized capture cases for capability and roster behavior,
+  and an offline send-boundary KAT. All three KATs are skipped on explicit
+  stubs.
+- Whatsmeow commit `f4b6c54` implements active-device capability parsing with
+  cloned bytes and passes both captured offer/preaccept cases plus malformed
+  wire validation. Roster and send KATs remain skipped on their stubs;
+  CodeRabbit, full tests, focused race tests, build, and vet are clean.
+- Whatsmeow commit `35d2eb6` atomically attaches the parsed peer device to an
+  existing call and passes owned-byte, unknown-call, and focused race tests.
+  Roster and send KATs remain skipped on their stubs; CodeRabbit is clean.
+- Whatsmeow commit `78a9421` deep-copies either the connected direct pair or
+  latest canonical group snapshot and passes both capture cases, invalid-state
+  cases, and focused race tests. The singular send KAT remains skipped on its
+  stub; CodeRabbit is clean.
+- Whatsmeow commit `ba1fb72` implements one-target resolution, device discovery,
+  duplicate rejection, verified offer construction, independent stanza ID
+  stamping, and one send. All current unit KATs run and pass, including the
+  offline send boundary with no optimistic mutation; live lifecycle wiring
+  remains pending. CodeRabbit, full tests, race tests, build, and vet are clean.
+- Whatsmeow commit `b5f9d94` seeds outgoing call state with an owned clone of
+  the exact local active-device capability advertised in the initial offer.
+  Ownership, full tests, race tests, build, vet, and CodeRabbit are clean; peer
+  and connected lifecycle wiring remain pending.
+- Whatsmeow commit `b75442b` captures the selected outgoing peer device and
+  capability through the existing preaccept dispatcher, preserving normal event
+  delivery and using sanitized warnings on malformed input. Integration, race,
+  full, build, vet, and CodeRabbit checks are clean; incoming seeding and the
+  connected gate remain pending.
+- Whatsmeow commit `3f55d2d` seeds both local and peer active devices from an
+  incoming offer while preserving existing offer/retransmit behavior. Tests,
+  race, build, and vet are clean. CodeRabbit's claimed missing voip helpers were
+  verified as a false positive: all six definitions exist and both packages
+  compile and pass. Only the connected gate remains pending.
+- Whatsmeow commit `3355bf6` opens the participant-invite gate when an outgoing
+  call receives `accept`, while preserving selected-peer routing and normal
+  event dispatch. Focused and full tests, race, build, vet, and CodeRabbit are
+  clean.
+- Whatsmeow commit `7dc1db1` opens the incoming gate only after the deferred
+  `accept` send succeeds and only while the same call state remains registered.
+  Unit coverage proves the identity guard and failed-send behavior; full tests,
+  race, build, vet, and CodeRabbit are clean. The successful live send boundary
+  remains explicitly marked for end-to-end validation.
+
+### voip/group_invite_offer — `KAT-verified`
+- Added the capture-authoritative datasheet for the singular active-call invite
+  offer. The two-person picker capture proves that each selected invitee gets an
+  independent offer and transaction track; the proposed low-level builder
+  therefore accepts one bare-LID target, that target's device fan-out, and the
+  existing ordered roster.
+- The proposed wire form is deliberately separate from the 1:1 offer builder:
+  Opus/16000, network medium 2, unencrypted destination list, and `group_info`,
+  with no privacy, call-key ciphertext, `encopt`, device identity, group JID, or
+  top-level capability.
+- Whatsmeow commit `7aba50a` adds the approved value-parameter envelope, an
+  explicit builder stub, and two sanitized capture cases covering connected and
+  absent participant state.
+- Whatsmeow commit `f39eba1` implements the singular builder, removes the KAT
+  skip, and passes both capture cases plus missing call ID, target, creator,
+  target-device, and participant-roster validation cases. Focused race tests,
+  full tests, build, vet, and CodeRabbit review are clean.
+
+### voip/group_call_state — `planned`
+- Added the capture-authoritative datasheet for transaction-ordered group roster,
+  relay, and `CALLID@call` routing state. The proposed envelope stores one parsed
+  snapshot, preserves direct routing until group state exists, and refuses to
+  recreate a call for late post-terminate updates. No production code changed.
+
+### voip/group_call_state — `scaffolded`
+- Added whatsmeow commit `507b4bd`: the internal full-snapshot state envelope,
+  `applyGroupUpdate` and `signalingTarget` three-line stubs, and a six-case
+  capture-derived vector covering direct routing, transaction gaps, ad-hoc
+  upgrades, pending participants without PIDs, stale updates, and late
+  post-terminate delivery. `TestGroupCallStateCorpus` is intentionally skipped
+  until both state bodies are implemented; build, vet, and all other tests pass.
+
+### voip/group_call_state — `partial`
+- Added whatsmeow commit `63dc174`: `applyGroupUpdate` now holds the call-state
+  lock, refuses missing calls and equal/older transactions, and atomically stores
+  the complete newer snapshot. `TestApplyGroupUpdateCorpus` runs and passes all
+  six capture-derived cases. The separate `signalingTarget` KAT remains skipped
+  on its scaffolded body. Build, vet, and the full suite pass; CodeRabbit reported
+  no findings when based on the local scaffold commit.
+
+### voip/group_call_state — `KAT-verified`
+- Added whatsmeow commit `5a6350b`: `signalingTarget` preserves participant
+  routing for direct calls and switches to `CALLID@call` after an authoritative
+  group snapshot is accepted, including ad-hoc groups with no group JID.
+  `TestApplyGroupUpdateCorpus` and `TestGroupCallSignalingTargetCorpus` both run
+  and pass. Build, vet, the full suite, and the focused race-enabled tests pass;
+  CodeRabbit reported no findings. The scaffold-to-final diff contains only the
+  two reviewed function bodies and their KAT split.
+
+### voip/group_update_ingest — `planned`
+- Restored the minimal datasheet template and group-call module registry for the
+  capture-driven build. The human reviewer approved the immutable capture corpus
+  as authoritative; the datasheet pins four raw JSONL boundaries by SHA-256 and
+  proposes the typed group-update event/dispatcher envelope for review. No
+  production code changed.
+
+### voip/group_update_ingest — `scaffolded`
+- Added whatsmeow commit `285aa8b`: the `CallGroupUpdate` event envelope,
+  three-line `onCallGroupUpdate` handler stub, and four-case sanitized capture
+  vector. `TestGroupUpdateIngestionCorpus` is intentionally skipped until the
+  handler body is implemented; build, vet, and all other tests pass. The live
+  dispatcher is not wired while the handler remains a stub, preserving existing
+  behavior.
+
+### voip/group_update_ingest — `scaffolded`
+- Reconciled the datasheet with the now-verified group-state module. The proposed
+  handler parses each update, delegates monotonic acceptance to
+  `applyGroupUpdate`, dispatches only accepted typed snapshots, and keeps
+  deferred ACK behavior for accepted, stale, late, and malformed deliveries.
+  Corrected the registry dependency so ingestion depends on group state. No
+  production code changed.
+
+### voip/group_update_ingest — `KAT-verified`
+- Added whatsmeow commit `f676cf1`: `group_update` now routes through the call
+  dispatcher, parses into the typed snapshot, delegates monotonic acceptance to
+  `applyGroupUpdate`, and emits `CallGroupUpdate` only for accepted state.
+  Duplicate and post-terminate deliveries remain ACKed but suppressed. Malformed
+  input logs sanitized metadata, emits `UnknownCallEvent`, leaves state
+  untouched, and remains ACKed.
+- `TestGroupUpdateIngestionCorpus` runs all four capture-derived fixtures and
+  validates identity, group metadata, ordered participant/device/PID state,
+  event payload, state storage, duplicate suppression, late-update suppression,
+  and ACK attempts. The malformed fallback test also passes. Build, vet, full
+  tests, and focused race tests pass.
+- CodeRabbit was run twice. Its findings were rejected as review-context false
+  positives: every allegedly missing group type and parser helper exists in the
+  selected local base, and the compile/test gates exercise them successfully.
+  The scaffold-to-final diff matches the reviewed handler and dispatcher scope.
+
+### meowcaller — use whatsmeow's first-class call API
+- Whatsmeow now owns 1:1 call signaling, call-key exchange, relay election, mute events,
+  and independent video-flow transitions. Meowcaller consumes the typed handoff events
+  and remains responsible for RTP/SRTP, MLow, H.264 framing, reactions, and diagnostics.
+- Removed the duplicated `signaling` package and all raw-node/unsafe ack interception.
+- Moved the QR-pairing browser call console into the standalone `examples/web` module.
 
 ### meowcaller — refine the video API to mirror the audio Source/Sink model
 - Reshaped the ad-hoc video surface into the same shape as audio (whatsmeow-style callback
@@ -417,6 +796,45 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   configured-length WARP MI tag before committing ROC or decrypting; wrong
   participant keys and changed tags are rejected, and the next valid packet remains
   receivable. **KAT-verified.**
+
+### media/group-receive — KAT-verified
+- Added the capture-pinned envelope and implementation for connected-device/PID
+  activation, deterministic primary-audio SSRC routing, per-participant
+  authenticated receive/ROC/decoder state, original-peer PID 0 continuity,
+  participant departure pruning, and identity-labeled decoded frames. Meowcaller
+  now consumes and retains `CallGroupUpdate` without replacing the public original
+  peer. Rejected snapshots leave receiver metadata and transaction ordering
+  unchanged, and pending snapshots enter the engine cache only after successful
+  application. Focused synthetic composition KATs pass. **KAT-verified.**
+- Preserve the authenticated direct receiver across transitional group snapshots
+  that contain no connected remote PID-bearing devices. A local/self PID alone no
+  longer suppresses that fallback. The transaction still advances, and the first
+  actionable remote PID roster promotes the existing peer without the five-second
+  audio interruption observed during live add-to-call testing.
+
+### media/group-audio-mixer — partial
+- Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
+  ticks, hard clipping, roster-gated departure cleanup, and single-speaker gain
+  preservation. The deterministic composition KATs pass. The media loop now clocks
+  mixed chunks into the existing sink while participant decoding remains
+  independent after a group roster arrives; direct 1:1 calls retain the existing
+  timestamp-aligned playout path through invite-only updates, drains buffered direct
+  PCM when a second remote connects, and reframes internal 10 ms mix ticks into the
+  public 960-sample sink contract. Live multi-speaker playout remains E2E unvalidated.
+
+### voip/group-enc-rekey-ingest — partial
+- Added the capture-pinned signaling datasheet for typed keygen-v2 `enc_rekey`
+  parsing, existing Signal DM decryption reuse, 32-byte raw-key dispatch, delayed
+  transaction handling, and sanitized failure behavior. Live call
+  `D66652FC17BF1F8BBA898DE097B428FA` corroborated this as the next authentication
+  boundary.
+- Whatsmeow now validates and clones the capture-shaped envelope, reuses the exact
+  outer-author Signal session for `msg`/`pkmsg`, decodes the decrypted
+  `waE2E.Message`, validates its 32-byte `Call.callKey`, dispatches
+  `CallEncRekey`, and preserves deferred ACKs on failure. Parser,
+  malformed-envelope, cloning, metadata-only logging, and failure-router KATs pass;
+  live Signal decryption of the 79-byte application envelope is observed, while a
+  post-fix authenticated group-audio retest remains pending.
 
 ### rtp/ssrc — module #23 KAT-verified (reference `41095d4e6ba4610e054e9ede3af1d5e88a83faee`)
 - `rtp` package gains SSRC derivation + participant-LID helpers:

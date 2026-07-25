@@ -1,0 +1,42 @@
+package rtp
+
+import "testing"
+
+func TestGroupAudioReceptionReportsRetainEveryActiveSSRC(t *testing.T) {
+	var set RtcpReceptionStatsSet
+	const (
+		ssrcA = uint32(0x59754A60)
+		ssrcC = uint32(0x66FDE7F1)
+	)
+	set.Observe(ssrcA, 299, 28_704_000, 1_000, 16_000)
+	set.Observe(ssrcC, 39, 3_744_000, 1_010, 16_000)
+	set.Observe(ssrcA, 300, 28_704_960, 1_060, 16_000)
+	set.Observe(ssrcC, 40, 3_744_960, 1_070, 16_000)
+	set.ObserveSenderReport(ssrcA, 0x11223344, 0x55667788, 1_100)
+	set.ObserveSenderReport(ssrcC, 0x99aabbcc, 0xddeeff00, 1_120)
+
+	reports := set.Reports(1_620)
+	if len(reports) != 2 {
+		t.Fatalf("report count = %d, want 2", len(reports))
+	}
+	if reports[0].Ssrc != ssrcA || reports[0].ExtendedHighestSequence != 300 {
+		t.Fatalf("A report = %+v", reports[0])
+	}
+	if reports[0].LastSenderReport != 0x33445566 {
+		t.Fatalf("A LSR = %#x, want 0x33445566", reports[0].LastSenderReport)
+	}
+	if reports[1].Ssrc != ssrcC || reports[1].ExtendedHighestSequence != 40 {
+		t.Fatalf("C report = %+v", reports[1])
+	}
+	if reports[1].LastSenderReport != 0xbbccddee {
+		t.Fatalf("C LSR = %#x, want 0xbbccddee", reports[1].LastSenderReport)
+	}
+}
+
+func TestGroupAudioReceptionReportsIgnoreUnknownSenderReport(t *testing.T) {
+	var set RtcpReceptionStatsSet
+	set.ObserveSenderReport(0x12345678, 1, 2, 3)
+	if reports := set.Reports(4); len(reports) != 0 {
+		t.Fatalf("reports = %+v, want none before authenticated RTP", reports)
+	}
+}
