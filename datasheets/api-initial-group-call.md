@@ -105,6 +105,21 @@ func (c *Client) GroupCallWithOptions(
 - Group media readiness supplies the connected PID-bearing device used for
   media key/receiver derivation. Launch media once, then replay the latest
   authoritative roster followed by every queued raw key epoch.
+- Reject explicit remote targets unless they contain exactly one `@`, a
+  non-empty user, and either the PN (`s.whatsapp.net`) or LID (`lid`) user
+  server. The singular `Call` parser remains unchanged.
+- Unknown roster/rekey placeholders have a bounded lifetime. Offer failure and
+  placeholder expiry remove only the expected entry and clear every owned
+  pending raw key and call key before deletion. Attachment cancels expiry, and
+  a racing stale expiry cannot remove the attached call.
+- Group readiness received before the outgoing public call attaches caches
+  media fields on the placeholder without synthesizing a `Call` or launching
+  media. Attachment supplies the selected public identity and then starts
+  media once with the readiness-selected device.
+- Media activation keeps live handlers unpublished while draining. It applies
+  each captured batch as roster then raw epochs, repeats for arrivals queued
+  during the drain, and publishes the live handlers only after the queues are
+  empty. A second activation cannot replace handlers during or after the first.
 
 ## Validation boundaries
 
@@ -113,6 +128,10 @@ func (c *Client) GroupCallWithOptions(
   the selected-only public seed, incoming snapshot cloning/replay, stable peer
   behavior, connected-device media identity, one-shot launch, and queued
   roster/key ordering.
+- Review regressions cover strict remote-user JIDs, pointer-safe offer-error
+  cleanup, deterministic unknown-placeholder expiry, racing expiry after
+  attachment, pre-return roster/rekey/readiness ordering, and arrivals during
+  an activation drain.
 - Existing direct-call and active participant-invite KATs remain the
   compatibility gate.
 - Live WhatsApp offer-to-ACK-to-rekey-to-media audio remains the human E2E gate.

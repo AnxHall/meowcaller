@@ -23,6 +23,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Focused/full tests, the full race suite, vet, and diff checks pass.
   CodeRabbit review was unavailable because its CLI is not installed. Live
   WhatsApp group audio E2E remains pending.
+- Review follow-up specifies bounded and pointer-safe placeholder cleanup,
+  deferred pre-attachment readiness, serialized backlog activation, and strict
+  PN/LID-only explicit group targets. Regression KATs are pending implementation.
 
 ### voip/initial_group_call — `partial`
 - Added the immutable capture contract for one initial preselected group offer:
