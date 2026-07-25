@@ -13,6 +13,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   the relay Allocate send succeeds, and a failed external apply leaves all prior
   media state retryable. The receiver-only compatibility path retains its
   existing semantics while stale transactions bypass the external callback.
+- Scaffolded the transactional registry surface and its external-failure,
+  retry, stale, receiver-map, pending-epoch, and active-key KAT. The KAT remains
+  skipped until prospective derivation and the infallible commit body land.
 
 ### media/group_rtcp_feedback — `partial`
 - Corrected the wire contract from authenticated group traffic. Native
