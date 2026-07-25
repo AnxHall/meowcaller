@@ -7,6 +7,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### web/group_call_outcomes — `planned`
+- Added the web-test contract for rendering every authoritative roster
+  transaction and correlating a successful invite submission to a one-shot
+  `participant_join` only after WhatsApp reports a connected PID-bearing device.
+- Intermediate invited/outgoing/receipt states remain visible without being
+  mislabeled as joined; PID zero is explicitly valid.
+
 ### api/group_call_state — `KAT-verified`
 - Added the capture-backed public contract for replayable, sanitized group roster
   transactions. Only `connected` participants with a PID-bearing selected device
