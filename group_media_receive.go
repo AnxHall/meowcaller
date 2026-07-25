@@ -205,6 +205,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			if !device.HasPID {
 				continue
 			}
+			// Source of truth: https://github.com/purpshell/meowcaller/blob/e34f414e423e6e45863d19dcfdd7e658f5f1314a/datasheets/group-media-receive.md#L24-L42
 			participantID := rtp.FormatE2ESrtpParticipantID(device.JID.String())
 			if participantID == r.selfID {
 				continue

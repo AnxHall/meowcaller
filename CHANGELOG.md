@@ -812,6 +812,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   actionable remote PID roster promotes the existing peer. The focused KAT targets
   the live add-to-call interruption condition by authenticating direct-peer RTP
   before and after a self-only-PID snapshot; live add-to-call E2E remains pending.
+- Linked the self-exclusion and remote-PID readiness branch to the pinned capture
+  contract. No runtime behavior changed.
 
 ### media/group-audio-mixer — partial
 - Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
