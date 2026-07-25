@@ -21,7 +21,7 @@ device identities, and VoIP settings.
 | Raw boundary | Captured fact |
 |---|---|
 | line 9,467 | the inviter's directed offer contains the existing connected roster but no group transaction attributes |
-| line 9,572 | the added endpoint receives an enriched offer with `joinable="1"` and embedded `group_info` transaction 7; no group JID is present |
+| line 9,572 | the added endpoint receives an enriched offer with `joinable="1"` and embedded `group_info` transaction 7; no group JID or encrypted call key is present |
 | lines 9,608–9,609 | the added endpoint sends `preaccept` to `CALLID@call`, not directly to the inviter device |
 | lines 10,235–10,237 | the same endpoint later sends `accept` to `CALLID@call` |
 
@@ -30,10 +30,13 @@ The vector must preserve these relationships:
 ```text
 offer without group_info               -> no group snapshot; direct signaling
 offer with enriched group_info         -> transaction-ordered group snapshot
+ordinary 1:1 offer                      -> encrypted call key required
+enriched active-call offer              -> accepted without an offer call key
 offer joinable == "1"                  -> snapshot Joinable true
 ad-hoc group without group-jid         -> valid empty GroupJID
 snapshot installed before preaccept    -> preaccept target CALLID@call
 deferred accept for the same call      -> accept target CALLID@call
+pending group call without a call key   -> no media-ready event yet
 ```
 
 The embedded snapshot is the safe bridge across the captured
@@ -41,9 +44,14 @@ The embedded snapshot is the safe bridge across the captured
 for unknown call IDs, so a late post-terminate update still cannot recreate a
 call.
 
-This module does not generate or distribute rekeys, allocate a relay, select the
-winning invitee device, change media keys, or claim that the invitee has joined
-before a later connected PID-bearing snapshot.
+The missing offer key is intentional protocol shape, not a malformed 1:1 offer.
+The selected endpoint later originates the membership epoch when a server
+snapshot carries `rekey="1"`. Until that separate module supplies the generated
+raw key, `maybeEmitMediaReady` remains gated by the existing nil-key check.
+
+This module does not generate or distribute that rekey, allocate a relay, select
+the winning invitee device, change media keys, or claim that the invitee has
+joined before a later connected PID-bearing snapshot.
 
 ## Go envelope (signatures only)
 
@@ -69,8 +77,13 @@ is also used by the deferred `accept` path.
   non-empty values on `group_info`.
 - Copy `joinable="1"` from the offer envelope onto the typed snapshot because
   the captured embedded `group_info` does not repeat it.
+- Require and decrypt the existing `<enc>` key for ordinary 1:1 offers. For an
+  enriched active-call offer, register the call with a nil key and let the
+  outbound group-rekey module provide the first media epoch.
 - Install the complete snapshot while registering the inbound call, before
   `BuildEagerPreaccept`.
 - Use `signalingTarget()` for both eager `preaccept` and deferred `accept`.
 - Do not dispatch a synthetic `CallGroupUpdate`; later real server snapshots
   remain the membership and media-roster lifecycle source.
+- Preserve the existing media-ready nil-key gate so an accepted active-call
+  invite cannot start media with fabricated or stale key material.

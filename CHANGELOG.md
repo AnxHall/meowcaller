@@ -12,6 +12,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   already-active ad-hoc call. The enriched offer seeds transaction-ordered group
   state before eager preaccept, and both preaccept and deferred accept use
   `CALLID@call`; ordinary 1:1 offers remain direct.
+- Corrected the contract to preserve the capture's missing-key boundary: the
+  enriched offer has no encrypted 1:1 call key, so it registers pending the
+  selected endpoint's later group rekey and cannot emit media-ready early.
 
 ### voip/group_rekey_directive — `KAT-verified`
 - Added the immutable two-sided capture contract for preserving the
