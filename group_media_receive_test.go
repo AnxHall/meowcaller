@@ -2,6 +2,8 @@ package meowcaller
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -1155,6 +1157,110 @@ func TestParticipantReceiveRegistryRejectedUpdateIsAtomic(t *testing.T) {
 	}
 	if got := registry.ActiveParticipantIDs(); len(got) != len(activeIDs) || got[0] != activeIDs[0] || got[1] != activeIDs[1] {
 		t.Fatalf("rejected update changed active IDs from %v to %v", activeIDs, got)
+	}
+}
+
+func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
+	t.Skip("blocked: ApplyGroupUpdateTransaction is a stub; enable when implemented")
+
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	sendPipe, err := NewMediaPipeline(callKey, self.String(), peer.String(), 0x01020304, FrameSamples)
+	if err != nil {
+		t.Fatalf("new send pipeline: %v", err)
+	}
+	if err = registry.attachSendPipeline(sendPipe); err != nil {
+		t.Fatalf("attach send pipeline: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 16, false)); err != nil {
+		t.Fatalf("apply initial roster: %v", err)
+	}
+	initialRaw := bytes.Repeat([]byte{0x16}, 32)
+	if err = registry.ApplyGroupRawEpoch(16, initialRaw); err != nil {
+		t.Fatalf("apply initial epoch: %v", err)
+	}
+	nextRaw := bytes.Repeat([]byte{0x18}, 32)
+	if err = registry.ApplyGroupRawEpoch(18, nextRaw); err != nil {
+		t.Fatalf("buffer next epoch: %v", err)
+	}
+
+	initialPeer := registry.byPID[0]
+	initialReceiveKeys := initialPeer.pipe.recvKeys
+	initialSendKeys := sendPipe.sendKeys
+	applyErr := fmt.Errorf("relay unavailable")
+	applyCalls := 0
+	commitCalls := 0
+	update := mediaTestGroupUpdate(self, peer, added, pending, 18, true)
+	err = registry.ApplyGroupUpdateTransaction(update, func(func()) error {
+		applyCalls++
+		return applyErr
+	})
+	if !errors.Is(err, applyErr) {
+		t.Fatalf("failed transaction error = %v, want %v", err, applyErr)
+	}
+	if applyCalls != 1 {
+		t.Fatalf("failed external apply calls = %d, want 1", applyCalls)
+	}
+	if registry.transactionID != 16 || registry.byPID[0] != initialPeer {
+		t.Fatalf("failed transaction changed active roster: tx=%d peer=%p", registry.transactionID, registry.byPID[0])
+	}
+	if _, ok := registry.byPID[2]; ok {
+		t.Fatal("failed transaction installed added participant")
+	}
+	if registry.installedEpoch.transactionID != 16 || !bytes.Equal(registry.installedEpoch.rawKey, initialRaw) {
+		t.Fatalf("failed transaction changed installed epoch: %+v", registry.installedEpoch)
+	}
+	if got := registry.pendingEpochs[18]; !bytes.Equal(got, nextRaw) {
+		t.Fatalf("failed transaction consumed pending epoch: %x", got)
+	}
+	if initialPeer.pipe.recvKeys != initialReceiveKeys || sendPipe.sendKeys != initialSendKeys {
+		t.Fatal("failed transaction changed active media keys")
+	}
+
+	err = registry.ApplyGroupUpdateTransaction(update, func(commit func()) error {
+		applyCalls++
+		commit()
+		commitCalls++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retry transaction: %v", err)
+	}
+	if applyCalls != 2 || commitCalls != 1 {
+		t.Fatalf("retry apply/commit calls = (%d, %d), want (2, 1)", applyCalls, commitCalls)
+	}
+	if registry.transactionID != 18 || registry.byPID[0] != initialPeer || registry.byPID[2] == nil {
+		t.Fatalf("retry did not atomically advance roster: tx=%d pids=%v", registry.transactionID, registry.byPID)
+	}
+	if registry.installedEpoch.transactionID != 18 || !bytes.Equal(registry.installedEpoch.rawKey, nextRaw) {
+		t.Fatalf("retry did not install pending epoch: %+v", registry.installedEpoch)
+	}
+	if _, ok := registry.pendingEpochs[18]; ok {
+		t.Fatal("successful retry retained consumed pending epoch")
+	}
+	if initialPeer.pipe.recvKeys == initialReceiveKeys || sendPipe.sendKeys == initialSendKeys {
+		t.Fatal("successful retry did not rotate active media keys")
+	}
+
+	err = registry.ApplyGroupUpdateTransaction(update, func(func()) error {
+		applyCalls++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("duplicate transaction: %v", err)
+	}
+	if applyCalls != 2 || commitCalls != 1 {
+		t.Fatalf("duplicate invoked apply/commit: (%d, %d), want (2, 1)", applyCalls, commitCalls)
 	}
 }
 

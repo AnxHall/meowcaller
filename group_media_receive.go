@@ -175,6 +175,18 @@ func (r *participantReceiveRegistry) newReceiver(userJID, deviceJID types.JID, p
 	}, nil
 }
 
+func (r *participantReceiveRegistry) ApplyGroupUpdateTransaction(
+	update types.GroupCallUpdate,
+	apply func(commit func()) error,
+) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
+	// TODO
+	// agent suggestion: fully prepare and derive the next roster/epoch while holding
+	// the registry lock, then let apply invoke one infallible commit closure.
+	// human input:
+	return fmt.Errorf("meowcaller: group update transaction is not implemented")
+}
+
 func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpdate) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L100
 	r.mu.Lock()
