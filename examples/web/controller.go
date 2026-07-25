@@ -79,6 +79,7 @@ type webCallController struct {
 	call                      *meowcaller.Call
 	pending                   *meowcaller.Call
 	activeCallID              string
+	dialCall                  func(context.Context, string, meowcaller.CallOptions) (*meowcaller.Call, error)
 	startGroupCall            func(context.Context, []string, meowcaller.GroupCallOptions) (*meowcaller.Call, error)
 	inviteParticipants        func(context.Context, *meowcaller.Call, ...string) []error
 	callPhase                 func(*meowcaller.Call) meowcaller.CallPhase
@@ -122,6 +123,7 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 		pendingParticipantInvites: make(map[string]string),
 	}
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
+	c.dialCall = client.CallWithOptions
 	c.startGroupCall = client.GroupCallWithOptions
 	bridge.OnControl(c.control)
 	bridge.OnFrame(c.sendVideoFrame)
@@ -401,18 +403,18 @@ func (c *webCallController) startGroupAudio(targets []string) error {
 	startGroupCall := c.startGroupCall
 	if startGroupCall == nil {
 		if c.client == nil {
-			c.clearGroupStartReservation(reservation)
+			c.clearCallStartReservation(reservation)
 			return errors.New("group call signaling is unavailable")
 		}
 		startGroupCall = c.client.GroupCallWithOptions
 	}
 	call, err := startGroupCall(c.ctx, normalized, meowcaller.GroupCallOptions{})
 	if err != nil {
-		c.clearGroupStartReservation(reservation)
+		c.clearCallStartReservation(reservation)
 		return err
 	}
 	if call == nil {
-		c.clearGroupStartReservation(reservation)
+		c.clearCallStartReservation(reservation)
 		return errors.New("group call returned no call")
 	}
 
@@ -430,7 +432,7 @@ func (c *webCallController) startGroupAudio(targets []string) error {
 		attach = c.attachCall
 	}
 	if err = attach(call); err != nil {
-		c.clearFailedGroupStart(call)
+		c.clearFailedCallStart(call)
 		_ = c.hangup(call)
 		return err
 	}
@@ -467,7 +469,7 @@ func normalizeParticipantTargets(targets []string) []string {
 	return normalized
 }
 
-func (c *webCallController) clearGroupStartReservation(reservation string) {
+func (c *webCallController) clearCallStartReservation(reservation string) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L102-L120
 	c.mu.Lock()
 	if c.activeCallID == reservation {
@@ -476,7 +478,7 @@ func (c *webCallController) clearGroupStartReservation(reservation string) {
 	c.mu.Unlock()
 }
 
-func (c *webCallController) clearFailedGroupStart(call *meowcaller.Call) {
+func (c *webCallController) clearFailedCallStart(call *meowcaller.Call) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L102-L120
 	c.mu.Lock()
 	if c.call == call {
@@ -609,32 +611,61 @@ func (c *webCallController) activeCall() (*meowcaller.Call, error) {
 }
 
 func (c *webCallController) dial(target string, video bool) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L109-L120
 	if target == "" {
 		return errors.New("target is required")
 	}
+	const reservation = "web-direct-start-pending"
 	c.mu.Lock()
-	busy := c.call != nil || c.pending != nil || c.activeCallID != ""
-	c.mu.Unlock()
-	if busy {
+	if c.call != nil || c.pending != nil || c.activeCallID != "" {
+		c.mu.Unlock()
 		return errors.New("another call is already active")
 	}
-	call, err := c.client.CallWithOptions(c.ctx, target, meowcaller.CallOptions{Video: video})
+	c.activeCallID = reservation
+	c.mu.Unlock()
+
+	dialCall := c.dialCall
+	if dialCall == nil {
+		if c.client == nil {
+			c.clearCallStartReservation(reservation)
+			return errors.New("call signaling is unavailable")
+		}
+		dialCall = c.client.CallWithOptions
+	}
+	call, err := dialCall(c.ctx, target, meowcaller.CallOptions{Video: video})
 	if err != nil {
+		c.clearCallStartReservation(reservation)
 		return err
 	}
+	if call == nil {
+		c.clearCallStartReservation(reservation)
+		return errors.New("direct call returned no call")
+	}
+
 	c.mu.Lock()
+	if c.activeCallID != reservation {
+		c.mu.Unlock()
+		_ = c.hangup(call)
+		return errors.New("call ownership changed while dialing")
+	}
 	c.activeCallID = call.ID()
 	c.mu.Unlock()
-	if err = c.attach(call); err != nil {
-		c.mu.Lock()
-		if c.activeCallID == call.ID() {
-			c.activeCallID = ""
-		}
-		c.mu.Unlock()
-		_ = call.Hangup()
+
+	attach := c.attach
+	if c.attachCall != nil {
+		attach = c.attachCall
+	}
+	if err = attach(call); err != nil {
+		c.clearFailedCallStart(call)
+		_ = c.hangup(call)
 		return err
 	}
 	c.mu.Lock()
+	if c.activeCallID != call.ID() {
+		c.mu.Unlock()
+		_ = c.hangup(call)
+		return errors.New("call ended while attaching")
+	}
 	c.call = call
 	c.mu.Unlock()
 	c.publish(webCallState{Event: "dialing", CallID: call.ID(), Peer: call.Peer().String(), Video: video})

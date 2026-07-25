@@ -522,6 +522,199 @@ func TestWebCallControllerStartGroupAudioRejectsEveryBusyOwner(t *testing.T) {
 	}
 }
 
+func TestWebCallControllerDirectDialReservationExcludesGroupStart(t *testing.T) {
+	directEntered := make(chan struct{})
+	releaseDirect := make(chan struct{})
+	directSignalErr := errors.New("direct signaling stopped")
+	groupSignalErr := errors.New("group signaling must not start")
+	var directCalls int
+	var groupCalls int
+	c := &webCallController{
+		ctx: context.Background(), log: zerolog.Nop(),
+		dialCall: func(
+			context.Context,
+			string,
+			meowcaller.CallOptions,
+		) (*meowcaller.Call, error) {
+			directCalls++
+			close(directEntered)
+			<-releaseDirect
+			return nil, directSignalErr
+		},
+		startGroupCall: func(
+			context.Context,
+			[]string,
+			meowcaller.GroupCallOptions,
+		) (*meowcaller.Call, error) {
+			groupCalls++
+			return nil, groupSignalErr
+		},
+	}
+	directDone := make(chan error, 1)
+	go func() {
+		directDone <- c.control(vbControl{Action: "dial_audio", Target: "15550001"})
+	}()
+	<-directEntered
+
+	groupErr := c.control(vbControl{
+		Action: "start_group_audio", Targets: []string{"15550002", "15550003"},
+	})
+	close(releaseDirect)
+	directErr := <-directDone
+
+	if groupErr == nil || groupErr.Error() != "another call is already active" {
+		t.Fatalf("group start error = %v, want busy rejection", groupErr)
+	}
+	if !errors.Is(directErr, directSignalErr) {
+		t.Fatalf("direct dial error = %v, want %v", directErr, directSignalErr)
+	}
+	if directCalls != 1 || groupCalls != 0 {
+		t.Fatalf("network starts = (direct %d, group %d), want (1, 0)", directCalls, groupCalls)
+	}
+	if c.call != nil || c.pending != nil || c.activeCallID != "" {
+		t.Fatalf("failed direct dial retained ownership: call=%p pending=%p id=%q", c.call, c.pending, c.activeCallID)
+	}
+}
+
+func TestWebCallControllerDirectDialTransfersReturnedCallOwnership(t *testing.T) {
+	call := &meowcaller.Call{}
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 1)
+	bridge.subs[events] = struct{}{}
+	var attaches int
+	c := &webCallController{
+		ctx: context.Background(), bridge: bridge, log: zerolog.Nop(),
+		dialCall: func(
+			context.Context,
+			string,
+			meowcaller.CallOptions,
+		) (*meowcaller.Call, error) {
+			return call, nil
+		},
+		attachCall: func(got *meowcaller.Call) error {
+			if got != call {
+				t.Fatalf("attached call %p, want %p", got, call)
+			}
+			attaches++
+			return nil
+		},
+	}
+
+	if err := c.dial("15550001", true); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	if attaches != 1 || c.call != call || c.pending != nil {
+		t.Fatalf("direct ownership = (attachments %d, call %p, pending %p)", attaches, c.call, c.pending)
+	}
+	select {
+	case msg := <-events:
+		var state webCallState
+		if err := json.Unmarshal(msg.data, &state); err != nil {
+			t.Fatalf("dialing JSON: %v", err)
+		}
+		if state.Event != "dialing" || !state.Video {
+			t.Fatalf("dialing state = %+v", state)
+		}
+	default:
+		t.Fatal("dialing state was not published")
+	}
+}
+
+func TestWebCallControllerDirectDialSignalingFailurePreservesReplacementOwner(t *testing.T) {
+	signalErr := errors.New("direct signaling failed")
+	c := &webCallController{ctx: context.Background(), log: zerolog.Nop()}
+	c.dialCall = func(
+		context.Context,
+		string,
+		meowcaller.CallOptions,
+	) (*meowcaller.Call, error) {
+		c.mu.Lock()
+		c.activeCallID = "OTHER"
+		c.mu.Unlock()
+		return nil, signalErr
+	}
+
+	err := c.dial("15550001", false)
+
+	if !errors.Is(err, signalErr) {
+		t.Fatalf("dial error = %v, want %v", err, signalErr)
+	}
+	if c.call != nil || c.pending != nil || c.activeCallID != "OTHER" {
+		t.Fatalf("signaling rollback clobbered replacement owner: call=%p pending=%p id=%q", c.call, c.pending, c.activeCallID)
+	}
+}
+
+func TestWebCallControllerDirectDialOwnershipChangeHangsUpReturnedCall(t *testing.T) {
+	call := &meowcaller.Call{}
+	var hangups int
+	c := &webCallController{ctx: context.Background(), log: zerolog.Nop()}
+	c.dialCall = func(
+		context.Context,
+		string,
+		meowcaller.CallOptions,
+	) (*meowcaller.Call, error) {
+		c.mu.Lock()
+		c.activeCallID = "OTHER"
+		c.mu.Unlock()
+		return call, nil
+	}
+	c.hangupCall = func(got *meowcaller.Call) error {
+		if got != call {
+			t.Fatalf("hung up call %p, want %p", got, call)
+		}
+		hangups++
+		return nil
+	}
+
+	err := c.dial("15550001", false)
+
+	if err == nil || err.Error() != "call ownership changed while dialing" {
+		t.Fatalf("dial error = %v, want ownership change", err)
+	}
+	if hangups != 1 {
+		t.Fatalf("hangups = %d, want 1", hangups)
+	}
+	if c.call != nil || c.pending != nil || c.activeCallID != "OTHER" {
+		t.Fatalf("cleanup disturbed replacement owner: call=%p pending=%p id=%q", c.call, c.pending, c.activeCallID)
+	}
+}
+
+func TestWebCallControllerDirectDialAttachFailureClearsAndHangsUp(t *testing.T) {
+	call := &meowcaller.Call{}
+	var hangups int
+	c := &webCallController{
+		ctx: context.Background(), log: zerolog.Nop(),
+		dialCall: func(
+			context.Context,
+			string,
+			meowcaller.CallOptions,
+		) (*meowcaller.Call, error) {
+			return call, nil
+		},
+		attachCall: func(*meowcaller.Call) error { return errors.New("attach failed") },
+		hangupCall: func(got *meowcaller.Call) error {
+			if got != call {
+				t.Fatalf("hung up call %p, want %p", got, call)
+			}
+			hangups++
+			return nil
+		},
+	}
+
+	err := c.dial("15550001", false)
+
+	if err == nil || err.Error() != "attach failed" {
+		t.Fatalf("dial error = %v, want attach failure", err)
+	}
+	if hangups != 1 {
+		t.Fatalf("hangups = %d, want 1", hangups)
+	}
+	if c.call != nil || c.pending != nil || c.activeCallID != "" {
+		t.Fatalf("attach failure retained ownership: call=%p pending=%p id=%q", c.call, c.pending, c.activeCallID)
+	}
+}
+
 func TestWebCallControllerRejectsIncomingCallDuringGroupStartReservation(t *testing.T) {
 	incoming := &meowcaller.Call{}
 	var rejected int
