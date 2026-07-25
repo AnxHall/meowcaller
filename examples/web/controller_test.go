@@ -352,6 +352,86 @@ func TestWebCallControllerAddParticipantsPublishesOneResultPerTarget(t *testing.
 	}
 }
 
+func TestWebCallControllerAddParticipantsStagesSynchronousJoinUntilInviteResult(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L56-L70
+	participant := meowcaller.GroupCallParticipant{
+		JID:   types.NewJID("222222222222222", types.HiddenUserServer),
+		PN:    types.NewJID("15550002", types.DefaultUserServer),
+		State: "connected",
+		Devices: []meowcaller.GroupCallDevice{{
+			JID: types.NewJID("222222222222222", types.HiddenUserServer),
+			PID: 2, HasPID: true,
+		}},
+	}
+	for _, tt := range []struct {
+		name        string
+		inviteErr   error
+		wantJoin    bool
+		wantSuccess bool
+	}{
+		{name: "success publishes staged join", wantJoin: true, wantSuccess: true},
+		{name: "failure discards staged join", inviteErr: errors.New("invite rejected")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+			events := make(chan vbMsg, 4)
+			bridge.subs[events] = struct{}{}
+			call := &meowcaller.Call{}
+			var c *webCallController
+			c = &webCallController{
+				ctx: context.Background(), call: call, bridge: bridge, log: zerolog.Nop(),
+				callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+					return meowcaller.CallPhaseActive
+				},
+				inviteParticipants: func(context.Context, *meowcaller.Call, ...string) []error {
+					c.handleGroupState(call.ID(), meowcaller.GroupCallState{
+						TransactionID: 18,
+						Participants:  []meowcaller.GroupCallParticipant{participant},
+					})
+					return []error{tt.inviteErr}
+				},
+			}
+
+			if err := c.addParticipants([]string{"+15550002"}); err != nil {
+				t.Fatalf("add participants: %v", err)
+			}
+
+			var eventOrder []string
+			var invite webParticipantInviteResult
+			for {
+				select {
+				case msg := <-events:
+					var envelope struct {
+						Event string `json:"event"`
+					}
+					if err := json.Unmarshal(msg.data, &envelope); err != nil {
+						t.Fatalf("event envelope: %v", err)
+					}
+					eventOrder = append(eventOrder, envelope.Event)
+					if envelope.Event == "participant_invite" {
+						if err := json.Unmarshal(msg.data, &invite); err != nil {
+							t.Fatalf("invite event: %v", err)
+						}
+					}
+				default:
+					goto drained
+				}
+			}
+		drained:
+			wantOrder := []string{"group_state", "participant_invite"}
+			if tt.wantJoin {
+				wantOrder = append(wantOrder, "participant_join")
+			}
+			if strings.Join(eventOrder, ",") != strings.Join(wantOrder, ",") {
+				t.Fatalf("event order = %v, want %v", eventOrder, wantOrder)
+			}
+			if invite.Success != tt.wantSuccess {
+				t.Fatalf("invite success = %t, want %t", invite.Success, tt.wantSuccess)
+			}
+		})
+	}
+}
+
 func TestWebCallControllerDeduplicatesNormalizedParticipantTargets(t *testing.T) {
 	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
 	events := make(chan vbMsg, 2)

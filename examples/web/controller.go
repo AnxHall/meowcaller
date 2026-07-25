@@ -69,6 +69,10 @@ type webParticipantJoin struct {
 	PID           uint32 `json:"pid"`
 }
 
+type pendingParticipantJoinCandidate struct {
+	outcome webParticipantJoin
+}
+
 type webCallController struct {
 	ctx    context.Context
 	client *meowcaller.Client
@@ -93,6 +97,8 @@ type webCallController struct {
 	pendingParticipantCallID  string
 	pendingParticipantInvites map[string]string
 	pendingParticipantOrder   []string
+	participantInviteInFlight map[string]bool
+	pendingParticipantJoins   map[string]*pendingParticipantJoinCandidate
 }
 
 func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge *videoBridge, log zerolog.Logger) *webCallController {
@@ -121,6 +127,8 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 			return call.Hangup()
 		},
 		pendingParticipantInvites: make(map[string]string),
+		participantInviteInFlight: make(map[string]bool),
+		pendingParticipantJoins:   make(map[string]*pendingParticipantJoinCandidate),
 	}
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
 	c.dialCall = client.CallWithOptions
@@ -218,6 +226,8 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 			c.pendingParticipantCallID = ""
 			c.pendingParticipantInvites = make(map[string]string)
 			c.pendingParticipantOrder = nil
+			c.participantInviteInFlight = make(map[string]bool)
+			c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
 			if c.bridge != nil {
 				c.bridge.ClearGroupState(call.ID())
 			}
@@ -340,10 +350,19 @@ func (c *webCallController) addParticipants(targets []string) error {
 	if c.pendingParticipantCallID != "" && c.pendingParticipantCallID != call.ID() {
 		c.pendingParticipantInvites = make(map[string]string)
 		c.pendingParticipantOrder = nil
+		c.participantInviteInFlight = make(map[string]bool)
+		c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
 	}
 	c.pendingParticipantCallID = call.ID()
 	if c.pendingParticipantInvites == nil {
 		c.pendingParticipantInvites = make(map[string]string)
+	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L56-L62
+	if c.participantInviteInFlight == nil {
+		c.participantInviteInFlight = make(map[string]bool)
+	}
+	if c.pendingParticipantJoins == nil {
+		c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
 	}
 	for _, target := range normalized {
 		key := participantInviteTargetKey(target)
@@ -354,6 +373,8 @@ func (c *webCallController) addParticipants(targets []string) error {
 			c.pendingParticipantOrder = append(c.pendingParticipantOrder, key)
 		}
 		c.pendingParticipantInvites[key] = target
+		c.participantInviteInFlight[key] = true
+		delete(c.pendingParticipantJoins, key)
 	}
 	c.mu.Unlock()
 	results := inviteParticipants(c.ctx, call, normalized...)
@@ -369,9 +390,6 @@ func (c *webCallController) addParticipants(targets []string) error {
 			Success: inviteErr == nil,
 		}
 		if inviteErr != nil {
-			c.mu.Lock()
-			delete(c.pendingParticipantInvites, participantInviteTargetKey(target))
-			c.mu.Unlock()
 			result.Message = inviteErr.Error()
 			c.log.Warn().Err(inviteErr).Str("call_id", call.ID()).Str("target", target).
 				Msg("web participant invite failed")
@@ -380,6 +398,33 @@ func (c *webCallController) addParticipants(targets []string) error {
 				Msg("web participant invite submitted")
 		}
 		c.bridge.PublishEvent(result)
+
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L58-L70
+		key := participantInviteTargetKey(target)
+		var joined *webParticipantJoin
+		c.mu.Lock()
+		delete(c.participantInviteInFlight, key)
+		candidate := c.pendingParticipantJoins[key]
+		if inviteErr != nil {
+			delete(c.pendingParticipantInvites, key)
+			delete(c.pendingParticipantJoins, key)
+		} else if candidate != nil {
+			candidate.outcome.Target = target
+			for candidateKey, pending := range c.pendingParticipantJoins {
+				if pending != candidate {
+					continue
+				}
+				delete(c.pendingParticipantJoins, candidateKey)
+				delete(c.participantInviteInFlight, candidateKey)
+				delete(c.pendingParticipantInvites, candidateKey)
+			}
+			outcome := candidate.outcome
+			joined = &outcome
+		}
+		c.mu.Unlock()
+		if joined != nil {
+			c.publishParticipantJoin(*joined)
+		}
 	}
 	return nil
 }
@@ -492,6 +537,8 @@ func (c *webCallController) clearFailedCallStart(call *meowcaller.Call) {
 		c.pendingParticipantCallID = ""
 		c.pendingParticipantInvites = make(map[string]string)
 		c.pendingParticipantOrder = nil
+		c.participantInviteInFlight = make(map[string]bool)
+		c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
 		if c.bridge != nil {
 			c.bridge.ClearGroupState(call.ID())
 		}
@@ -566,39 +613,66 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 		if selected == nil {
 			continue
 		}
-		var outcome *webParticipantJoin
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L58-L70
+		var matchedKeys []string
+		var target string
 		for _, key := range c.pendingParticipantOrder {
-			target, pending := c.pendingParticipantInvites[key]
+			pendingTarget, pending := c.pendingParticipantInvites[key]
 			if !pending || (key != participant.JID.User && key != participant.PN.User) {
 				continue
 			}
-			delete(c.pendingParticipantInvites, key)
-			if outcome == nil {
-				next := webParticipantJoin{
-					Event: "participant_join", CallID: callID,
-					TransactionID: state.TransactionID, Target: target,
-					Participant: participant.JID.String(), Device: selected.JID.String(),
-					PID: selected.PID,
-				}
-				outcome = &next
+			matchedKeys = append(matchedKeys, key)
+			if target == "" {
+				target = pendingTarget
 			}
 		}
-		if outcome != nil {
-			joined = append(joined, *outcome)
+		if len(matchedKeys) == 0 {
+			continue
 		}
+		outcome := webParticipantJoin{
+			Event: "participant_join", CallID: callID,
+			TransactionID: state.TransactionID, Target: target,
+			Participant: participant.JID.String(), Device: selected.JID.String(),
+			PID: selected.PID,
+		}
+		allInFlight := true
+		for _, key := range matchedKeys {
+			if !c.participantInviteInFlight[key] {
+				allInFlight = false
+				break
+			}
+		}
+		if allInFlight {
+			candidate := &pendingParticipantJoinCandidate{outcome: outcome}
+			for _, key := range matchedKeys {
+				c.pendingParticipantJoins[key] = candidate
+			}
+			continue
+		}
+		for _, key := range matchedKeys {
+			delete(c.pendingParticipantInvites, key)
+			delete(c.participantInviteInFlight, key)
+			delete(c.pendingParticipantJoins, key)
+		}
+		joined = append(joined, outcome)
 	}
 	c.mu.Unlock()
 	for _, outcome := range joined {
-		c.bridge.PublishEvent(outcome)
-		c.log.Info().
-			Str("call_id", callID).
-			Uint32("transaction_id", outcome.TransactionID).
-			Str("target", outcome.Target).
-			Str("participant", outcome.Participant).
-			Str("device", outcome.Device).
-			Uint32("pid", outcome.PID).
-			Msg("web participant joined")
+		c.publishParticipantJoin(outcome)
 	}
+}
+
+func (c *webCallController) publishParticipantJoin(outcome webParticipantJoin) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9246e88b842f82bb35932542bdac2c0775e0108/datasheets/web-group-call-outcomes.md#L60-L70
+	c.bridge.PublishEvent(outcome)
+	c.log.Info().
+		Str("call_id", outcome.CallID).
+		Uint32("transaction_id", outcome.TransactionID).
+		Str("target", outcome.Target).
+		Str("participant", outcome.Participant).
+		Str("device", outcome.Device).
+		Uint32("pid", outcome.PID).
+		Msg("web participant joined")
 }
 
 func (c *webCallController) activeCall() (*meowcaller.Call, error) {
@@ -735,6 +809,8 @@ func (c *webCallController) clearFailedIncoming(call *meowcaller.Call) {
 		c.pendingParticipantCallID = ""
 		c.pendingParticipantInvites = make(map[string]string)
 		c.pendingParticipantOrder = nil
+		c.participantInviteInFlight = make(map[string]bool)
+		c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
 		if c.bridge != nil {
 			c.bridge.ClearGroupState(call.ID())
 		}
@@ -751,6 +827,8 @@ func (c *webCallController) reject() error {
 		c.pendingParticipantCallID = ""
 		c.pendingParticipantInvites = make(map[string]string)
 		c.pendingParticipantOrder = nil
+		c.participantInviteInFlight = make(map[string]bool)
+		c.pendingParticipantJoins = make(map[string]*pendingParticipantJoinCandidate)
 		if c.bridge != nil {
 			c.bridge.ClearGroupState(call.ID())
 		}

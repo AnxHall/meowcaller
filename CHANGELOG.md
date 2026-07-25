@@ -107,6 +107,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Staged PID-bearing joins that race synchronously with an in-flight invite
   result, publishing them only after success and discarding them after failure
   so the console cannot report both a failed invite and a false join.
+- Implemented call-scoped in-flight/candidate tracking and covered synchronous
+  success and failure ordering with focused controller KATs.
   Focused/full tests, race, build, and vet pass. CodeRabbit review was unavailable
   because its CLI is not installed.
 
