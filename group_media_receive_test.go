@@ -859,6 +859,77 @@ func TestParticipantReceiveRegistryPreservesFallbackAcrossPrePIDGroupUpdate(t *t
 	}
 }
 
+func TestParticipantReceiveRegistryPreservesFallbackWhenOnlySelfHasPID(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	invited := mediaTestJID("333333333333333", 43)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	fallback := registry.byDeviceID[registry.fallbackID]
+	peerID := rtp.FormatE2ESrtpParticipantID(peer.String())
+	peerSSRC, err := rtp.DeriveWasmParticipantSsrc("CID", peerID, 0)
+	if err != nil {
+		t.Fatalf("derive peer SSRC: %v", err)
+	}
+	sender, err := NewMediaPipeline(callKey, peer.String(), self.String(), peerSSRC, FrameSamples)
+	if err != nil {
+		t.Fatalf("new peer sender: %v", err)
+	}
+	before, err := sender.ProtectAudio([]byte{0x60})
+	if err != nil {
+		t.Fatalf("protect pre-update audio: %v", err)
+	}
+	if _, ok := registry.DecodeAudio(before); !ok {
+		t.Fatal("direct fallback did not authenticate before group update")
+	}
+
+	update := types.GroupCallUpdate{
+		CallID:        "CID",
+		TransactionID: 9,
+		Participants: []types.GroupCallParticipant{
+			{
+				JID:   self.ToNonAD(),
+				State: "connected",
+				Devices: []types.GroupCallDevice{{
+					JID: self, PID: 1, HasPID: true,
+				}},
+			},
+			{
+				JID:     peer.ToNonAD(),
+				State:   "connected",
+				Devices: []types.GroupCallDevice{{JID: peer}},
+			},
+			{
+				JID:     invited.ToNonAD(),
+				State:   "receipt",
+				Devices: []types.GroupCallDevice{{JID: invited}},
+			},
+		},
+	}
+	if err = registry.ApplyGroupUpdate(update); err != nil {
+		t.Fatalf("apply self-PID transitional update: %v", err)
+	}
+	if registry.byDeviceID[registry.fallbackID] != fallback {
+		t.Fatal("local PID suppressed the authenticated direct fallback receiver")
+	}
+	after, err := sender.ProtectAudio([]byte{0x61})
+	if err != nil {
+		t.Fatalf("protect post-update audio: %v", err)
+	}
+	audio, ok := registry.DecodeAudio(after)
+	if !ok {
+		t.Fatal("local PID stopped direct peer audio during transitional update")
+	}
+	if audio.ParticipantID != peerID || audio.HasPID {
+		t.Fatalf("fallback metadata = %+v, want participant %s without PID", audio, peerID)
+	}
+}
+
 func TestParticipantReceiveRegistryPrePIDUpdatePrunesNonFallbackReceivers(t *testing.T) {
 	callKey := iota32()
 	self := mediaTestJID("111111111111111", 14)

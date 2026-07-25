@@ -196,7 +196,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 		pid       uint32
 	}
 	var metadata []receiverMetadata
-	hasConnectedPID := false
+	hasConnectedRemotePID := false
 	for _, participant := range update.Participants {
 		if participant.State != "connected" {
 			continue
@@ -205,11 +205,11 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			if !device.HasPID {
 				continue
 			}
-			hasConnectedPID = true
 			participantID := rtp.FormatE2ESrtpParticipantID(device.JID.String())
 			if participantID == r.selfID {
 				continue
 			}
+			hasConnectedRemotePID = true
 			if _, exists := nextByDeviceID[participantID]; exists {
 				return fmt.Errorf("meowcaller: duplicate group participant device %s", participantID)
 			}
@@ -250,7 +250,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 			})
 		}
 	}
-	if !hasConnectedPID {
+	if !hasConnectedRemotePID {
 		fallback := r.byDeviceID[r.fallbackID]
 		if fallback != nil {
 			nextByDeviceID[r.fallbackID] = fallback

@@ -790,9 +790,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   unchanged, and pending snapshots enter the engine cache only after successful
   application. Focused synthetic composition KATs pass. **KAT-verified.**
 - Preserve the authenticated direct receiver across transitional group snapshots
-  that contain no connected PID-bearing devices. The transaction still advances,
-  and the first actionable PID roster promotes the existing peer without the
-  five-second audio interruption observed during live add-to-call testing.
+  that contain no connected remote PID-bearing devices. A local/self PID alone no
+  longer suppresses that fallback. The transaction still advances, and the first
+  actionable remote PID roster promotes the existing peer without the five-second
+  audio interruption observed during live add-to-call testing.
 
 ### media/group-audio-mixer — partial
 - Implemented bounded participant queues, independent two-frame prefill, 10 ms mix
