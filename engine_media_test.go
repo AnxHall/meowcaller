@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +176,84 @@ func TestMediaSrtcpSenderProtectsVideoReport(t *testing.T) {
 	}
 	if len(packet) != 60+14 {
 		t.Fatalf("protected report length = %d, want 74", len(packet))
+	}
+}
+
+func TestMediaSrtcpSenderEmitsOneVerifiedPacketPerGroupAudioReport(t *testing.T) {
+	callKey := iota32()
+	const (
+		selfLID   = "111111111111111:14@lid"
+		localSSRC = uint32(0x10203040)
+		ssrcA     = uint32(0x59754A60)
+		ssrcC     = uint32(0x66FDE7F1)
+	)
+	sender, err := newMediaSrtcpSender(callKey, selfLID, localSSRC, false)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	receiver, err := newMediaSrtcpReceiver(callKey, selfLID)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	reports := []*rtp.RtcpReceptionReport{
+		{Ssrc: ssrcA, ExtendedHighestSequence: 300},
+		{Ssrc: ssrcC, ExtendedHighestSequence: 40},
+	}
+	var packets [][]byte
+	err = sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{PacketsSent: 7, OctetsSent: 700, RtpTimestamp: 9600},
+		1_700_000_000_000,
+		reports,
+		func(packet []byte) error {
+			packets = append(packets, bytes.Clone(packet))
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("send group reports: %v", err)
+	}
+	if len(packets) != 2 {
+		t.Fatalf("packet count = %d, want 2", len(packets))
+	}
+	for i, packet := range packets {
+		plain, index, ok := receiver.unprotect(localSSRC, packet)
+		if !ok {
+			t.Fatalf("packet %d failed SRTCP authentication", i)
+		}
+		if index != uint32(i+1) {
+			t.Fatalf("packet %d SRTCP index = %d, want %d", i, index, i+1)
+		}
+		if len(plain) < 32 {
+			t.Fatalf("packet %d plaintext bytes = %d, want reception block", i, len(plain))
+		}
+		if got := binary.BigEndian.Uint32(plain[28:32]); got != reports[i].Ssrc {
+			t.Fatalf("packet %d report SSRC = %#x, want %#x", i, got, reports[i].Ssrc)
+		}
+	}
+}
+
+func TestMediaSrtcpSenderStillEmitsBeforeInboundGroupAudio(t *testing.T) {
+	sender, err := newMediaSrtcpSender(iota32(), "111111111111111:14@lid", 0x10203040, false)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	sent := 0
+	err = sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{},
+		1_700_000_000_000,
+		nil,
+		func([]byte) error {
+			sent++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("send empty reception reports: %v", err)
+	}
+	if sent != 1 {
+		t.Fatalf("sent packets = %d, want 1 baseline sender report", sent)
 	}
 }
 

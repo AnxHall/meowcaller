@@ -16,7 +16,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   then enabled the KAT when the stub bodies were implemented.
 - Implemented one synchronized reception tracker per authenticated audio SSRC,
   deterministic report ordering, and exact sender-report routing. The
-  two-participant KAT passes; live engine integration remains pending.
+  two-participant KAT passes.
+- Integrated the set into the live audio receive/ticker path. Every active audio
+  SSRC now produces one independently indexed, authenticated SRTCP packet using
+  the existing verified single-block format, while the pre-audio baseline still
+  emits one report. Focused engine composition KATs pass.
 
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person

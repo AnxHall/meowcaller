@@ -565,7 +565,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		e.mu.Unlock()
 	}()
 
-	var audioReception, videoReception rtp.RtcpReceptionStats
+	var audioReception rtp.RtcpReceptionStatsSet
+	var videoReception rtp.RtcpReceptionStats
 
 	// WhatsApp associates the RTP streams with an SRTCP session. Periodic compound
 	// SR+SDES packets are required for the caller's video to start flowing to the
@@ -580,12 +581,17 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				return
 			case now := <-ticker.C:
 				nowMs := uint64(now.UnixMilli())
-				audioReport := audioReception.Report(nowMs)
-				audioPacket, err := audioRtcp.senderReport(txPipe.SenderStats(), nowMs, audioReport)
-				if err != nil {
-					return
-				}
-				if _, err = ch.Send(audioPacket); err != nil {
+				audioReports := audioReception.Reports(nowMs)
+				if err := sendMediaSrtcpReceptionReports(
+					audioRtcp,
+					txPipe.SenderStats(),
+					nowMs,
+					audioReports,
+					func(packet []byte) error {
+						_, sendErr := ch.Send(packet)
+						return sendErr
+					},
+				); err != nil {
 					return
 				}
 				videoStats := txVideoPipe.SenderStats()
@@ -606,6 +612,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				e.c.diag.Emit("rtcp", map[string]any{
 					"event": "sender_reports", "tick": sent,
 					"audio_packets": txPipe.SenderStats().PacketsSent,
+					"audio_reports": len(audioReports),
 					"video_packets": videoStats.PacketsSent,
 				})
 			}
@@ -1034,6 +1041,39 @@ func (s *mediaSrtcpSender) senderReport(stats rtp.RtcpSenderStats, nowMs uint64,
 		s.index++
 	}
 	return packet, err
+}
+
+func sendMediaSrtcpReceptionReports(
+	sender *mediaSrtcpSender,
+	stats rtp.RtcpSenderStats,
+	nowMs uint64,
+	reports []*rtp.RtcpReceptionReport,
+	send func([]byte) error,
+) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/7594217b4386a1c056d0e3ecd1049b30a1101241/datasheets/group-media-rtcp-feedback.md#L67-L80
+	if sender == nil {
+		return fmt.Errorf("meowcaller: SRTCP sender is nil")
+	}
+	if send == nil {
+		return fmt.Errorf("meowcaller: SRTCP send function is nil")
+	}
+	if len(reports) == 0 {
+		packet, err := sender.senderReport(stats, nowMs, nil)
+		if err != nil {
+			return err
+		}
+		return send(packet)
+	}
+	for _, report := range reports {
+		packet, err := sender.senderReport(stats, nowMs, report)
+		if err != nil {
+			return err
+		}
+		if err = send(packet); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (vs *videoSender) protectAccessUnit(au []byte, duration time.Duration) [][]byte {
