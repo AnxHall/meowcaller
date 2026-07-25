@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -207,6 +208,7 @@ func TestMediaSrtcpSenderEmitsCaptureShapedPacketPerGroupAudioReport(t *testing.
 		rtp.RtcpSenderStats{PacketsSent: 7, OctetsSent: 700, RtpTimestamp: 9600},
 		1_700_000_000_000,
 		reports,
+		true,
 		func(packet []byte) error {
 			packets = append(packets, bytes.Clone(packet))
 			return nil
@@ -239,6 +241,105 @@ func TestMediaSrtcpSenderEmitsCaptureShapedPacketPerGroupAudioReport(t *testing.
 	}
 }
 
+func TestMediaSrtcpSenderTransitionsFromDirectToCommittedGroupWire(t *testing.T) {
+	callKey := iota32()
+	const (
+		selfLID   = "111111111111111:14@lid"
+		localSSRC = uint32(0x10203040)
+		peerSSRC  = uint32(0x59754A60)
+	)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, selfLID, peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	sender, err := newMediaSrtcpSender(callKey, selfLID, localSSRC, false)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	receiver, err := newMediaSrtcpReceiver(callKey, selfLID)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	report := &rtp.RtcpReceptionReport{Ssrc: peerSSRC, ExtendedHighestSequence: 300}
+	var packets [][]byte
+	send := func(packet []byte) error {
+		packets = append(packets, bytes.Clone(packet))
+		return nil
+	}
+
+	commitFailure := errors.New("relay allocation failed")
+	update := mediaTestGroupUpdate(self, peer, added, pending, 16, true)
+	err = registry.ApplyGroupUpdateTransaction(update, func(func()) error {
+		return commitFailure
+	})
+	if !errors.Is(err, commitFailure) || registry.HasCommittedGroupUpdate() {
+		t.Fatalf("failed group transaction = (%v, committed %t), want failure without commit",
+			err, registry.HasCommittedGroupUpdate())
+	}
+	if _, err = sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{PacketsSent: 7, OctetsSent: 700, RtpTimestamp: 9600},
+		1_700_000_000_000,
+		[]*rtp.RtcpReceptionReport{report},
+		registry.HasCommittedGroupUpdate(),
+		send,
+	); err != nil {
+		t.Fatalf("send direct report: %v", err)
+	}
+	err = registry.ApplyGroupUpdateTransaction(update, func(commit func()) error {
+		commit()
+		return nil
+	})
+	if err != nil || !registry.HasCommittedGroupUpdate() {
+		t.Fatalf("retried group transaction = (%v, committed %t), want committed",
+			err, registry.HasCommittedGroupUpdate())
+	}
+	if _, err = sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{PacketsSent: 8, OctetsSent: 800, RtpTimestamp: 10_560},
+		1_700_000_001_500,
+		[]*rtp.RtcpReceptionReport{report},
+		registry.HasCommittedGroupUpdate(),
+		send,
+	); err != nil {
+		t.Fatalf("send committed group report: %v", err)
+	}
+	if len(packets) != 2 {
+		t.Fatalf("packet count = %d, want direct then group", len(packets))
+	}
+	wantWireLengths := []int{108 + rtp.SrtcpTrailerLen, 60 + rtp.SrtcpTrailerLen}
+	wantPlainLengths := []int{108, 60}
+	wantRTCPWords := []uint16{18, 14}
+	for i, packet := range packets {
+		if len(packet) != wantWireLengths[i] {
+			t.Fatalf("packet %d protected bytes = %d, want %d", i, len(packet), wantWireLengths[i])
+		}
+		plain, index, ok := receiver.unprotect(localSSRC, packet)
+		if !ok {
+			t.Fatalf("packet %d failed SRTCP authentication", i)
+		}
+		if index != uint32(i+1) {
+			t.Fatalf("packet %d index = %d, want %d", i, index, i+1)
+		}
+		if len(plain) != wantPlainLengths[i] || binary.BigEndian.Uint16(plain[2:4]) != wantRTCPWords[i] {
+			t.Fatalf("packet %d plaintext shape = (%d bytes, %d words), want (%d, %d)",
+				i, len(plain), binary.BigEndian.Uint16(plain[2:4]), wantPlainLengths[i], wantRTCPWords[i])
+		}
+		if got := binary.BigEndian.Uint32(plain[28:32]); got != peerSSRC {
+			t.Fatalf("packet %d report SSRC = %#x, want %#x", i, got, peerSSRC)
+		}
+		if i == 0 && !bytes.Equal(plain[76:80], []byte{0x81, rtp.RtcpPtSdes, 0, 7}) {
+			t.Fatalf("direct packet SDES header = %x, want 81ca0007", plain[76:80])
+		}
+	}
+}
+
 func TestMediaSrtcpSenderStillEmitsBeforeInboundGroupAudio(t *testing.T) {
 	sender, err := newMediaSrtcpSender(iota32(), "111111111111111:14@lid", 0x10203040, false)
 	if err != nil {
@@ -250,6 +351,7 @@ func TestMediaSrtcpSenderStillEmitsBeforeInboundGroupAudio(t *testing.T) {
 		rtp.RtcpSenderStats{},
 		1_700_000_000_000,
 		nil,
+		true,
 		func([]byte) error {
 			sent++
 			return nil
@@ -287,6 +389,7 @@ func TestMediaSrtcpReportFailureBeforeFirstSendRetriesWithFreshIndex(t *testing.
 		rtp.RtcpSenderStats{},
 		1_700_000_000_000,
 		reports,
+		true,
 		func([]byte) error {
 			return sendFailure
 		},
@@ -301,6 +404,7 @@ func TestMediaSrtcpReportFailureBeforeFirstSendRetriesWithFreshIndex(t *testing.
 		rtp.RtcpSenderStats{},
 		1_700_000_001_500,
 		reports,
+		true,
 		func(packet []byte) error {
 			retried = append(retried, bytes.Clone(packet))
 			return nil
@@ -341,6 +445,7 @@ func TestMediaSrtcpPartialSendReportsProgressAndRetriesAllWithFreshIndexes(t *te
 		rtp.RtcpSenderStats{},
 		1_700_000_000_000,
 		reports,
+		true,
 		func([]byte) error {
 			attempted++
 			if attempted == 2 {
@@ -359,6 +464,7 @@ func TestMediaSrtcpPartialSendReportsProgressAndRetriesAllWithFreshIndexes(t *te
 		rtp.RtcpSenderStats{},
 		1_700_000_001_500,
 		reports,
+		true,
 		func(packet []byte) error {
 			retried = append(retried, bytes.Clone(packet))
 			return nil

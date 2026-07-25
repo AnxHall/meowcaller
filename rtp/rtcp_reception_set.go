@@ -8,8 +8,10 @@ import (
 // RtcpReceptionStatsSet retains independent RTCP reception state per inbound
 // media SSRC.
 type RtcpReceptionStatsSet struct {
-	mu      sync.Mutex
-	streams map[uint32]*RtcpReceptionStats
+	mu            sync.Mutex
+	streams       map[uint32]*RtcpReceptionStats
+	allowedSSRCs  map[uint32]struct{}
+	authoritative bool
 }
 
 // Observe records one authenticated RTP packet in its SSRC-specific state.
@@ -22,6 +24,13 @@ func (s *RtcpReceptionStatsSet) Observe(
 ) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/7594217b4386a1c056d0e3ecd1049b30a1101241/datasheets/group-media-rtcp-feedback.md#L30-L38
 	s.mu.Lock()
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bab582d4e799292478ccba2f8a86f2164d4737c3/datasheets/group-media-rtcp-feedback.md#L148-L153
+	if s.authoritative {
+		if _, ok := s.allowedSSRCs[ssrc]; !ok {
+			s.mu.Unlock()
+			return
+		}
+	}
 	if s.streams == nil {
 		s.streams = make(map[uint32]*RtcpReceptionStats)
 	}
@@ -61,6 +70,9 @@ func (s *RtcpReceptionStatsSet) Retain(ssrcs []uint32) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bab582d4e799292478ccba2f8a86f2164d4737c3/datasheets/group-media-rtcp-feedback.md#L148-L153
+	s.allowedSSRCs = active
+	s.authoritative = true
 	for ssrc := range s.streams {
 		if _, ok := active[ssrc]; !ok {
 			delete(s.streams, ssrc)

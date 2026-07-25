@@ -61,15 +61,17 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   failures report sent progress, consume no reused SRTCP indexes, and retry all
   active reports with fresh indexes on the next tick. Exact plaintext, protected
   length, leave/rejoin, retry, nil-input, and ticker-continuation KATs pass.
-- Specified the direct-to-group mode boundary from two independent captures.
+- Implemented the direct-to-group mode boundary from two independent captures.
   Direct calls retain one 108-byte SR+SDES plaintext / 122-byte protected packet
   even with reception state; only a successfully committed group roster selects
   the per-participant 60/74-byte form. Rejected, externally failed, and stale
-  updates do not change the mode.
-- Specified the first successful roster retention as authoritative: later
+  updates do not change the mode. The exact failed-commit/retry transition KAT
+  passes with continuous SRTCP indexes.
+- Made the first successful roster retention authoritative: later
   observations outside the allowed SSRC set cannot recreate departed reception
   state, while a roster that re-allows an SSRC gives its next packet a fresh
-  interval.
+  interval. Both deterministic observe/retain interleavings and the race suite
+  pass.
 
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person

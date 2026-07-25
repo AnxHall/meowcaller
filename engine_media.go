@@ -596,6 +596,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			func(now time.Time) error {
 				tick++
 				nowMs := uint64(now.UnixMilli())
+				// Source of truth: https://github.com/purpshell/meowcaller/blob/bab582d4e799292478ccba2f8a86f2164d4737c3/datasheets/group-media-rtcp-feedback.md#L148-L156
+				groupRTCPMu.Lock()
 				audioReports = audioReception.Reports(nowMs)
 				var err error
 				audioReportsSent, err = sendMediaSrtcpReceptionReports(
@@ -603,11 +605,13 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 					txPipe.SenderStats(),
 					nowMs,
 					audioReports,
+					audioReceivers.HasCommittedGroupUpdate(),
 					func(packet []byte) error {
 						_, sendErr := ch.Send(packet)
 						return sendErr
 					},
 				)
+				groupRTCPMu.Unlock()
 				if err != nil {
 					return fmt.Errorf("send audio SRTCP reports: %w", err)
 				}
@@ -1188,18 +1192,24 @@ func sendMediaSrtcpReceptionReports(
 	stats rtp.RtcpSenderStats,
 	nowMs uint64,
 	reports []*rtp.RtcpReceptionReport,
+	groupMedia bool,
 	send func([]byte) error,
 ) (int, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/7594217b4386a1c056d0e3ecd1049b30a1101241/datasheets/group-media-rtcp-feedback.md#L67-L80
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L116-L146
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bab582d4e799292478ccba2f8a86f2164d4737c3/datasheets/group-media-rtcp-feedback.md#L154-L156
 	if sender == nil {
 		return 0, fmt.Errorf("meowcaller: SRTCP sender is nil")
 	}
 	if send == nil {
 		return 0, fmt.Errorf("meowcaller: SRTCP send function is nil")
 	}
-	if len(reports) == 0 {
-		packet, err := sender.senderReport(stats, nowMs, nil)
+	if !groupMedia || len(reports) == 0 {
+		var report *rtp.RtcpReceptionReport
+		if !groupMedia && len(reports) > 0 {
+			report = reports[0]
+		}
+		packet, err := sender.senderReport(stats, nowMs, report)
 		if err != nil {
 			return 0, err
 		}
