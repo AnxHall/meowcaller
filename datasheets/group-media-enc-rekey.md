@@ -3,6 +3,12 @@
 Transaction-correlated installation of a decrypted keygen-v2 participant key into
 exactly one group-audio receive pipeline.
 
+> **Superseded:** the two-sided add-person capture disproved this file's
+> participant-scoped key ownership model. `media/group_key_epoch` is the
+> corrective contract: the author is the elected distributor and the raw key is
+> a transaction-wide call epoch installed into local send and all active receive
+> directions. This file remains as the historical contract for module 11.
+
 **Validation vectors:** focused Go KATs in `session_test.go`,
 `group_media_receive_test.go`, and `engine_lifecycle_test.go`.
 

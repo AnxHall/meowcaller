@@ -7,6 +7,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### media/group_key_epoch — `planned`
+- Added the corrective two-sided-capture contract for one transaction-wide raw
+  media epoch. The elected `enc_rekey` author distributes one shared root; local
+  send keys derive with the self device ID and every receive key derives with
+  that sender's device ID.
+- Required in-place, concurrency-safe installation preserves RTP stream identity,
+  sequence/timestamp counters, sender ROC, and receiver ROC. The older
+  participant-scoped module is retained as superseded history.
+
 ### voip/group_invite_accept — `planned`
 - Added the capture contract for accepting a directed invitation into an
   already-active ad-hoc call. The enriched offer seeds transaction-ordered group
