@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/purpshell/meowcaller/stun"
 	"go.mau.fi/whatsmeow/types"
@@ -195,7 +194,7 @@ func TestGroupRelayBindingSuccessUsesCommittedRotatedKey(t *testing.T) {
 	}
 }
 
-func TestGroupRelayKeepaliveWaitsForRotatedApplyCommit(t *testing.T) {
+func TestGroupRelayRotatedApplyWaitsForOldKeepaliveSend(t *testing.T) {
 	initial := []byte{0x00, 0x01, 0x02}
 	initialKey := bytes.Repeat([]byte{0x12}, 16)
 	rotatedKey := bytes.Repeat([]byte{0x24}, 16)
@@ -229,57 +228,73 @@ func TestGroupRelayKeepaliveWaitsForRotatedApplyCommit(t *testing.T) {
 		rotatedKey,
 	)
 
-	applySendStarted := make(chan struct{})
-	releaseApplySend := make(chan struct{})
-	applyReleased := false
+	oldSendEntered := make(chan struct{})
+	releaseOldSend := make(chan struct{})
+	oldSendReleased := false
 	defer func() {
-		if !applyReleased {
-			close(releaseApplySend)
+		if !oldSendReleased {
+			close(releaseOldSend)
 		}
 	}()
+	oldPacket := make(chan []byte, 1)
+	oldSendDone := make(chan error, 1)
+	go func() {
+		oldSendDone <- state.SendCurrent(func(packet []byte) error {
+			oldPacket <- append([]byte(nil), packet...)
+			close(oldSendEntered)
+			<-releaseOldSend
+			return nil
+		})
+	}()
+	<-oldSendEntered
+	if got := <-oldPacket; !bytes.Equal(got, initial) {
+		t.Fatalf("blocked old keepalive = %x, want initial allocate %x", got, initial)
+	}
+
+	applyStarted := make(chan struct{})
+	applySendEntered := make(chan []byte, 1)
 	applyDone := make(chan error, 1)
 	go func() {
-		_, err := state.Apply(endpoint, groupRelay, streamSSRCs, allocateTransactionID, func([]byte) error {
-			close(applySendStarted)
-			<-releaseApplySend
+		close(applyStarted)
+		_, err := state.Apply(endpoint, groupRelay, streamSSRCs, allocateTransactionID, func(packet []byte) error {
+			applySendEntered <- append([]byte(nil), packet...)
 			return nil
 		})
 		applyDone <- err
 	}()
-	<-applySendStarted
-
-	keepaliveCallStarted := make(chan struct{})
-	keepaliveSent := make(chan []byte, 1)
-	keepaliveDone := make(chan error, 1)
-	go func() {
-		close(keepaliveCallStarted)
-		keepaliveDone <- state.SendCurrent(func(packet []byte) error {
-			keepaliveSent <- append([]byte(nil), packet...)
-			return nil
-		})
-	}()
-	<-keepaliveCallStarted
+	<-applyStarted
 
 	select {
-	case packet := <-keepaliveSent:
-		t.Fatalf("keepalive sent before rotated Apply committed: %x", packet)
-	case <-time.After(250 * time.Millisecond):
+	case packet := <-applySendEntered:
+		t.Fatalf("rotated Apply entered send while old keepalive was blocked: %x", packet)
+	default:
 	}
 
-	close(releaseApplySend)
-	applyReleased = true
+	close(releaseOldSend)
+	oldSendReleased = true
+	if err := <-oldSendDone; err != nil {
+		t.Fatalf("send old keepalive: %v", err)
+	}
+	if got := <-applySendEntered; !bytes.Equal(got, wantRotated) {
+		t.Fatalf("rotated Apply packet = %x, want %x", got, wantRotated)
+	}
 	if err := <-applyDone; err != nil {
 		t.Fatalf("apply group relay: %v", err)
 	}
-	if err := <-keepaliveDone; err != nil {
-		t.Fatalf("send current allocate: %v", err)
+
+	var nextPacket []byte
+	if err := state.SendCurrent(func(packet []byte) error {
+		nextPacket = append([]byte(nil), packet...)
+		return nil
+	}); err != nil {
+		t.Fatalf("send post-commit keepalive: %v", err)
 	}
-	if got := <-keepaliveSent; !bytes.Equal(got, wantRotated) {
-		t.Fatalf("post-commit keepalive = %x, want rotated allocate %x", got, wantRotated)
+	if !bytes.Equal(nextPacket, wantRotated) {
+		t.Fatalf("post-commit keepalive = %x, want rotated allocate %x", nextPacket, wantRotated)
 	}
 }
 
-func TestGroupRelayBindingWaitsForRotatedApplyCommit(t *testing.T) {
+func TestGroupRelayRotatedApplyWaitsForOldBindingSend(t *testing.T) {
 	initial := []byte{0x00, 0x01, 0x02}
 	initialKey := bytes.Repeat([]byte{0x12}, 16)
 	rotatedKey := bytes.Repeat([]byte{0x24}, 16)
@@ -301,61 +316,85 @@ func TestGroupRelayBindingWaitsForRotatedApplyCommit(t *testing.T) {
 	streamSSRCs := [9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	allocateTransactionID := [12]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 
-	applySendStarted := make(chan struct{})
-	releaseApplySend := make(chan struct{})
-	applyReleased := false
+	bindingTransactionID := [12]byte{11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
+	request := stun.EncodeStunRequest(stun.MsgBindingRequest, bindingTransactionID, nil, nil, false)
+	oldSendEntered := make(chan struct{})
+	releaseOldSend := make(chan struct{})
+	oldSendReleased := false
 	defer func() {
-		if !applyReleased {
-			close(releaseApplySend)
+		if !oldSendReleased {
+			close(releaseOldSend)
 		}
 	}()
+	oldBindingPacket := make(chan []byte, 1)
+	type bindingResult struct {
+		answered bool
+		err      error
+	}
+	oldBindingDone := make(chan bindingResult, 1)
+	go func() {
+		_, answered, err := state.SendBindingSuccess(request, func(packet []byte) error {
+			oldBindingPacket <- append([]byte(nil), packet...)
+			close(oldSendEntered)
+			<-releaseOldSend
+			return nil
+		})
+		oldBindingDone <- bindingResult{answered: answered, err: err}
+	}()
+	<-oldSendEntered
+	wantInitial := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, initialKey, true)
+	if got := <-oldBindingPacket; !bytes.Equal(got, wantInitial) {
+		t.Fatalf("blocked old binding success = %x, want initial-key response %x", got, wantInitial)
+	}
+
+	applyStarted := make(chan struct{})
+	applySendEntered := make(chan []byte, 1)
 	applyDone := make(chan error, 1)
 	go func() {
-		_, err := state.Apply(endpoint, groupRelay, streamSSRCs, allocateTransactionID, func([]byte) error {
-			close(applySendStarted)
-			<-releaseApplySend
+		close(applyStarted)
+		_, err := state.Apply(endpoint, groupRelay, streamSSRCs, allocateTransactionID, func(packet []byte) error {
+			applySendEntered <- append([]byte(nil), packet...)
 			return nil
 		})
 		applyDone <- err
 	}()
-	<-applySendStarted
-
-	bindingTransactionID := [12]byte{11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
-	request := stun.EncodeStunRequest(stun.MsgBindingRequest, bindingTransactionID, nil, nil, false)
-	bindingCallStarted := make(chan struct{})
-	bindingSent := make(chan []byte, 1)
-	bindingDone := make(chan error, 1)
-	go func() {
-		close(bindingCallStarted)
-		_, _, err := state.SendBindingSuccess(request, func(packet []byte) error {
-			bindingSent <- append([]byte(nil), packet...)
-			return nil
-		})
-		bindingDone <- err
-	}()
-	<-bindingCallStarted
+	<-applyStarted
 
 	select {
-	case packet := <-bindingSent:
-		t.Fatalf("binding success sent before rotated Apply committed: %x", packet)
-	case <-time.After(250 * time.Millisecond):
+	case packet := <-applySendEntered:
+		t.Fatalf("rotated Apply entered send while old binding was blocked: %x", packet)
+	default:
 	}
 
-	close(releaseApplySend)
-	applyReleased = true
+	close(releaseOldSend)
+	oldSendReleased = true
+	oldResult := <-oldBindingDone
+	if oldResult.err != nil {
+		t.Fatalf("send old binding success: %v", oldResult.err)
+	}
+	if !oldResult.answered {
+		t.Fatal("old binding request was not answered")
+	}
+	if got := <-applySendEntered; len(got) == 0 {
+		t.Fatal("rotated Apply sent an empty allocate")
+	}
 	if err := <-applyDone; err != nil {
 		t.Fatalf("apply group relay: %v", err)
 	}
-	if err := <-bindingDone; err != nil {
-		t.Fatalf("send binding success: %v", err)
+
+	var nextBindingPacket []byte
+	_, answered, err := state.SendBindingSuccess(request, func(packet []byte) error {
+		nextBindingPacket = append([]byte(nil), packet...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("send post-commit binding success: %v", err)
+	}
+	if !answered {
+		t.Fatal("post-commit binding request was not answered")
 	}
 	wantRotated := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, rotatedKey, true)
-	got := <-bindingSent
-	if !bytes.Equal(got, wantRotated) {
-		t.Fatalf("post-commit binding success = %x, want rotated-key response %x", got, wantRotated)
-	}
-	wantInitial := stun.EncodeStunRequest(stun.MsgBindingSuccess, bindingTransactionID, nil, initialKey, true)
-	if bytes.Equal(got, wantInitial) {
-		t.Fatal("post-commit binding success used the initial one-to-one key")
+	if !bytes.Equal(nextBindingPacket, wantRotated) {
+		t.Fatalf("post-commit binding success = %x, want rotated-key response %x", nextBindingPacket, wantRotated)
 	}
 }
