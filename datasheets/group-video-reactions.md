@@ -1,17 +1,12 @@
 # Group video and reactions
 
 **Status:** initial group-video signaling and participant H.264 receive accepted live;
-multi-PID HBH-FEC relay descriptors KAT-verified; group-forwarding de-framing
-and partial-orientation parsing capture-vector KAT-verified; live multi-participant
-media retest pending
+group relay subscription refresh KAT-verified, live retest pending
 
 **Reference pinned at:**
 
 - capture SHA-256 `47e4966e1847b686b3a31c4983df8025617d200ec27a71c5884598488af65b90`
 - live diagnostic call `14F2B768B13898CC1783AD897C1B5953`
-- two-browser extension capture SHA-256
-  `27bd4947e14b25e79baa4e630666f2dd9b474fffc632df93f506eed2f98e20b4`
-- live diagnostic call `84987F9DE404B79ED999E6F254B0150A`
 
 ## Observed facts
 
@@ -49,77 +44,10 @@ media retest pending
 - The captured receiver-subscription protobuf is the ordered pair
   `12 02 08 01 12 02 08 02`, selecting connected remote PIDs 1 and 2. Attribute
   `0x805a` carries `02`, matching the two selected remote participants.
-- When two remote participants are connected, the captured `0x4024` value appends
-  two descriptors after the nine local media streams. They identify HBH-FEC TX as
-  participant/layer `3/3` and HBH-FEC RX as `4/3`. Their SSRCs are the normal
-  participant derivations for slot words 7 and 8.
-- The captured stack sends a sender/descriptor update without `0x4021`, followed
-  59 ms later by the final Allocate containing the receiver subscriptions. The
-  final packet is the complete relay state pinned by the KAT.
 - Meowcaller's existing group relay refresh only rotates credentials and repeats
   local stream descriptors. It omits all three captured participant-subscription
   attributes. In a later live call, both peers signaled enabled video but the
   relay forwarded no participant PT-97 packets, while audio continued.
-- Live call `5B1243C9301A31BD73D76A85B26F2981` accepted the subscription-bearing
-  Allocate. With one remote PID selected, participant H.264 flowed. The
-  two-remote-PID refresh at `1785024103163` increased the Allocate from 464 to
-  476 bytes and was followed by an 11,985 ms gap with no incoming video access
-  units while audio continued. When the roster returned to one remote PID, the
-  464-byte refresh at `1785024114785` was followed by H.264 resuming on the same
-  SSRC 398 ms later.
-- The current nine-stream derivation uses slot 6 as the third secondary-video
-  SSRC, while the app-data sender independently derives that same slot 6. The
-  resulting subscription advertises one SSRC in both the secondary-video and
-  app-data groups.
-- The authoritative WhatsApp capture does not have that collision. For SELF it
-  advertises secondary-video SSRCs `E0E04163 / 74ED8516 / DEA8A613` and the
-  distinct app-data SSRC `B31DED3E`. The logs describe the secondary triple as a
-  generated video stream and preserve the slot-6-derived app-data SSRC.
-- Collision-free live call `7DC5731B5F943349B3E3089BF948D80C` still loses all
-  inbound relay RTP when the roster grows from one to two remote participants.
-  The last inbound packet is at `1785025792861`; the two-PID 472-byte Allocate is
-  sent at `1785025792867`. No inbound RTP arrives for 53,237 ms. After a one-PID
-  464-byte Allocate at `1785025846068`, relay RTP resumes 30 ms later and
-  authenticated H.264 resumes 469 ms later.
-- That failed two-PID Allocate contains only the nine local stream descriptors.
-  It omits the captured HBH-FEC TX/RX descriptors required by the complete
-  multi-participant relay shape.
-- The captured group call sends video state 6 and later returns to state 1 on
-  the same call ID. State 6 is therefore a video-to-audio downgrade, not call
-  termination; camera-only mute/unmute remains state 0/1.
-- Live three-party video call `84987F9DE404B79ED999E6F254B0150A`
-  independently validates that the relay accepts the complete two-PID Allocate
-  with HBH-FEC descriptors. Before the second participant connects, the relay
-  delivers ordinary RTP and Meowcaller emits 17 participant H.264 access units.
-- After the second accept, the relay switches its downlink to a `0x09`
-  group-forwarding envelope. All 986 captured envelopes contain inner RTP from a
-  connected participant: subtype 2 starts RTP at byte 8, subtype 4 at byte 12,
-  and subtype 7 at byte 18.
-- Those inner streams are complete rather than duplicate repair traffic:
-  participant-1 video has sequences 19–347, participant-1 audio 1–120,
-  participant-2 video 1–453, and participant-2 audio 1–84, with no gaps or
-  duplicate `(SSRC, sequence)` pairs.
-- The current relay classifier treats every `0x09` message as STUN because its
-  top two bits are clear. They fail STUN parsing and are dropped before
-  participant SSRC lookup and SRTP authentication. This is the observed cause of
-  the two-video freeze after the HBH-FEC descriptor fix.
-- The receive path now removes the three capture-pinned forwarding headers before
-  relay classification. Exact subtype 2, 4, and 7 video/audio vectors pass and
-  ordinary RTP remains byte-for-byte unchanged; malformed and unknown envelopes
-  are rejected before SRTP.
-- Participant `242653052539031:0@lid` sends a valid one-byte RTP extension
-  `30 0b 51 00 00 61 00 02`: media-frame-info ID 3 is `0x0b`, initial-bandwidth
-  ID 5 and short-offset ID 6 are present, and transport-sequence ID 9 is absent.
-  The orientation bits therefore require one clockwise quarter turn. The previous
-  parser rejected the complete extension solely because ID 9 was absent, left
-  participant orientation at `-1`, and the web modulo mapping rendered that as
-  three clockwise quarter turns—exactly 180° from the captured orientation.
-  The frozen 718-record `video_wire.jsonl` has SHA-256
-  `4250558d3547da6181cf8b2bab80054ba0f9e2231c5c07033c531b33f9683165`.
-- The parser now requires the captured frame-info and short-offset fields while
-  accepting an absent transport-sequence field. The web bridge independently
-  normalizes unknown orientation values to zero before publishing participant
-  frames. Exact RTP and bridge regression KATs pass.
 
 ## Inferences to validate live
 
@@ -128,10 +56,6 @@ media retest pending
 - A participant added to a video call joins the existing shared group relay/key
   epoch and receives subsequent group updates rather than negotiating a separate
   media session.
-- The de-framed SRTP packets will authenticate in the existing participant
-  receive pipelines. The packet identity and sequence evidence is exact;
-  restored live bidirectional multi-participant media remains the acceptance
-  test.
 
 The remaining inferences must stay marked unvalidated until a live add-person video
 call proves the offer is accepted and bidirectional video flows for original and
@@ -167,11 +91,6 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
 ## Web example target
 
 - Start either an audio or video group call from the selector.
-- Start a group-bound audio or video call from a numeric group ID or canonical
-  `@g.us` JID.
-- Coordinate browser capture with call control: start capture for video dial or
-  upgrade, stop it after a successful state-6 downgrade, and never reuse hangup
-  for a video control.
 - Keep one H.264 decoder and canvas per authenticated participant identity.
 - Route reactions to the sender's participant tile, with a shared fallback before
   that participant has a tile.
@@ -184,18 +103,12 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
   state.
 - Media tests must prove participant metadata and frame bytes survive dispatch
   without aliasing.
-- RTP tests must prove captured video extensions retain frame orientation when
-  optional transport-sequence metadata is absent.
 - Relay tests must prove a committed connected roster emits the exact captured
   sender/receiver subscription protobufs for remote PIDs, and that the subscription
   update shares the roster/relay atomic commit boundary.
-- Relay-stream tests must prove the generated secondary-video SSRCs are nonzero,
-  mutually unique, and distinct from audio, primary video, and app-data SSRCs.
 - Web tests must prove tagged participant video messages and sender-attributed
-  reaction rendering are present, group-ID calls reach the bound API, and
-  camera/upgrade/downgrade controls remain independent from hangup.
+  reaction rendering are present.
 - Initial group-video signaling and participant H.264 receive are live-accepted.
   The capture-derived subscription protobuf and atomic roster integration KATs
-  pass. Captured partial RTP orientation and safe web fallback KATs also pass.
-  Live subscription acceptance, bidirectional multi-participant H.264, video
-  add-person acceptance, and live group reactions remain pending.
+  pass. Live subscription acceptance, bidirectional multi-participant H.264,
+  video add-person acceptance, and live group reactions remain pending.

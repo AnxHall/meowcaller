@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"hash/crc32"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,9 +26,11 @@ const (
 	attrFingerprint           = 0x8028
 	attrErrorCode             = 0x0009
 	attrRelayToken            = 0x4000
+	attrReceiverSubscriptions = 0x4021
 	attrStreamDescriptors     = 0x4024
 	attrWasmRelayEndpoint     = 0x0016
 	attrSenderSubscriptionsV2 = 0x4025
+	attrParticipantCount      = 0x805a
 )
 
 // STUN message types.
@@ -187,6 +190,49 @@ func BuildWasmStunAllocateRequestWithStreamSsrcs(transactionID [12]byte, relayTo
 	return buildWasmStunAllocateRequest(transactionID, relayToken, endpointXor, CreateWasmStreamDescriptors(streamSsrcs), integrityKey, log...)
 }
 
+// BuildWasmStunAllocateRequestWithGroupSubscriptions adds the participant-specific
+// sender and receiver subscriptions required for group-video forwarding.
+func BuildWasmStunAllocateRequestWithGroupSubscriptions(
+	transactionID [12]byte,
+	relayToken []byte,
+	endpointXor [6]byte,
+	streamSsrcs [9]uint32,
+	appDataSSRC uint32,
+	participantPIDs []uint32,
+	integrityKey []byte,
+	log ...zerolog.Logger,
+) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	pids := normalizedParticipantPIDs(participantPIDs)
+	if len(pids) == 0 {
+		return BuildWasmStunAllocateRequestWithStreamSsrcs(
+			transactionID,
+			relayToken,
+			endpointXor,
+			streamSsrcs,
+			integrityKey,
+			log...,
+		)
+	}
+	lg := pickLog(log)
+	streamDescriptors := CreateWasmStreamDescriptors(streamSsrcs)
+	attrs := stunAttr(attrRelayToken, relayToken)
+	attrs = append(attrs, stunAttr(
+		attrSenderSubscriptionsV2,
+		createWasmGroupSenderSubscriptions(streamSsrcs, appDataSSRC, pids),
+	)...)
+	attrs = append(attrs, stunAttr(
+		attrReceiverSubscriptions,
+		createWasmGroupReceiverSubscriptions(pids),
+	)...)
+	attrs = append(attrs, stunAttr(attrStreamDescriptors, streamDescriptors)...)
+	participantCount := binary.AppendUvarint(nil, uint64(len(pids)))
+	attrs = append(attrs, stunAttr(attrParticipantCount, participantCount)...)
+	wep := createWasmRelayEndpointAttr(endpointXor)
+	attrs = append(attrs, stunAttr(attrWasmRelayEndpoint, wep[:])...)
+	return EncodeStunRequest(MsgAllocateRequest, transactionID, attrs, integrityKey, false, lg)
+}
+
 func buildWasmStunAllocateRequest(transactionID [12]byte, relayToken []byte, endpointXor [6]byte, streamDescriptors []byte, integrityKey []byte, log ...zerolog.Logger) []byte {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/stun.rs#L155-L177
 	lg := pickLog(log)
@@ -200,6 +246,68 @@ func buildWasmStunAllocateRequest(transactionID [12]byte, relayToken []byte, end
 	wep := createWasmRelayEndpointAttr(endpointXor)
 	attrs = append(attrs, stunAttr(attrWasmRelayEndpoint, wep[:])...)
 	return EncodeStunRequest(MsgAllocateRequest, transactionID, attrs, integrityKey, false, lg)
+}
+
+func normalizedParticipantPIDs(participantPIDs []uint32) []uint32 {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
+	pids := append([]uint32(nil), participantPIDs...)
+	slices.Sort(pids)
+	return slices.Compact(pids)
+}
+
+func createWasmGroupSenderSubscriptions(
+	streamSsrcs [9]uint32,
+	appDataSSRC uint32,
+	participantPIDs []uint32,
+) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
+	var out []byte
+	out = append(out, createWasmSenderSubscription(streamSsrcs[3:6], participantPIDs, true)...)
+	out = append(out, createWasmSenderSubscription(streamSsrcs[6:9], nil, false)...)
+	out = append(out, createWasmSenderSubscription(streamSsrcs[0:3], participantPIDs, false)...)
+	out = append(out, createWasmSenderSubscription([]uint32{appDataSSRC}, participantPIDs, false)...)
+	return out
+}
+
+func createWasmSenderSubscription(
+	ssrcs []uint32,
+	participantPIDs []uint32,
+	video bool,
+) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
+	var packedSSRCs []byte
+	for _, ssrc := range ssrcs {
+		if ssrc != 0 {
+			packedSSRCs = binary.AppendUvarint(packedSSRCs, uint64(ssrc))
+		}
+	}
+	var subscription []byte
+	subscription = pbLenDelim(subscription, 1, packedSSRCs)
+	for _, pid := range participantPIDs {
+		var participant []byte
+		participant = pbTag(participant, 1, 0)
+		participant = binary.AppendUvarint(participant, uint64(pid))
+		if video {
+			participant = pbTag(participant, 2, 0)
+			participant = binary.AppendUvarint(participant, 1)
+		}
+		subscription = pbLenDelim(subscription, 2, participant)
+	}
+	var wrapper []byte
+	wrapper = pbLenDelim(wrapper, 1, subscription)
+	return pbLenDelim(nil, 1, wrapper)
+}
+
+func createWasmGroupReceiverSubscriptions(participantPIDs []uint32) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L44-L46
+	var out []byte
+	for _, pid := range participantPIDs {
+		var participant []byte
+		participant = pbTag(participant, 1, 0)
+		participant = binary.AppendUvarint(participant, uint64(pid))
+		out = pbLenDelim(out, 2, participant)
+	}
+	return out
 }
 
 var wasmStreamDescriptorPlan = [9]struct {
