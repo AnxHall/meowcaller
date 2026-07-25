@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/group_key_epoch_fanout — `planned`
+### voip/group_key_epoch_fanout — `KAT-verified`
 - Added the two-sided-capture contract for generating one shared 32-byte group
   epoch when nominated by `rekey="1"`, Signal-encrypting it independently to
   every other connected PID-bearing device, sending one direct captured-shape
@@ -16,6 +16,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   installs the key on the keyless active-call invite and triggers its first
   media-ready event; existing active calls rotate in place without a second
   media-ready event.
+- Whatsmeow commit `9e3da89` adds the exact direct wire builder, deterministic
+  connected-device selection, one-root Signal fan-out, delayed local handoff,
+  inbound/local epoch state installation, and the added participant's
+  media-ready transition. Stale and identical epochs are ignored, conflicts are
+  rejected, and failed fan-out never rotates local media. Focused/full tests,
+  full race, build, and vet pass; live WhatsApp E2E remains pending. CodeRabbit
+  review was unavailable because its CLI is not installed.
 
 ### media/group_key_epoch — `KAT-verified`
 - Added the corrective two-sided-capture contract for one transaction-wide raw

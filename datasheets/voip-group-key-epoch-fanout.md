@@ -105,7 +105,7 @@ Accepted GroupUpdate(U), RekeyRequested false:
 Accepted GroupUpdate(U), RekeyRequested true:
   dispatch the roster snapshot first
   select every connected PID-bearing device except this exact device
-  reject duplicate device JIDs
+  deduplicate exact device JIDs while preserving roster order
   generate exactly one cryptographically random 32-byte root
   Signal-encrypt the same protobuf plaintext independently to every recipient
   build one direct enc_rekey stanza per recipient with transaction U
