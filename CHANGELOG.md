@@ -7,7 +7,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### voip/initial_group_call — `planned`
+### voip/initial_group_call — `partial`
 - Added the immutable capture contract for one initial preselected group offer:
   call-scoped routing, ordered self-plus-selected roster, Opus 8/16 kHz,
   network medium 3, local-only capability, and optional group JID.
@@ -16,6 +16,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   preserve direct-call and singular active-invite behavior, install no state on
   discovery/send failure, and emit media readiness at most once after a group
   key epoch exists.
+- Whatsmeow commit `fe7e4ad` adds the capture-shaped low-level builder and ACK
+  parser, public ordered multi-target start API, immediately call-scoped keyless
+  state, transaction-monotonic group relay readiness, and cloned optional group
+  snapshots on `CallOffer`.
+- Focused capture/orchestration/readiness/compatibility KATs, full tests, the
+  full race suite, and vet pass. The live WhatsApp offer-to-ACK-to-rekey-to-media
+  transition remains explicitly unvalidated. CodeRabbit review was unavailable
+  because its CLI is not installed.
 
 ### web/group_call_outcomes — `KAT-verified`
 - Added the web-test contract for rendering every authoritative roster
