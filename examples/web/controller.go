@@ -37,16 +37,50 @@ type webParticipantInviteResult struct {
 	Message string `json:"message,omitempty"`
 }
 
+type webGroupCallState struct {
+	Event          string                    `json:"event"`
+	CallID         string                    `json:"call_id"`
+	TransactionID  uint32                    `json:"transaction_id"`
+	RekeyRequested bool                      `json:"rekey_requested"`
+	Participants   []webGroupCallParticipant `json:"participants"`
+}
+
+type webGroupCallParticipant struct {
+	JID     string               `json:"jid"`
+	PN      string               `json:"pn,omitempty"`
+	State   string               `json:"state"`
+	Devices []webGroupCallDevice `json:"devices"`
+}
+
+type webGroupCallDevice struct {
+	JID      string `json:"jid"`
+	Platform string `json:"platform,omitempty"`
+	PID      uint32 `json:"pid"`
+	HasPID   bool   `json:"has_pid"`
+}
+
+type webParticipantJoin struct {
+	Event         string `json:"event"`
+	CallID        string `json:"call_id"`
+	TransactionID uint32 `json:"transaction_id"`
+	Target        string `json:"target"`
+	Participant   string `json:"participant"`
+	Device        string `json:"device"`
+	PID           uint32 `json:"pid"`
+}
+
 type webCallController struct {
 	ctx    context.Context
 	client *meowcaller.Client
 	bridge *videoBridge
 	log    zerolog.Logger
 
-	mu                 sync.Mutex
-	call               *meowcaller.Call
-	pending            *meowcaller.Call
-	inviteParticipants func(context.Context, *meowcaller.Call, ...string) []error
+	mu                        sync.Mutex
+	call                      *meowcaller.Call
+	pending                   *meowcaller.Call
+	inviteParticipants        func(context.Context, *meowcaller.Call, ...string) []error
+	pendingParticipantInvites map[string]string
+	pendingParticipantOrder   []string
 }
 
 func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge *videoBridge, log zerolog.Logger) *webCallController {
@@ -56,6 +90,7 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 		inviteParticipants: func(ctx context.Context, call *meowcaller.Call, targets ...string) []error {
 			return call.AddParticipants(ctx, targets...)
 		},
+		pendingParticipantInvites: make(map[string]string),
 	}
 	bridge.OnControl(c.control)
 	bridge.OnFrame(c.sendVideoFrame)
@@ -106,6 +141,10 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 			Emoji: reaction.Emoji, Sender: reaction.Sender.String(), Removed: reaction.Removed,
 		})
 	})
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L45-L66
+	call.OnGroupState(func(state meowcaller.GroupCallState) {
+		c.handleGroupState(call.ID(), state)
+	})
 	call.OnVideoState(func(state meowcaller.VideoState) {
 		c.bridge.SetOrientation(state.Orientation)
 		c.publish(webCallState{
@@ -125,6 +164,8 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 		c.mu.Lock()
 		if c.call == call {
 			c.call = nil
+			c.pendingParticipantInvites = make(map[string]string)
+			c.pendingParticipantOrder = nil
 		}
 		if c.pending == call {
 			c.pending = nil
@@ -235,6 +276,21 @@ func (c *webCallController) addParticipants(targets []string) error {
 			return call.AddParticipants(ctx, targets...)
 		}
 	}
+	c.mu.Lock()
+	if c.pendingParticipantInvites == nil {
+		c.pendingParticipantInvites = make(map[string]string)
+	}
+	for _, target := range normalized {
+		key := participantInviteTargetKey(target)
+		if key == "" {
+			continue
+		}
+		if _, exists := c.pendingParticipantInvites[key]; !exists {
+			c.pendingParticipantOrder = append(c.pendingParticipantOrder, key)
+		}
+		c.pendingParticipantInvites[key] = target
+	}
+	c.mu.Unlock()
 	results := inviteParticipants(c.ctx, call, normalized...)
 	for i, target := range normalized {
 		var inviteErr error
@@ -248,6 +304,9 @@ func (c *webCallController) addParticipants(targets []string) error {
 			Success: inviteErr == nil,
 		}
 		if inviteErr != nil {
+			c.mu.Lock()
+			delete(c.pendingParticipantInvites, participantInviteTargetKey(target))
+			c.mu.Unlock()
 			result.Message = inviteErr.Error()
 			c.log.Warn().Err(inviteErr).Str("call_id", call.ID()).Str("target", target).
 				Msg("web participant invite failed")
@@ -258,6 +317,87 @@ func (c *webCallController) addParticipants(targets []string) error {
 		c.bridge.PublishEvent(result)
 	}
 	return nil
+}
+
+func participantInviteTargetKey(target string) string {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L45-L62
+	target = strings.TrimSpace(target)
+	target = strings.TrimPrefix(target, "+")
+	if at := strings.IndexByte(target, '@'); at >= 0 {
+		target = target[:at]
+	}
+	if colon := strings.IndexByte(target, ':'); colon >= 0 {
+		target = target[:colon]
+	}
+	return strings.TrimSpace(target)
+}
+
+func (c *webCallController) handleGroupState(callID string, state meowcaller.GroupCallState) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/8a22c339e92fa086d5d2d35569980af734d61c3e/datasheets/web-group-call-outcomes.md#L45-L72
+	webState := webGroupCallState{
+		Event:          "group_state",
+		CallID:         callID,
+		TransactionID:  state.TransactionID,
+		RekeyRequested: state.RekeyRequested,
+		Participants:   make([]webGroupCallParticipant, len(state.Participants)),
+	}
+	for participantIndex, participant := range state.Participants {
+		devices := make([]webGroupCallDevice, len(participant.Devices))
+		for deviceIndex, device := range participant.Devices {
+			devices[deviceIndex] = webGroupCallDevice{
+				JID: device.JID.String(), Platform: device.Platform,
+				PID: device.PID, HasPID: device.HasPID,
+			}
+		}
+		webState.Participants[participantIndex] = webGroupCallParticipant{
+			JID: participant.JID.String(), PN: participant.PN.String(),
+			State: participant.State, Devices: devices,
+		}
+	}
+	c.bridge.PublishEvent(webState)
+
+	var joined []webParticipantJoin
+	c.mu.Lock()
+	for _, participant := range state.Participants {
+		if participant.State != "connected" {
+			continue
+		}
+		var selected *meowcaller.GroupCallDevice
+		for deviceIndex := range participant.Devices {
+			if participant.Devices[deviceIndex].HasPID {
+				selected = &participant.Devices[deviceIndex]
+				break
+			}
+		}
+		if selected == nil {
+			continue
+		}
+		for _, key := range c.pendingParticipantOrder {
+			target, pending := c.pendingParticipantInvites[key]
+			if !pending || (key != participant.JID.User && key != participant.PN.User) {
+				continue
+			}
+			delete(c.pendingParticipantInvites, key)
+			joined = append(joined, webParticipantJoin{
+				Event: "participant_join", CallID: callID,
+				TransactionID: state.TransactionID, Target: target,
+				Participant: participant.JID.String(), Device: selected.JID.String(),
+				PID: selected.PID,
+			})
+		}
+	}
+	c.mu.Unlock()
+	for _, outcome := range joined {
+		c.bridge.PublishEvent(outcome)
+		c.log.Info().
+			Str("call_id", callID).
+			Uint32("transaction_id", outcome.TransactionID).
+			Str("target", outcome.Target).
+			Str("participant", outcome.Participant).
+			Str("device", outcome.Device).
+			Uint32("pid", outcome.PID).
+			Msg("web participant joined")
+	}
 }
 
 func (c *webCallController) activeCall() (*meowcaller.Call, error) {

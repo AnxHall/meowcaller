@@ -7,8 +7,10 @@ localhost browser UI.
 During an established audio call, enter one or more WhatsApp numbers or LIDs in
 the **People to add** box, separated by commas or newlines, then choose **Add
 people**. The event log reports each invite independently. A successful
-`participant_invite` result means the audio-only invite was submitted; it does
-not mean that person joined the call.
+`participant_invite` result means the audio-only invite was submitted. The page
+then waits for an authoritative WhatsApp roster: `group_state` shows each
+transaction, and `participant_join` is emitted only when the target is connected
+with a selected PID-bearing device.
 
 ```sh
 go run .
