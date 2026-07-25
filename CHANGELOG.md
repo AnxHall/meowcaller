@@ -7,11 +7,21 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
-### web/initial_group_call — `planned`
+### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person
   start through `Client.GroupCallWithOptions`, separate established-call
   participant invitations, and incoming roster replay before Answer-driven
-  connecting state. Focused web KATs and live group audio E2E remain pending.
+  connecting state.
+- Implemented a distinct `start_group_audio` controller/HTTP/page path with
+  trimmed alias-deduplicated targets, two-person validation, exactly one
+  empty-group-JID API delegation, call ownership reservation, attach rollback,
+  and a separate group-dialing lifecycle state.
+- Gated established-call participant invitations on `CallPhaseActive` before
+  recording pending outcomes, and gated the two People controls in the browser
+  so group start is idle-only while Add people is ready/active-only.
+- Added deterministic incoming roster replay ordering through the controller's
+  SSE bridge before Answer-driven connecting state without synthesizing ready.
+  Focused and full nested web KATs pass. Live group audio E2E remains pending.
 
 ### api/initial_group_call — `partial`
 - Added the Task 1 capture-pinned Meowcaller API contract for an audio-only

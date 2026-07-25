@@ -97,6 +97,71 @@ func TestVideoBridgeControlDispatchesParticipantTargets(t *testing.T) {
 	}
 }
 
+func TestVideoBridgeControlDispatchesStartGroupAudioTargets(t *testing.T) {
+	vb := &videoBridge{}
+	var got vbControl
+	vb.OnControl(func(command vbControl) error {
+		got = command
+		return nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/control", bytes.NewBufferString(
+		`{"action":"start_group_audio","targets":["15551234567","15557654321"]}`,
+	))
+	rec := httptest.NewRecorder()
+
+	vb.handleControl(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if got.Action != "start_group_audio" || len(got.Targets) != 2 ||
+		got.Targets[0] != "15551234567" || got.Targets[1] != "15557654321" {
+		t.Fatalf("start group audio control = %+v", got)
+	}
+}
+
+func TestVideoBridgeStartGroupAudioReportsControllerTargetValidation(t *testing.T) {
+	vb := &videoBridge{}
+	c := &webCallController{ctx: context.Background()}
+	vb.OnControl(c.control)
+	req := httptest.NewRequest(http.MethodPost, "/control", bytes.NewBufferString(
+		`{"action":"start_group_audio","targets":["15551234567"]}`,
+	))
+	rec := httptest.NewRecorder()
+
+	vb.handleControl(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "at least two distinct participant targets are required" {
+		t.Fatalf("body = %q, want controller target validation", got)
+	}
+}
+
+func TestVideoBridgePageSeparatesStartGroupAndAddPeopleControls(t *testing.T) {
+	for _, behavior := range []string{
+		`id="startGroupAudio"`,
+		`id="startGroupAudio" disabled`,
+		`id="addParticipants" disabled`,
+		"Start group audio",
+		"Add people",
+		"invoke('start_group_audio',{targets:participantTargets()})",
+		"invoke('add_participants',{targets:participantTargets()})",
+		"function updatePeopleControls(s)",
+		"s.event==='ready'||(s.event==='phase'&&s.phase===4)",
+		"s.event==='idle'||s.event==='ended'",
+		"['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'",
+		"$('startGroupAudio').disabled=true;$('addParticipants').disabled=false",
+		"$('startGroupAudio').disabled=true;$('addParticipants').disabled=true",
+		"updatePeopleControls(s)",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("page does not contain %q", behavior)
+		}
+	}
+}
+
 func TestVideoBridgeParticipantInviteEventDoesNotReplaceReplayState(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 	vb := &videoBridge{}

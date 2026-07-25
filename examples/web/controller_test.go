@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -289,6 +290,9 @@ func TestWebCallControllerAddParticipantsRequiresNormalizedTarget(t *testing.T) 
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 	c := &webCallController{
 		ctx: context.Background(), call: &meowcaller.Call{}, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
 	}
 
 	err := c.addParticipants([]string{" ", "\n"})
@@ -306,6 +310,9 @@ func TestWebCallControllerAddParticipantsPublishesOneResultPerTarget(t *testing.
 	var gotTargets []string
 	c := &webCallController{
 		ctx: context.Background(), call: &meowcaller.Call{}, bridge: bridge, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
 		inviteParticipants: func(_ context.Context, _ *meowcaller.Call, targets ...string) []error {
 			gotTargets = append(gotTargets, targets...)
 			return []error{nil, errors.New("invite rejected")}
@@ -352,6 +359,9 @@ func TestWebCallControllerDeduplicatesNormalizedParticipantTargets(t *testing.T)
 	var gotTargets []string
 	c := &webCallController{
 		ctx: context.Background(), call: &meowcaller.Call{}, bridge: bridge, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
 		inviteParticipants: func(_ context.Context, _ *meowcaller.Call, targets ...string) []error {
 			gotTargets = append(gotTargets, targets...)
 			return make([]error, len(targets))
@@ -369,6 +379,333 @@ func TestWebCallControllerDeduplicatesNormalizedParticipantTargets(t *testing.T)
 	}
 	if len(c.pendingParticipantInvites) != 1 {
 		t.Fatalf("pending invites = %+v, want one", c.pendingParticipantInvites)
+	}
+}
+
+func TestWebCallControllerStartsOneAudioGroupCallWithDistinctTargets(t *testing.T) {
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 1)
+	bridge.subs[events] = struct{}{}
+	call := &meowcaller.Call{}
+	var calls int
+	var attaches int
+	var gotTargets []string
+	var gotOptions meowcaller.GroupCallOptions
+	c := &webCallController{
+		ctx: context.Background(), bridge: bridge, log: zerolog.Nop(),
+		startGroupCall: func(
+			_ context.Context,
+			targets []string,
+			options meowcaller.GroupCallOptions,
+		) (*meowcaller.Call, error) {
+			calls++
+			gotTargets = append(gotTargets, targets...)
+			gotOptions = options
+			return call, nil
+		},
+		inviteParticipants: func(context.Context, *meowcaller.Call, ...string) []error {
+			t.Fatal("initial group start used the established-call participant invite path")
+			return nil
+		},
+		attachCall: func(got *meowcaller.Call) error {
+			if got != call {
+				t.Fatalf("attached call %p, want %p", got, call)
+			}
+			attaches++
+			return nil
+		},
+	}
+
+	err := c.control(vbControl{
+		Action: "start_group_audio",
+		Targets: []string{
+			" +15551234567 ",
+			"15551234567@s.whatsapp.net",
+			" 222222222222222:43@lid ",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("start group audio: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("group start calls = %d, want 1", calls)
+	}
+	if attaches != 1 {
+		t.Fatalf("call attachments = %d, want 1", attaches)
+	}
+	if strings.Join(gotTargets, ",") != "+15551234567,222222222222222:43@lid" {
+		t.Fatalf("group targets = %v", gotTargets)
+	}
+	if gotOptions.GroupJID != "" {
+		t.Fatalf("group JID = %q, want empty selector-flow binding", gotOptions.GroupJID)
+	}
+	if c.call != call || c.pending != nil {
+		t.Fatalf("controller ownership = (call %p, pending %p), want (%p, nil)", c.call, c.pending, call)
+	}
+	select {
+	case msg := <-events:
+		var state webCallState
+		if err = json.Unmarshal(msg.data, &state); err != nil {
+			t.Fatalf("group dialing JSON: %v", err)
+		}
+		if state.Event != "group_dialing" || state.Video {
+			t.Fatalf("group dialing state = %+v", state)
+		}
+	default:
+		t.Fatal("group dialing state was not published")
+	}
+}
+
+func TestWebCallControllerStartGroupAudioRequiresTwoDistinctPeople(t *testing.T) {
+	var calls int
+	c := &webCallController{
+		ctx: context.Background(), log: zerolog.Nop(),
+		startGroupCall: func(
+			context.Context,
+			[]string,
+			meowcaller.GroupCallOptions,
+		) (*meowcaller.Call, error) {
+			calls++
+			return &meowcaller.Call{}, nil
+		},
+	}
+
+	err := c.control(vbControl{
+		Action:  "start_group_audio",
+		Targets: []string{" +15551234567 ", "15551234567@s.whatsapp.net", ""},
+	})
+
+	if err == nil || err.Error() != "at least two distinct participant targets are required" {
+		t.Fatalf("error = %v, want distinct target validation", err)
+	}
+	if calls != 0 {
+		t.Fatalf("group start delegated %d times after validation failure", calls)
+	}
+}
+
+func TestWebCallControllerStartGroupAudioRejectsEveryBusyOwner(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		call    *meowcaller.Call
+		pending *meowcaller.Call
+		callID  string
+	}{
+		{name: "call", call: &meowcaller.Call{}},
+		{name: "pending", pending: &meowcaller.Call{}},
+		{name: "active call ID", callID: "CID"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls int
+			c := &webCallController{
+				ctx: context.Background(), log: zerolog.Nop(),
+				call: test.call, pending: test.pending, activeCallID: test.callID,
+				startGroupCall: func(
+					context.Context,
+					[]string,
+					meowcaller.GroupCallOptions,
+				) (*meowcaller.Call, error) {
+					calls++
+					return &meowcaller.Call{}, nil
+				},
+			}
+
+			err := c.startGroupAudio([]string{"15550001", "15550002"})
+
+			if err == nil || err.Error() != "another call is already active" {
+				t.Fatalf("error = %v, want busy rejection", err)
+			}
+			if calls != 0 {
+				t.Fatalf("group start delegated %d times while busy", calls)
+			}
+		})
+	}
+}
+
+func TestWebCallControllerRejectsIncomingCallDuringGroupStartReservation(t *testing.T) {
+	incoming := &meowcaller.Call{}
+	var rejected int
+	c := &webCallController{
+		bridge:       &videoBridge{subs: make(map[chan vbMsg]struct{})},
+		log:          zerolog.Nop(),
+		activeCallID: "web-group-start-pending",
+		rejectCall: func(got *meowcaller.Call) error {
+			if got != incoming {
+				t.Fatalf("rejected call %p, want %p", got, incoming)
+			}
+			rejected++
+			return nil
+		},
+	}
+
+	c.onIncomingCall(incoming)
+
+	if rejected != 1 {
+		t.Fatalf("incoming rejections = %d, want 1", rejected)
+	}
+	if c.pending != nil || c.activeCallID != "web-group-start-pending" {
+		t.Fatalf("incoming call replaced group-start ownership: pending=%p id=%q", c.pending, c.activeCallID)
+	}
+}
+
+func TestWebCallControllerStartGroupAudioOwnershipChangeHangsUpReturnedCall(t *testing.T) {
+	call := &meowcaller.Call{}
+	var hangups int
+	c := &webCallController{ctx: context.Background(), log: zerolog.Nop()}
+	c.startGroupCall = func(
+		context.Context,
+		[]string,
+		meowcaller.GroupCallOptions,
+	) (*meowcaller.Call, error) {
+		c.mu.Lock()
+		c.activeCallID = "OTHER"
+		c.mu.Unlock()
+		return call, nil
+	}
+	c.hangupCall = func(got *meowcaller.Call) error {
+		if got != call {
+			t.Fatalf("hung up call %p, want %p", got, call)
+		}
+		hangups++
+		return nil
+	}
+
+	err := c.startGroupAudio([]string{"15550001", "15550002"})
+
+	if err == nil || err.Error() != "group call ownership changed while starting" {
+		t.Fatalf("error = %v, want ownership change", err)
+	}
+	if hangups != 1 {
+		t.Fatalf("hangups = %d, want 1", hangups)
+	}
+	if c.call != nil || c.pending != nil || c.activeCallID != "OTHER" {
+		t.Fatalf("cleanup disturbed current ownership: call=%p pending=%p id=%q", c.call, c.pending, c.activeCallID)
+	}
+}
+
+func TestWebCallControllerStartGroupAudioAttachFailureClearsAndHangsUp(t *testing.T) {
+	call := &meowcaller.Call{}
+	var hangups int
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	bridge.PublishGroupState(webGroupCallState{Event: "group_state"})
+	c := &webCallController{
+		ctx: context.Background(), bridge: bridge, log: zerolog.Nop(),
+		startGroupCall: func(
+			context.Context,
+			[]string,
+			meowcaller.GroupCallOptions,
+		) (*meowcaller.Call, error) {
+			return call, nil
+		},
+		attachCall: func(*meowcaller.Call) error { return errors.New("attach failed") },
+		hangupCall: func(got *meowcaller.Call) error {
+			if got != call {
+				t.Fatalf("hung up call %p, want %p", got, call)
+			}
+			hangups++
+			return nil
+		},
+	}
+
+	err := c.startGroupAudio([]string{"15550001", "15550002"})
+
+	if err == nil || err.Error() != "attach failed" {
+		t.Fatalf("error = %v, want attach failure", err)
+	}
+	if c.call != nil || c.pending != nil || c.activeCallID != "" {
+		t.Fatalf("attach failure retained ownership: call=%p pending=%p id=%q", c.call, c.pending, c.activeCallID)
+	}
+	if len(bridge.groupState) != 0 || bridge.groupCallID != "" {
+		t.Fatal("attach failure retained replayable group state")
+	}
+	if hangups != 1 {
+		t.Fatalf("hangups = %d, want 1", hangups)
+	}
+}
+
+func TestWebCallControllerAddParticipantsRequiresEstablishedCall(t *testing.T) {
+	for _, phase := range []meowcaller.CallPhase{
+		meowcaller.CallPhaseIdle,
+		meowcaller.CallPhaseCalling,
+		meowcaller.CallPhaseRinging,
+		meowcaller.CallPhaseConnecting,
+		meowcaller.CallPhaseEnded,
+	} {
+		t.Run(fmt.Sprint(phase), func(t *testing.T) {
+			var delegated bool
+			c := &webCallController{
+				ctx: context.Background(), call: &meowcaller.Call{}, log: zerolog.Nop(),
+				callPhase: func(*meowcaller.Call) meowcaller.CallPhase { return phase },
+				inviteParticipants: func(context.Context, *meowcaller.Call, ...string) []error {
+					delegated = true
+					return nil
+				},
+			}
+
+			err := c.addParticipants([]string{"15551234567"})
+
+			if err == nil || err.Error() != "participant invites require an active call" {
+				t.Fatalf("phase %d error = %v", phase, err)
+			}
+			if delegated {
+				t.Fatalf("phase %d delegated participant invite", phase)
+			}
+			if c.pendingParticipantCallID != "" ||
+				len(c.pendingParticipantInvites) != 0 ||
+				len(c.pendingParticipantOrder) != 0 {
+				t.Fatalf("phase %d recorded pending outcomes before delegation", phase)
+			}
+		})
+	}
+}
+
+func TestWebCallControllerAnswerPublishesIncomingRosterOverSSEBeforeConnecting(t *testing.T) {
+	call := &meowcaller.Call{}
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 4)
+	bridge.subs[events] = struct{}{}
+	c := &webCallController{
+		bridge: bridge, log: zerolog.Nop(), pending: call,
+		listenGroupState: func(_ *meowcaller.Call, listener func(meowcaller.GroupCallState)) {
+			listener(meowcaller.GroupCallState{TransactionID: 17})
+		},
+		attachMedia: func(*meowcaller.Call) error { return nil },
+		callVideo:   func(*meowcaller.Call) bool { return false },
+		rejectCall:  func(*meowcaller.Call) error { return nil },
+	}
+	c.answerCall = func(*meowcaller.Call) error {
+		c.publish(webCallState{
+			Event: "phase", Phase: int(meowcaller.CallPhaseConnecting),
+		})
+		return nil
+	}
+
+	if err := c.answer(); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+
+	var got []string
+	for {
+		select {
+		case msg := <-events:
+			var event struct {
+				Event string `json:"event"`
+			}
+			if err := json.Unmarshal(msg.data, &event); err != nil {
+				t.Fatalf("state JSON: %v", err)
+			}
+			got = append(got, event.Event)
+		default:
+			if strings.Join(got, ",") != "group_state,phase,answering" {
+				t.Fatalf("answer publication order = %v", got)
+			}
+			for _, event := range got {
+				if event == "ready" {
+					t.Fatal("roster replay or Answer synthesized ready")
+				}
+			}
+			return
+		}
 	}
 }
 

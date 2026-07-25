@@ -4,9 +4,12 @@ This example pairs a whatsmeow client by QR code and exposes meowcaller's audio,
 H.264 video, independent camera controls, orientation, and call reactions in a
 localhost browser UI.
 
-During an established audio call, enter one or more WhatsApp numbers or LIDs in
-the **People to add** box, separated by commas or newlines, then choose **Add
-people**. The event log reports each invite independently. A successful
+When idle, enter at least two WhatsApp numbers or LIDs in the **People** box,
+separated by commas or newlines, then choose **Start group audio**. This creates
+one audio-only group call through the multi-target API.
+
+During an established audio call, use the same People box and choose **Add
+people**. The event log reports each singular invite independently. A successful
 `participant_invite` result means the audio-only invite was submitted. The page
 then waits for an authoritative WhatsApp roster: `group_state` shows each
 transaction, and `participant_join` is emitted only when the target is connected

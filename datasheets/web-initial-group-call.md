@@ -8,7 +8,8 @@ participant invitations as a separate control.
 `examples/web/controller_test.go` and `examples/web/server_test.go`, backed by
 the Task 1 initial-group capture and Task 2 API contract.
 
-**Status:** planned; focused KATs and live group audio E2E are pending.
+**Status:** partial; focused controller, HTTP, DOM, and SSE ordering KATs pass.
+Live group audio E2E remains pending.
 
 **Reference pinned at:**
 
