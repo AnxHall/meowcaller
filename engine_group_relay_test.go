@@ -250,6 +250,10 @@ func TestGroupRelayRotatedApplyWaitsForOldKeepaliveSend(t *testing.T) {
 	if got := <-oldPacket; !bytes.Equal(got, initial) {
 		t.Fatalf("blocked old keepalive = %x, want initial allocate %x", got, initial)
 	}
+	if state.mu.TryLock() {
+		state.mu.Unlock()
+		t.Fatal("blocked keepalive released relay state before its send completed")
+	}
 
 	applyStarted := make(chan struct{})
 	applySendEntered := make(chan []byte, 1)
@@ -263,12 +267,6 @@ func TestGroupRelayRotatedApplyWaitsForOldKeepaliveSend(t *testing.T) {
 		applyDone <- err
 	}()
 	<-applyStarted
-
-	select {
-	case packet := <-applySendEntered:
-		t.Fatalf("rotated Apply entered send while old keepalive was blocked: %x", packet)
-	default:
-	}
 
 	close(releaseOldSend)
 	oldSendReleased = true
@@ -346,6 +344,10 @@ func TestGroupRelayRotatedApplyWaitsForOldBindingSend(t *testing.T) {
 	if got := <-oldBindingPacket; !bytes.Equal(got, wantInitial) {
 		t.Fatalf("blocked old binding success = %x, want initial-key response %x", got, wantInitial)
 	}
+	if state.mu.TryLock() {
+		state.mu.Unlock()
+		t.Fatal("blocked binding response released relay state before its send completed")
+	}
 
 	applyStarted := make(chan struct{})
 	applySendEntered := make(chan []byte, 1)
@@ -359,12 +361,6 @@ func TestGroupRelayRotatedApplyWaitsForOldBindingSend(t *testing.T) {
 		applyDone <- err
 	}()
 	<-applyStarted
-
-	select {
-	case packet := <-applySendEntered:
-		t.Fatalf("rotated Apply entered send while old binding was blocked: %x", packet)
-	default:
-	}
 
 	close(releaseOldSend)
 	oldSendReleased = true
