@@ -1162,8 +1162,6 @@ func TestParticipantReceiveRegistryRejectedUpdateIsAtomic(t *testing.T) {
 
 func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
-	t.Skip("blocked: ApplyGroupUpdateTransaction is a stub; enable when implemented")
-
 	callKey := iota32()
 	self := mediaTestJID("111111111111111", 14)
 	peer := mediaTestJID("222222222222222", 0)
@@ -1182,8 +1180,14 @@ func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testin
 	if err = registry.attachSendPipeline(sendPipe); err != nil {
 		t.Fatalf("attach send pipeline: %v", err)
 	}
+	if registry.HasCommittedGroupUpdate() {
+		t.Fatal("registry reports committed group update before initial roster")
+	}
 	if err = registry.ApplyGroupUpdate(mediaTestGroupUpdate(self, peer, added, pending, 16, false)); err != nil {
 		t.Fatalf("apply initial roster: %v", err)
+	}
+	if !registry.HasCommittedGroupUpdate() {
+		t.Fatal("initial committed roster did not enable group mode")
 	}
 	initialRaw := bytes.Repeat([]byte{0x16}, 32)
 	if err = registry.ApplyGroupRawEpoch(16, initialRaw); err != nil {
@@ -1226,6 +1230,9 @@ func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testin
 	if initialPeer.pipe.recvKeys != initialReceiveKeys || sendPipe.sendKeys != initialSendKeys {
 		t.Fatal("failed transaction changed active media keys")
 	}
+	if !registry.HasCommittedGroupUpdate() {
+		t.Fatal("failed transaction discarded the prior committed group mode")
+	}
 
 	err = registry.ApplyGroupUpdateTransaction(update, func(commit func()) error {
 		applyCalls++
@@ -1250,6 +1257,9 @@ func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testin
 	}
 	if initialPeer.pipe.recvKeys == initialReceiveKeys || sendPipe.sendKeys == initialSendKeys {
 		t.Fatal("successful retry did not rotate active media keys")
+	}
+	if !registry.HasCommittedGroupUpdate() {
+		t.Fatal("successful retry did not enable committed group mode")
 	}
 
 	err = registry.ApplyGroupUpdateTransaction(update, func(func()) error {
