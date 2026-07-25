@@ -17,17 +17,24 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   explicit validation boundaries.
 - Added the capture-backed contract for participant-indexed audio reception
   feedback. Each authenticated group SSRC retains independent sequence, loss,
-  jitter, and sender-report timing state, while the live engine reuses the
-  existing verified single-reception-block SRTCP wire format per participant.
+  jitter, and sender-report timing state. The initial integration reused the
+  verified 1:1 single-reception-block wire format per participant; the
+  correction above replaces that historical behavior.
 - Scaffolded the synchronized SSRC-indexed reception set and its two-stream KAT,
   then enabled the KAT when the stub bodies were implemented.
 - Implemented one synchronized reception tracker per authenticated audio SSRC,
   deterministic report ordering, and exact sender-report routing. The
   two-participant KAT passes.
-- Integrated the set into the live audio receive/ticker path. Every active audio
-  SSRC now produces one independently indexed, authenticated SRTCP packet using
-  the existing verified single-block format, while the pre-audio baseline still
-  emits one report. Focused engine composition KATs pass.
+- Integrated the corrected 60-byte group SR into the live audio receive/ticker
+  path. Every authoritative active audio SSRC produces one independently
+  indexed 74-byte protected packet without SDES; departed SSRC state is pruned
+  and a rejoin starts fresh. The unavailable opaque extension is zeroed, while
+  the pre-audio baseline retains the verified 1:1 report as an explicit
+  empty-set assumption.
+- Made periodic report failures observable and retryable. First-send and partial
+  failures report sent progress, consume no reused SRTCP indexes, and retry all
+  active reports with fresh indexes on the next tick. Exact plaintext, protected
+  length, leave/rejoin, retry, nil-input, and ticker-continuation KATs pass.
 
 ### web/initial_group_call — `partial`
 - Added the capture-backed web-console contract for one audio-only multi-person

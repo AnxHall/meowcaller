@@ -2,7 +2,8 @@ package meowcaller
 
 import (
 	"bytes"
-	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,7 +180,7 @@ func TestMediaSrtcpSenderProtectsVideoReport(t *testing.T) {
 	}
 }
 
-func TestMediaSrtcpSenderEmitsOneVerifiedPacketPerGroupAudioReport(t *testing.T) {
+func TestMediaSrtcpSenderEmitsCaptureShapedPacketPerGroupAudioReport(t *testing.T) {
 	callKey := iota32()
 	const (
 		selfLID   = "111111111111111:14@lid"
@@ -200,7 +201,7 @@ func TestMediaSrtcpSenderEmitsOneVerifiedPacketPerGroupAudioReport(t *testing.T)
 		{Ssrc: ssrcC, ExtendedHighestSequence: 40},
 	}
 	var packets [][]byte
-	err = sendMediaSrtcpReceptionReports(
+	_, err = sendMediaSrtcpReceptionReports(
 		sender,
 		rtp.RtcpSenderStats{PacketsSent: 7, OctetsSent: 700, RtpTimestamp: 9600},
 		1_700_000_000_000,
@@ -216,7 +217,14 @@ func TestMediaSrtcpSenderEmitsOneVerifiedPacketPerGroupAudioReport(t *testing.T)
 	if len(packets) != 2 {
 		t.Fatalf("packet count = %d, want 2", len(packets))
 	}
+	wantPlaintexts := []string{
+		"81c8000e10203040e8fe6f80000000000000258000000007000002bc59754a60000000000000012c0000000000000000000000000000000000000000",
+		"81c8000e10203040e8fe6f80000000000000258000000007000002bc66fde7f100000000000000280000000000000000000000000000000000000000",
+	}
 	for i, packet := range packets {
+		if len(packet) != 60+rtp.SrtcpTrailerLen {
+			t.Fatalf("packet %d protected bytes = %d, want 74", i, len(packet))
+		}
 		plain, index, ok := receiver.unprotect(localSSRC, packet)
 		if !ok {
 			t.Fatalf("packet %d failed SRTCP authentication", i)
@@ -224,11 +232,8 @@ func TestMediaSrtcpSenderEmitsOneVerifiedPacketPerGroupAudioReport(t *testing.T)
 		if index != uint32(i+1) {
 			t.Fatalf("packet %d SRTCP index = %d, want %d", i, index, i+1)
 		}
-		if len(plain) < 32 {
-			t.Fatalf("packet %d plaintext bytes = %d, want reception block", i, len(plain))
-		}
-		if got := binary.BigEndian.Uint32(plain[28:32]); got != reports[i].Ssrc {
-			t.Fatalf("packet %d report SSRC = %#x, want %#x", i, got, reports[i].Ssrc)
+		if got := hex.EncodeToString(plain); got != wantPlaintexts[i] {
+			t.Fatalf("packet %d plaintext = %s, want capture-shaped %s", i, got, wantPlaintexts[i])
 		}
 	}
 }
@@ -239,7 +244,7 @@ func TestMediaSrtcpSenderStillEmitsBeforeInboundGroupAudio(t *testing.T) {
 		t.Fatalf("sender: %v", err)
 	}
 	sent := 0
-	err = sendMediaSrtcpReceptionReports(
+	_, err = sendMediaSrtcpReceptionReports(
 		sender,
 		rtp.RtcpSenderStats{},
 		1_700_000_000_000,
@@ -254,6 +259,203 @@ func TestMediaSrtcpSenderStillEmitsBeforeInboundGroupAudio(t *testing.T) {
 	}
 	if sent != 1 {
 		t.Fatalf("sent packets = %d, want 1 baseline sender report", sent)
+	}
+}
+
+func TestMediaSrtcpReportFailureBeforeFirstSendRetriesWithFreshIndex(t *testing.T) {
+	callKey := iota32()
+	const (
+		selfLID   = "111111111111111:14@lid"
+		localSSRC = uint32(0x10203040)
+	)
+	sender, err := newMediaSrtcpSender(callKey, selfLID, localSSRC, false)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	receiver, err := newMediaSrtcpReceiver(callKey, selfLID)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	reports := []*rtp.RtcpReceptionReport{
+		{Ssrc: 0x59754A60},
+		{Ssrc: 0x66FDE7F1},
+	}
+	sendFailure := errors.New("send failed")
+	sent, err := sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{},
+		1_700_000_000_000,
+		reports,
+		func([]byte) error {
+			return sendFailure
+		},
+	)
+	if !errors.Is(err, sendFailure) || sent != 0 {
+		t.Fatalf("first attempt = (%d, %v), want (0, send failed)", sent, err)
+	}
+
+	var retried [][]byte
+	sent, err = sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{},
+		1_700_000_001_500,
+		reports,
+		func(packet []byte) error {
+			retried = append(retried, bytes.Clone(packet))
+			return nil
+		},
+	)
+	if err != nil || sent != 2 {
+		t.Fatalf("retry = (%d, %v), want (2, nil)", sent, err)
+	}
+	for i, packet := range retried {
+		if _, index, ok := receiver.unprotect(localSSRC, packet); !ok || index != uint32(i+2) {
+			t.Fatalf("retry packet %d = index %d authenticated %t, want fresh index %d", i, index, ok, i+2)
+		}
+	}
+}
+
+func TestMediaSrtcpPartialSendReportsProgressAndRetriesAllWithFreshIndexes(t *testing.T) {
+	callKey := iota32()
+	const (
+		selfLID   = "111111111111111:14@lid"
+		localSSRC = uint32(0x10203040)
+	)
+	sender, err := newMediaSrtcpSender(callKey, selfLID, localSSRC, false)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	receiver, err := newMediaSrtcpReceiver(callKey, selfLID)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	reports := []*rtp.RtcpReceptionReport{
+		{Ssrc: 0x59754A60},
+		{Ssrc: 0x66FDE7F1},
+	}
+	sendFailure := errors.New("send failed")
+	attempted := 0
+	sent, err := sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{},
+		1_700_000_000_000,
+		reports,
+		func([]byte) error {
+			attempted++
+			if attempted == 2 {
+				return sendFailure
+			}
+			return nil
+		},
+	)
+	if !errors.Is(err, sendFailure) || sent != 1 {
+		t.Fatalf("partial attempt = (%d, %v), want (1, send failed)", sent, err)
+	}
+
+	var retried [][]byte
+	sent, err = sendMediaSrtcpReceptionReports(
+		sender,
+		rtp.RtcpSenderStats{},
+		1_700_000_001_500,
+		reports,
+		func(packet []byte) error {
+			retried = append(retried, bytes.Clone(packet))
+			return nil
+		},
+	)
+	if err != nil || sent != 2 {
+		t.Fatalf("retry = (%d, %v), want (2, nil)", sent, err)
+	}
+	for i, packet := range retried {
+		if _, index, ok := receiver.unprotect(localSSRC, packet); !ok || index != uint32(i+3) {
+			t.Fatalf("retry packet %d = index %d authenticated %t, want fresh index %d", i, index, ok, i+3)
+		}
+	}
+}
+
+func TestMediaSRTCPTicksContinueAfterSendFailure(t *testing.T) {
+	ticks := make(chan time.Time, 2)
+	ticks <- time.UnixMilli(1_700_000_000_000)
+	ticks <- time.UnixMilli(1_700_000_001_500)
+	close(ticks)
+	sendFailure := errors.New("send failed")
+	attempts := 0
+	failures := 0
+
+	runMediaSRTCPTicks(
+		t.Context(),
+		ticks,
+		func(time.Time) error {
+			attempts++
+			if attempts == 1 {
+				return sendFailure
+			}
+			return nil
+		},
+		func(err error) {
+			if !errors.Is(err, sendFailure) {
+				t.Fatalf("failure callback error = %v, want send failed", err)
+			}
+			failures++
+		},
+	)
+	if attempts != 2 || failures != 1 {
+		t.Fatalf("ticker attempts/failures = (%d, %d), want (2, 1)", attempts, failures)
+	}
+}
+
+func TestApplyGroupAudioRosterPrunesDepartedReceptionAndResetsRejoin(t *testing.T) {
+	callKey := iota32()
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry("CID", callKey, self.String(), peer.String(), func() participantAudioDecoder {
+		return &recordingParticipantDecoder{}
+	})
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	var reception rtp.RtcpReceptionStatsSet
+	if err = applyGroupAudioRoster(registry, &reception, mediaTestGroupUpdate(self, peer, added, pending, 17, true)); err != nil {
+		t.Fatalf("apply connected roster: %v", err)
+	}
+	active := registry.ActiveAudioSSRCs()
+	if len(active) != 2 {
+		t.Fatalf("connected audio SSRC count = %d, want 2", len(active))
+	}
+	for i, ssrc := range active {
+		reception.Observe(ssrc, uint16(100+i), uint32(96_000+i*960), uint64(1_000+i*60), SampleRate)
+	}
+
+	if err = applyGroupAudioRoster(registry, &reception, mediaTestGroupUpdate(self, peer, added, pending, 18, false)); err != nil {
+		t.Fatalf("apply departure roster: %v", err)
+	}
+	reports := reception.Reports(1_500)
+	if len(reports) != 1 || reports[0].Ssrc != registry.ActiveAudioSSRCs()[0] {
+		t.Fatalf("post-departure reports = %+v, want only authoritative active SSRC", reports)
+	}
+
+	addedSSRC, err := rtp.DeriveWasmParticipantSsrc("CID", rtp.FormatE2ESrtpParticipantID(added.String()), 0)
+	if err != nil {
+		t.Fatalf("derive rejoined SSRC: %v", err)
+	}
+	if err = applyGroupAudioRoster(registry, &reception, mediaTestGroupUpdate(self, peer, added, pending, 19, true)); err != nil {
+		t.Fatalf("apply rejoin roster: %v", err)
+	}
+	reception.Observe(addedSSRC, 900, 8_640_000, 2_000, SampleRate)
+	reports = reception.Reports(2_100)
+	if len(reports) != 2 {
+		t.Fatalf("post-rejoin reports = %+v, want two active SSRCs", reports)
+	}
+	var rejoined *rtp.RtcpReceptionReport
+	for _, report := range reports {
+		if report.Ssrc == addedSSRC {
+			rejoined = report
+		}
+	}
+	if rejoined == nil || rejoined.ExtendedHighestSequence != 900 || rejoined.CumulativeLost != 0 {
+		t.Fatalf("rejoined report = %+v, want fresh sequence 900", rejoined)
 	}
 }
 

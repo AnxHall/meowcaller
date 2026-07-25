@@ -51,6 +51,23 @@ func (s *RtcpReceptionStatsSet) ObserveSenderReport(
 	stream.ObserveSenderReport(senderSSRC, ntpSeconds, ntpFraction, arrivalMs)
 }
 
+// Retain removes reception state for SSRCs absent from the authoritative
+// active roster.
+func (s *RtcpReceptionStatsSet) Retain(ssrcs []uint32) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L133-L135
+	active := make(map[uint32]struct{}, len(ssrcs))
+	for _, ssrc := range ssrcs {
+		active[ssrc] = struct{}{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ssrc := range s.streams {
+		if _, ok := active[ssrc]; !ok {
+			delete(s.streams, ssrc)
+		}
+	}
+}
+
 // Reports snapshots every tracked stream in ascending SSRC order.
 func (s *RtcpReceptionStatsSet) Reports(nowMs uint64) []*RtcpReceptionReport {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/7594217b4386a1c056d0e3ecd1049b30a1101241/datasheets/group-media-rtcp-feedback.md#L64-L69

@@ -424,12 +424,13 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		audioMixer.Retain(audioReceivers.ActiveParticipantIDs())
 		return nil
 	}
+	var audioReception rtp.RtcpReceptionStatsSet
 	e.mu.Lock()
 	currentPeer := peerLID
 	applyGroupUpdate := func(update types.GroupCallUpdate) error {
 		audioPlayoutMu.Lock()
 		defer audioPlayoutMu.Unlock()
-		if err := audioReceivers.ApplyGroupUpdate(update); err != nil {
+		if err := applyGroupAudioRoster(audioReceivers, &audioReception, update); err != nil {
 			return err
 		}
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L64-L92
@@ -568,7 +569,6 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		e.mu.Unlock()
 	}()
 
-	var audioReception rtp.RtcpReceptionStatsSet
 	var videoReception rtp.RtcpReceptionStats
 
 	// WhatsApp associates the RTP streams with an SRTCP session. Periodic compound
@@ -577,15 +577,19 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	go func() {
 		ticker := time.NewTicker(1500 * time.Millisecond)
 		defer ticker.Stop()
-		var sent uint64
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
+		var successfulTicks uint64
+		var tick uint64
+		var audioReports []*rtp.RtcpReceptionReport
+		var audioReportsSent int
+		runMediaSRTCPTicks(
+			ctx,
+			ticker.C,
+			func(now time.Time) error {
+				tick++
 				nowMs := uint64(now.UnixMilli())
-				audioReports := audioReception.Reports(nowMs)
-				if err := sendMediaSrtcpReceptionReports(
+				audioReports = audioReception.Reports(nowMs)
+				var err error
+				audioReportsSent, err = sendMediaSrtcpReceptionReports(
 					audioRtcp,
 					txPipe.SenderStats(),
 					nowMs,
@@ -594,32 +598,47 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 						_, sendErr := ch.Send(packet)
 						return sendErr
 					},
-				); err != nil {
-					return
+				)
+				if err != nil {
+					return fmt.Errorf("send audio SRTCP reports: %w", err)
 				}
 				videoStats := txVideoPipe.SenderStats()
 				if videoStats.PacketsSent > 0 {
 					videoReport := videoReception.Report(nowMs)
 					videoPacket, err := videoRtcp.senderReport(videoStats, nowMs, videoReport)
 					if err != nil {
-						return
+						return fmt.Errorf("protect video SRTCP report: %w", err)
 					}
 					if _, err = ch.Send(videoPacket); err != nil {
-						return
+						return fmt.Errorf("send video SRTCP report: %w", err)
 					}
 				}
-				sent++
-				if sent == 1 {
+				successfulTicks++
+				if successfulTicks == 1 {
 					log.Info().Msg("started periodic SRTCP sender reports")
 				}
 				e.c.diag.Emit("rtcp", map[string]any{
-					"event": "sender_reports", "tick": sent,
+					"event": "sender_reports", "tick": tick,
 					"audio_packets": txPipe.SenderStats().PacketsSent,
 					"audio_reports": len(audioReports),
 					"video_packets": videoStats.PacketsSent,
 				})
-			}
-		}
+				return nil
+			},
+			func(err error) {
+				log.Warn().
+					Err(err).
+					Uint64("tick", tick).
+					Int("audio_reports", len(audioReports)).
+					Int("audio_reports_sent", audioReportsSent).
+					Msg("periodic SRTCP sender report failed; retrying next tick")
+				e.c.diag.Emit("rtcp", map[string]any{
+					"event": "sender_reports_failed", "call_id": callID,
+					"tick": tick, "audio_reports": len(audioReports),
+					"audio_reports_sent": audioReportsSent, "error": err.Error(),
+				})
+			},
+		)
 	}()
 
 	buf := make([]byte, 1500)
@@ -918,6 +937,40 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}
 }
 
+func applyGroupAudioRoster(receivers *participantReceiveRegistry, reception *rtp.RtcpReceptionStatsSet, update types.GroupCallUpdate) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L128-L146
+	if receivers == nil {
+		return fmt.Errorf("meowcaller: participant receive registry is nil")
+	}
+	if reception == nil {
+		return fmt.Errorf("meowcaller: RTCP reception set is nil")
+	}
+	if err := receivers.ApplyGroupUpdate(update); err != nil {
+		return err
+	}
+	reception.Retain(receivers.ActiveAudioSSRCs())
+	return nil
+}
+
+func runMediaSRTCPTicks(ctx context.Context, ticks <-chan time.Time, send func(time.Time) error, onError func(error)) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L142-L146
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now, ok := <-ticks:
+			if !ok {
+				return
+			}
+			if err := send(now); err != nil {
+				if onError != nil {
+					onError(err)
+				}
+			}
+		}
+	}
+}
+
 // callPlayerSink returns a Call's current Player and sink, tolerating a nil Call (an
 // outbound call may never have had one attached).
 func callPlayerSink(call *Call) (*Player, AudioSink) {
@@ -1051,37 +1104,55 @@ func (s *mediaSrtcpSender) senderReport(stats rtp.RtcpSenderStats, nowMs uint64,
 	return packet, err
 }
 
+func (s *mediaSrtcpSender) groupSenderReport(stats rtp.RtcpSenderStats, nowMs uint64, report *rtp.RtcpReceptionReport) ([]byte, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L53-L75
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	plain := rtp.BuildGroupSenderReport(s.ssrc, &stats, nowMs, report, rtp.RTCPGroupReportExtension{})
+	packet, err := srtp.ProtectSrtcp(&s.keys, s.ssrc, s.index, plain)
+	if err == nil {
+		s.index++
+	}
+	return packet, err
+}
+
 func sendMediaSrtcpReceptionReports(
 	sender *mediaSrtcpSender,
 	stats rtp.RtcpSenderStats,
 	nowMs uint64,
 	reports []*rtp.RtcpReceptionReport,
 	send func([]byte) error,
-) error {
+) (int, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/7594217b4386a1c056d0e3ecd1049b30a1101241/datasheets/group-media-rtcp-feedback.md#L67-L80
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L116-L146
 	if sender == nil {
-		return fmt.Errorf("meowcaller: SRTCP sender is nil")
+		return 0, fmt.Errorf("meowcaller: SRTCP sender is nil")
 	}
 	if send == nil {
-		return fmt.Errorf("meowcaller: SRTCP send function is nil")
+		return 0, fmt.Errorf("meowcaller: SRTCP send function is nil")
 	}
 	if len(reports) == 0 {
 		packet, err := sender.senderReport(stats, nowMs, nil)
 		if err != nil {
-			return err
-		}
-		return send(packet)
-	}
-	for _, report := range reports {
-		packet, err := sender.senderReport(stats, nowMs, report)
-		if err != nil {
-			return err
+			return 0, err
 		}
 		if err = send(packet); err != nil {
-			return err
+			return 0, err
 		}
+		return 1, nil
 	}
-	return nil
+	sent := 0
+	for _, report := range reports {
+		packet, err := sender.groupSenderReport(stats, nowMs, report)
+		if err != nil {
+			return sent, err
+		}
+		if err = send(packet); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
 }
 
 func (vs *videoSender) protectAccessUnit(au []byte, duration time.Duration) [][]byte {

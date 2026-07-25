@@ -316,6 +316,39 @@ func TestWhatsappSenderReportCarriesReceptionState(t *testing.T) {
 	}
 }
 
+func TestGroupSenderReportMatchesAuthenticatedCapturePlaintext(t *testing.T) {
+	captured := mustHex(t, "81c8000e59754a60ee0e4948176163a50007d6ca000001310000bbe266fde7f100000000000000310000000000000000000000000000019000004650")
+	var sender [28]byte
+	copy(sender[:], captured[:28])
+	report := &RtcpReceptionReport{
+		Ssrc:                    0x66fde7f1,
+		ExtendedHighestSequence: 0x31,
+	}
+	var extension RTCPGroupReportExtension
+	copy(extension[:], captured[52:60])
+
+	got := buildGroupSenderReportFromSenderSection(sender, report, extension)
+	if !bytes.Equal(got, captured) {
+		t.Fatalf("group sender report = %x, want authenticated capture %x", got, captured)
+	}
+}
+
+func TestGroupSenderReportTreatsNilStatsAsZero(t *testing.T) {
+	report := &RtcpReceptionReport{Ssrc: 0x66fde7f1}
+
+	got := BuildGroupSenderReport(0x59754a60, nil, 0, report, RTCPGroupReportExtension{})
+
+	if len(got) != 60 {
+		t.Fatalf("group sender report length = %d, want 60", len(got))
+	}
+	if packets := binary.BigEndian.Uint32(got[20:24]); packets != 0 {
+		t.Fatalf("group sender report packets = %d, want 0", packets)
+	}
+	if octets := binary.BigEndian.Uint32(got[24:28]); octets != 0 {
+		t.Fatalf("group sender report octets = %d, want 0", octets)
+	}
+}
+
 func TestRtcpReceptionStatsTrackLossWrapAndSenderReport(t *testing.T) {
 	var reception RtcpReceptionStats
 	reception.Observe(0x12345678, 65534, 90000, 1000, 90000)

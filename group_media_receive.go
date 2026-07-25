@@ -554,6 +554,18 @@ func (r *participantReceiveRegistry) ActiveParticipantIDs() []string {
 	return participantIDs
 }
 
+func (r *participantReceiveRegistry) ActiveAudioSSRCs() []uint32 {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L133-L135
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ssrcs := make([]uint32, 0, len(r.bySSRC))
+	for ssrc := range r.bySSRC {
+		ssrcs = append(ssrcs, ssrc)
+	}
+	slices.Sort(ssrcs)
+	return ssrcs
+}
+
 func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticipantAudio, bool) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L37-L44
 	header, ok := rtp.ParseRtpHeader(packet)

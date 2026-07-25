@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"bytes"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1019,6 +1020,11 @@ func TestParticipantReceiveRegistryActivatesAndRoutesConnectedPIDDevices(t *test
 	addedReceiver := registry.byPID[2]
 	if addedReceiver == nil || addedReceiver.deviceJID != added {
 		t.Fatalf("added receiver = %#v, want winning device %s", addedReceiver, added)
+	}
+	wantAudioSSRCs := []uint32{originalPeer.ssrc, addedReceiver.ssrc}
+	slices.Sort(wantAudioSSRCs)
+	if got := registry.ActiveAudioSSRCs(); !slices.Equal(got, wantAudioSSRCs) {
+		t.Fatalf("active audio SSRCs = %v, want %v", got, wantAudioSSRCs)
 	}
 	if _, ok := registry.byPID[1]; ok {
 		t.Fatal("local PID was activated as a remote receiver")
