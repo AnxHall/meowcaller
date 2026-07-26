@@ -116,6 +116,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 - Coordinated browser camera capture with initial video calls and audio-to-video
   upgrades. Camera mute/unmute now sends state 0/1; Stop video sends state 6,
   stops local capture, and never calls Hangup.
+- Controller, HTTP, DOM, full nested web, race, vet, and local-browser smoke
+  checks pass for group-ID starts and independent video controls.
 - Added the capture-backed web-console contract for one audio-only multi-person
   start through `Client.GroupCallWithOptions`, separate established-call
   participant invitations, and incoming roster replay before Answer-driven

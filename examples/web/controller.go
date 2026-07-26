@@ -90,9 +90,14 @@ type webCallController struct {
 	activeCallID              string
 	dialCall                  func(context.Context, string, meowcaller.CallOptions) (*meowcaller.Call, error)
 	startGroupCall            func(context.Context, []string, meowcaller.GroupCallOptions) (*meowcaller.Call, error)
+	startGroupCallByID        func(context.Context, string, meowcaller.GroupCallOptions) (*meowcaller.Call, error)
 	inviteParticipants        func(context.Context, *meowcaller.Call, ...string) []error
 	callPhase                 func(*meowcaller.Call) meowcaller.CallPhase
 	callVideo                 func(*meowcaller.Call) bool
+	startCallVideo            func(*meowcaller.Call) error
+	acceptCallVideo           func(*meowcaller.Call) error
+	stopCallVideo             func(*meowcaller.Call) error
+	setCallVideoEnabled       func(*meowcaller.Call, bool) error
 	listenGroupState          func(*meowcaller.Call, func(meowcaller.GroupCallState))
 	attachMedia               func(*meowcaller.Call) error
 	attachCall                func(*meowcaller.Call) error
@@ -140,6 +145,7 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
 	c.dialCall = client.CallWithOptions
 	c.startGroupCall = client.GroupCallWithOptions
+	c.startGroupCallByID = client.GroupCallByIDWithOptions
 	bridge.OnControl(c.control)
 	bridge.OnFrame(c.sendVideoFrame)
 	client.OnIncomingCall(c.onIncomingCall)
@@ -282,6 +288,10 @@ func (c *webCallController) control(command vbControl) error {
 		return c.startGroupAudio(command.Targets)
 	case "start_group_video":
 		return c.startGroupVideo(command.Targets)
+	case "start_group_id_audio":
+		return c.startGroupCallByIDWithVideo(command.GroupID, false)
+	case "start_group_id_video":
+		return c.startGroupCallByIDWithVideo(command.GroupID, true)
 	case "answer":
 		return c.answer()
 	case "reject":
@@ -291,17 +301,36 @@ func (c *webCallController) control(command vbControl) error {
 		if err != nil {
 			return err
 		}
+		if c.startCallVideo != nil {
+			return c.startCallVideo(call)
+		}
 		return call.StartVideo()
 	case "accept_video":
 		call, err := c.activeCall()
 		if err != nil {
 			return err
 		}
+		if c.acceptCallVideo != nil {
+			return c.acceptCallVideo(call)
+		}
 		return call.AcceptVideo()
+	case "enable_video", "disable_video":
+		call, err := c.activeCall()
+		if err != nil {
+			return err
+		}
+		enabled := command.Action == "enable_video"
+		if c.setCallVideoEnabled != nil {
+			return c.setCallVideoEnabled(call, enabled)
+		}
+		return call.SetVideoEnabled(enabled)
 	case "stop_video":
 		call, err := c.activeCall()
 		if err != nil {
 			return err
+		}
+		if c.stopCallVideo != nil {
+			return c.stopCallVideo(call)
 		}
 		return call.StopVideo()
 	case "orientation":
@@ -479,7 +508,41 @@ func (c *webCallController) startGroupCallWithVideo(targets []string, video bool
 	if len(normalized) < 2 {
 		return errors.New("at least two distinct participant targets are required")
 	}
+	return c.startOwnedGroupCall(video, func() (*meowcaller.Call, error) {
+		startGroupCall := c.startGroupCall
+		if startGroupCall == nil {
+			if c.client == nil {
+				return nil, errors.New("group call signaling is unavailable")
+			}
+			startGroupCall = c.client.GroupCallWithOptions
+		}
+		return startGroupCall(c.ctx, normalized, meowcaller.GroupCallOptions{Video: video})
+	})
+}
 
+func (c *webCallController) startGroupCallByIDWithVideo(groupID string, video bool) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/web-initial-group-call.md#L90-L145
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return errors.New("group ID is required")
+	}
+	return c.startOwnedGroupCall(video, func() (*meowcaller.Call, error) {
+		startGroupCallByID := c.startGroupCallByID
+		if startGroupCallByID == nil {
+			if c.client == nil {
+				return nil, errors.New("group call signaling is unavailable")
+			}
+			startGroupCallByID = c.client.GroupCallByIDWithOptions
+		}
+		return startGroupCallByID(c.ctx, groupID, meowcaller.GroupCallOptions{Video: video})
+	})
+}
+
+func (c *webCallController) startOwnedGroupCall(
+	video bool,
+	start func() (*meowcaller.Call, error),
+) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
 	const reservation = "web-group-start-pending"
 	c.mu.Lock()
 	if c.call != nil || c.pending != nil || c.activeCallID != "" {
@@ -489,15 +552,7 @@ func (c *webCallController) startGroupCallWithVideo(targets []string, video bool
 	c.activeCallID = reservation
 	c.mu.Unlock()
 
-	startGroupCall := c.startGroupCall
-	if startGroupCall == nil {
-		if c.client == nil {
-			c.clearCallStartReservation(reservation)
-			return errors.New("group call signaling is unavailable")
-		}
-		startGroupCall = c.client.GroupCallWithOptions
-	}
-	call, err := startGroupCall(c.ctx, normalized, meowcaller.GroupCallOptions{Video: video})
+	call, err := start()
 	if err != nil {
 		c.clearCallStartReservation(reservation)
 		return err

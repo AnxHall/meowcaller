@@ -787,6 +787,82 @@ func TestWebCallControllerStartsVideoGroupCall(t *testing.T) {
 	}
 }
 
+func TestWebCallControllerStartsBoundGroupCallByID(t *testing.T) {
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	call := &meowcaller.Call{}
+	var gotGroupID string
+	var gotOptions meowcaller.GroupCallOptions
+	c := &webCallController{
+		ctx: context.Background(), bridge: bridge, log: zerolog.Nop(),
+		startGroupCallByID: func(
+			_ context.Context,
+			groupID string,
+			options meowcaller.GroupCallOptions,
+		) (*meowcaller.Call, error) {
+			gotGroupID = groupID
+			gotOptions = options
+			return call, nil
+		},
+		attachCall: func(*meowcaller.Call) error { return nil },
+	}
+
+	if err := c.control(vbControl{
+		Action:  "start_group_id_video",
+		GroupID: " 120363411251996986@g.us ",
+	}); err != nil {
+		t.Fatalf("start group video by ID: %v", err)
+	}
+	if gotGroupID != "120363411251996986@g.us" {
+		t.Fatalf("group ID = %q", gotGroupID)
+	}
+	if !gotOptions.Video {
+		t.Fatal("group-ID video start delegated audio-only options")
+	}
+	if c.call != call {
+		t.Fatalf("controller call = %p, want %p", c.call, call)
+	}
+}
+
+func TestWebCallControllerVideoControlsNeverHangUp(t *testing.T) {
+	call := &meowcaller.Call{}
+	var transitions []string
+	var hangups int
+	c := &webCallController{
+		ctx: context.Background(), call: call, log: zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
+		startCallVideo: func(*meowcaller.Call) error {
+			transitions = append(transitions, "upgrade")
+			return nil
+		},
+		stopCallVideo: func(*meowcaller.Call) error {
+			transitions = append(transitions, "downgrade")
+			return nil
+		},
+		setCallVideoEnabled: func(_ *meowcaller.Call, enabled bool) error {
+			transitions = append(transitions, fmt.Sprintf("camera:%t", enabled))
+			return nil
+		},
+		hangupCall: func(*meowcaller.Call) error {
+			hangups++
+			return nil
+		},
+	}
+
+	for _, action := range []string{"start_video", "disable_video", "enable_video", "stop_video"} {
+		if err := c.control(vbControl{Action: action}); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+	}
+	if strings.Join(transitions, ",") != "upgrade,camera:false,camera:true,downgrade" {
+		t.Fatalf("video transitions = %v", transitions)
+	}
+	if hangups != 0 {
+		t.Fatalf("video controls hung up %d times", hangups)
+	}
+}
+
 func TestVideoBridgePublishesParticipantTaggedFrame(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L63
 	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}

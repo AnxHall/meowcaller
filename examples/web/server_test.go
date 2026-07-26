@@ -120,6 +120,29 @@ func TestVideoBridgeControlDispatchesStartGroupAudioTargets(t *testing.T) {
 	}
 }
 
+func TestVideoBridgeControlDispatchesGroupIDVideoStart(t *testing.T) {
+	vb := &videoBridge{}
+	var got vbControl
+	vb.OnControl(func(command vbControl) error {
+		got = command
+		return nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/control", bytes.NewBufferString(
+		`{"action":"start_group_id_video","group_id":"120363411251996986@g.us"}`,
+	))
+	rec := httptest.NewRecorder()
+
+	vb.handleControl(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if got.Action != "start_group_id_video" ||
+		got.GroupID != "120363411251996986@g.us" {
+		t.Fatalf("group-ID control = %+v", got)
+	}
+}
+
 func TestVideoBridgeStartGroupAudioReportsControllerTargetValidation(t *testing.T) {
 	vb := &videoBridge{}
 	c := &webCallController{ctx: context.Background()}
@@ -152,9 +175,36 @@ func TestVideoBridgePageSeparatesStartGroupAndAddPeopleControls(t *testing.T) {
 		"s.event==='ready'||(s.event==='phase'&&s.phase===4)",
 		"s.event==='idle'||s.event==='ended'",
 		"['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'",
-		"$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=false",
-		"$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=true",
+		"$('startGroupIDVideo').disabled=true;$('addParticipants').disabled=false",
+		"$('startGroupIDVideo').disabled=true;$('addParticipants').disabled=true",
 		"updatePeopleControls(s)",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("page does not contain %q", behavior)
+		}
+	}
+}
+
+func TestVideoBridgePageStartsGroupCallsFromGroupID(t *testing.T) {
+	for _, behavior := range []string{
+		`id="groupID"`,
+		"invokeVideoCall('start_group_id_video',{group_id:$('groupID').value.trim()})",
+		"invoke('start_group_id_audio',{group_id:$('groupID').value.trim()})",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("page does not contain %q", behavior)
+		}
+	}
+}
+
+func TestVideoBridgePageCoordinatesCameraWithVideoTransitions(t *testing.T) {
+	for _, behavior := range []string{
+		"async function startCamera()",
+		"invokeVideoCall('start_video')",
+		"await control('stop_video')",
+		"await stopCamera()",
+		"invoke('disable_video')",
+		"invoke('enable_video')",
 	} {
 		if !strings.Contains(videoBridgePage, behavior) {
 			t.Errorf("page does not contain %q", behavior)
@@ -172,7 +222,7 @@ func TestVideoBridgePageClampsCameraToAVCLevel31(t *testing.T) {
 		"function avcLevel31Size(width,height)",
 		"const size=avcLevel31Size(f.displayWidth,f.displayHeight)",
 		"width:size.width,height:size.height",
-		"encoder.state==='configured'",
+		"activeEncoder.state==='configured'",
 	} {
 		if !strings.Contains(videoBridgePage, behavior) {
 			t.Errorf("page does not contain %q", behavior)

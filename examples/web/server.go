@@ -51,6 +51,7 @@ type vbControl struct {
 	Action      string   `json:"action"`
 	Target      string   `json:"target,omitempty"`
 	Targets     []string `json:"targets,omitempty"`
+	GroupID     string   `json:"group_id,omitempty"`
 	Emoji       string   `json:"emoji,omitempty"`
 	Orientation int      `json:"orientation,omitempty"`
 }
@@ -323,7 +324,9 @@ func (vb *videoBridge) handleControl(w http.ResponseWriter, r *http.Request) {
 	valid := map[string]bool{
 		"dial_audio": true, "dial_video": true, "answer": true, "reject": true,
 		"start_group_audio": true, "start_group_video": true,
+		"start_group_id_audio": true, "start_group_id_video": true,
 		"start_video": true, "accept_video": true, "stop_video": true,
+		"enable_video": true, "disable_video": true,
 		"hangup": true, "orientation": true, "reaction": true,
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 		"add_participants": true,
@@ -394,6 +397,7 @@ canvas,video{display:block;width:auto;height:auto;max-width:100%;max-height:100%
 <main>
   <section id="pairing" class="pairing" hidden><img id="qr" alt="WhatsApp linked-device QR"><div><strong>Link WhatsApp</strong><span>WhatsApp > Linked devices > Link a device</span></div></section>
   <div class="toolbar"><input id="target" inputmode="tel" placeholder="WhatsApp number or LID"><button id="dialAudio">Dial audio</button><button id="dialVideo" class="primary">Dial video</button></div>
+  <div class="toolbar"><input id="groupID" placeholder="WhatsApp group ID or @g.us JID"><button id="startGroupIDAudio">Call group audio</button><button id="startGroupIDVideo" class="primary">Call group video</button></div>
   <div class="invite-toolbar"><textarea id="participants" rows="2" placeholder="People (comma or newline separated)"></textarea><button id="startGroupAudio" disabled>Start group audio</button><button id="startGroupVideo" disabled>Start group video</button><button id="addParticipants" disabled>Add people</button></div>
   <div id="participantStatus" class="invite-note">Invites are submitted; waiting for roster confirmation.</div>
   <div class="actions"><button id="answer">Answer</button><button id="reject">Reject</button><button id="startVideo">Upgrade to video</button><button id="acceptVideo" hidden>Accept video</button><button id="stopVideo">Stop video</button><button id="hangup" class="danger">Hang up</button></div>
@@ -408,10 +412,11 @@ canvas,video{display:block;width:auto;height:auto;max-width:100%;max-height:100%
 const $=id=>document.getElementById(id), log=(...a)=>{$('log').textContent+=a.join(' ')+'\n';$('log').scrollTop=$('log').scrollHeight};
 const control=async(action,extra={})=>{const r=await fetch('/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...extra})});if(!r.ok)throw Error((await r.text()).trim())};
 const invoke=(action,extra)=>control(action,extra).catch(e=>log(action,e.message));
-function updatePeopleControls(s){if(s.event==='idle'||s.event==='ended'){$('startGroupAudio').disabled=false;$('startGroupVideo').disabled=false;$('addParticipants').disabled=true}else if(s.event==='ready'||(s.event==='phase'&&s.phase===4)){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=false}else if(['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('addParticipants').disabled=true}}
-$('dialAudio').onclick=()=>invoke('dial_audio',{target:$('target').value.trim()});$('dialVideo').onclick=()=>invoke('dial_video',{target:$('target').value.trim()});
-$('startGroupAudio').onclick=()=>invoke('start_group_audio',{targets:participantTargets()});$('startGroupVideo').onclick=()=>invoke('start_group_video',{targets:participantTargets()});$('addParticipants').onclick=()=>invoke('add_participants',{targets:participantTargets()});const participantTargets=()=>$('participants').value.split(/[,\n]/).map(target=>target.trim()).filter(Boolean);
-$('answer').onclick=()=>invoke('answer');$('reject').onclick=()=>invoke('reject');$('startVideo').onclick=()=>invoke('start_video');$('acceptVideo').onclick=()=>invoke('accept_video');$('stopVideo').onclick=()=>invoke('stop_video');$('hangup').onclick=()=>invoke('hangup');
+function updatePeopleControls(s){if(s.event==='idle'||s.event==='ended'){$('startGroupAudio').disabled=false;$('startGroupVideo').disabled=false;$('startGroupIDAudio').disabled=false;$('startGroupIDVideo').disabled=false;$('addParticipants').disabled=true}else if(s.event==='ready'||(s.event==='phase'&&s.phase===4)){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('startGroupIDAudio').disabled=true;$('startGroupIDVideo').disabled=true;$('addParticipants').disabled=false}else if(['incoming','dialing','group_dialing','answering'].includes(s.event)||s.event==='phase'||s.event==='pairing'){$('startGroupAudio').disabled=true;$('startGroupVideo').disabled=true;$('startGroupIDAudio').disabled=true;$('startGroupIDVideo').disabled=true;$('addParticipants').disabled=true}}
+$('dialAudio').onclick=()=>invoke('dial_audio',{target:$('target').value.trim()});
+$('startGroupIDAudio').onclick=()=>invoke('start_group_id_audio',{group_id:$('groupID').value.trim()});
+$('startGroupAudio').onclick=()=>invoke('start_group_audio',{targets:participantTargets()});$('addParticipants').onclick=()=>invoke('add_participants',{targets:participantTargets()});const participantTargets=()=>$('participants').value.split(/[,\n]/).map(target=>target.trim()).filter(Boolean);
+$('answer').onclick=()=>invoke('answer');$('reject').onclick=()=>invoke('reject');$('acceptVideo').onclick=()=>invoke('accept_video');$('hangup').onclick=()=>invoke('hangup');
 document.querySelectorAll('[data-reaction]').forEach(b=>b.onclick=()=>invoke('reaction',{emoji:b.dataset.reaction}));
 if(!('VideoDecoder'in window))log('WebCodecs unavailable in this browser');
 const remote=$('remote'),paint=remote.getContext('2d'),es=new EventSource('/in');let decoder=null,decodeStarted=false,forceKeyframe=true,remoteVideoActive=true,remoteOrientation=0,groupMode=false;const participantRenderers=new Map();
@@ -432,5 +437,13 @@ let stream=null,encoder=null,reader=null,upload=Promise.resolve();
 const avcLevel31MaxWidth=1280,avcLevel31MaxHeight=720;
 function avcLevel31Size(width,height){const scale=Math.min(1,avcLevel31MaxWidth/width,avcLevel31MaxHeight/height);return{width:Math.max(2,Math.floor(width*scale/2)*2),height:Math.max(2,Math.floor(height*scale/2)*2)}}
 async function stopCamera(){if(reader)await reader.cancel().catch(()=>{});if(encoder&&encoder.state!=='closed')encoder.close();if(stream)stream.getTracks().forEach(t=>t.stop());stream=encoder=reader=null;$('local').srcObject=null;$('cam').textContent='Start camera'}
-$('cam').onclick=async()=>{if(stream){await stopCamera();return}try{stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:15,max:15}}});$('local').srcObject=stream;$('cam').textContent='Stop camera';const track=stream.getVideoTracks()[0];encoder=new VideoEncoder({output:chunk=>{const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);upload=upload.then(()=>fetch('/out',{method:'POST',body:b})).then(r=>{if(!r.ok)throw Error('video upload '+r.status)}).catch(e=>log(e.message))},error:e=>log('encoder',e.message)});reader=new MediaStreamTrackProcessor({track}).readable.getReader();let n=0,encodedWidth=0,encodedHeight=0;for(;;){const{value:f,done}=await reader.read();if(done)break;const size=avcLevel31Size(f.displayWidth,f.displayHeight);if(size.width!==encodedWidth||size.height!==encodedHeight){encodedWidth=size.width;encodedHeight=size.height;encoder.configure({codec:'avc1.42E01F',avc:{format:'annexb'},width:size.width,height:size.height,framerate:15,bitrate:Math.max(250000,Math.min(2000000,size.width*size.height*2)),latencyMode:'realtime'});forceKeyframe=true}if(encoder.state==='configured'&&encoder.encodeQueueSize<2){const key=forceKeyframe||n%15===0;forceKeyframe=false;encoder.encode(f,{keyFrame:key});n++}f.close()}}catch(e){log('camera',e.message);await stopCamera()}};
+async function pumpCamera(activeReader,activeEncoder){let n=0,encodedWidth=0,encodedHeight=0;try{for(;;){const{value:f,done}=await activeReader.read();if(done)break;const size=avcLevel31Size(f.displayWidth,f.displayHeight);if(size.width!==encodedWidth||size.height!==encodedHeight){encodedWidth=size.width;encodedHeight=size.height;activeEncoder.configure({codec:'avc1.42E01F',avc:{format:'annexb'},width:size.width,height:size.height,framerate:15,bitrate:Math.max(250000,Math.min(2000000,size.width*size.height*2)),latencyMode:'realtime'});forceKeyframe=true}if(activeEncoder.state==='configured'&&activeEncoder.encodeQueueSize<2){const key=forceKeyframe||n%15===0;forceKeyframe=false;activeEncoder.encode(f,{keyFrame:key});n++}f.close()}}catch(e){if(reader===activeReader){log('camera',e.message);await stopCamera()}}}
+async function startCamera(){if(stream)return true;try{stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:15,max:15}}});$('local').srcObject=stream;$('cam').textContent='Stop camera';const track=stream.getVideoTracks()[0];encoder=new VideoEncoder({output:chunk=>{const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);upload=upload.then(()=>fetch('/out',{method:'POST',body:b})).then(r=>{if(!r.ok)throw Error('video upload '+r.status)}).catch(e=>log(e.message))},error:e=>log('encoder',e.message)});reader=new MediaStreamTrackProcessor({track}).readable.getReader();void pumpCamera(reader,encoder);return true}catch(e){log('camera',e.message);await stopCamera();return false}}
+async function invokeVideoCall(action,extra){const startedHere=!stream;if(!await startCamera())return;try{await control(action,extra)}catch(e){log(action,e.message);if(startedHere)await stopCamera()}}
+$('dialVideo').onclick=()=>invokeVideoCall('dial_video',{target:$('target').value.trim()});
+$('startGroupVideo').onclick=()=>invokeVideoCall('start_group_video',{targets:participantTargets()});
+$('startGroupIDVideo').onclick=()=>invokeVideoCall('start_group_id_video',{group_id:$('groupID').value.trim()});
+$('startVideo').onclick=()=>invokeVideoCall('start_video');
+$('stopVideo').onclick=async()=>{try{await control('stop_video');await stopCamera()}catch(e){log('stop_video',e.message)}};
+$('cam').onclick=async()=>{if(stream){await stopCamera();invoke('disable_video');return}if(await startCamera())invoke('enable_video')};
 </script></body></html>`
