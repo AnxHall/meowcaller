@@ -224,12 +224,13 @@ func RtpExtensionProfileAndData(data []byte) (uint16, []byte, bool) {
 
 // ParseWhatsappVideoExtension decodes WhatsApp's one-byte-header video extensions.
 func ParseWhatsappVideoExtension(data []byte) (*VideoRtpExtension, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
 	profile, ext, ok := RtpExtensionProfileAndData(data)
 	if !ok || profile != WhatsappRtpExtensionProfile {
 		return nil, false
 	}
 	parsed := &VideoRtpExtension{}
-	var hasFrameInfo, hasShortOffset, hasTransportSequence bool
+	var hasFrameInfo, hasShortOffset bool
 	for offset := 0; offset < len(ext); {
 		header := ext[offset]
 		offset++
@@ -270,10 +271,9 @@ func ParseWhatsappVideoExtension(data []byte) (*VideoRtpExtension, bool) {
 				return nil, false
 			}
 			parsed.TransportSequence = binary.BigEndian.Uint16(value)
-			hasTransportSequence = true
 		}
 	}
-	if !hasFrameInfo || !hasShortOffset || !hasTransportSequence {
+	if !hasFrameInfo || !hasShortOffset {
 		return nil, false
 	}
 	return parsed, true
