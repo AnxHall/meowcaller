@@ -26,6 +26,15 @@ type engine struct {
 	setCallVideo                   func(context.Context, string, types.CallVideoState, *int) error
 	setCallMute                    func(context.Context, string, bool) error
 	inviteCallParticipant          func(context.Context, string, types.JID) error
+	ringCallParticipant            func(context.Context, string, types.JID) error
+	createCallLink                 func(context.Context, types.CallLinkMedia) (*types.CallLink, error)
+	previewCallLink                func(context.Context, string, types.CallLinkMedia) (*types.CallLinkPreview, error)
+	joinCallLink                   func(context.Context, string, types.CallLinkMedia) (*types.CallLinkJoin, error)
+	setCallLinkApproval            func(context.Context, string, bool) error
+	admitCallLinkParticipant       func(context.Context, string, types.JID) error
+	denyCallLinkParticipant        func(context.Context, string, types.JID) error
+	setCallHandRaised              func(context.Context, string, bool) error
+	setCallScreenShare             func(context.Context, string, types.CallScreenShareState, *uint32) error
 	startMedia                     func(context.Context, string, *Call, []byte, string, string, *types.RelayEndpoint) error
 	onMediaStopped                 func(string)
 	scheduleGroupPlaceholderExpiry func(string, time.Duration, func()) func()
@@ -62,6 +71,7 @@ type engineCall struct {
 	started            bool
 	ended              bool
 	cancel             context.CancelFunc
+	waitingRoom        *WaitingRoomState
 }
 
 func newEngine(c *Client) *engine {
@@ -80,6 +90,15 @@ func newEngine(c *Client) *engine {
 		e.setCallVideo = c.wa.SetCallVideo
 		e.setCallMute = c.wa.SetCallMute
 		e.inviteCallParticipant = c.wa.InviteCallParticipant
+		e.ringCallParticipant = c.wa.RingCallParticipant
+		e.createCallLink = c.wa.CreateCallLink
+		e.previewCallLink = c.wa.PreviewCallLink
+		e.joinCallLink = c.wa.JoinCallLink
+		e.setCallLinkApproval = c.wa.SetCallLinkApproval
+		e.admitCallLinkParticipant = c.wa.AdmitCallLinkParticipant
+		e.denyCallLinkParticipant = c.wa.DenyCallLinkParticipant
+		e.setCallHandRaised = c.wa.SetCallHandRaised
+		e.setCallScreenShare = c.wa.SetCallScreenShare
 	}
 	return e
 }
@@ -109,6 +128,28 @@ func (e *engine) inviteParticipant(ctx context.Context, callID, target string) e
 	}
 	if err = e.inviteCallParticipant(ctx, callID, jid); err != nil {
 		return fmt.Errorf("meowcaller: add participant: %w", err)
+	}
+	return nil
+}
+
+func (e *engine) ringParticipant(ctx context.Context, callID, target string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	e.mu.Lock()
+	m := e.calls[callID]
+	active := m != nil && m.call != nil && m.call.State() != CallPhaseEnded
+	e.mu.Unlock()
+	if !active {
+		return errors.New("meowcaller: call is not active")
+	}
+	jid, err := parseCallTarget(target)
+	if err != nil {
+		return err
+	}
+	if e.ringCallParticipant == nil {
+		return errors.New("meowcaller: call signaling is unavailable")
+	}
+	if err = e.ringCallParticipant(ctx, callID, jid); err != nil {
+		return fmt.Errorf("meowcaller: ring participant: %w", err)
 	}
 	return nil
 }
@@ -152,6 +193,12 @@ func (e *engine) install() {
 			e.onGroupUpdate(ev)
 		case *events.CallEncRekey:
 			e.onEncRekey(ev)
+		case *events.CallWaitingRoomUpdate:
+			e.onWaitingRoomUpdate(ev)
+		case *events.CallHandRaise:
+			e.onHandRaise(ev)
+		case *events.CallScreenShare:
+			e.onScreenShare(ev)
 		}
 	})
 }
@@ -867,6 +914,10 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 		e.mu.Unlock()
 		if call != nil {
 			call.setGroupState(groupCallStateFromUpdate(update))
+			if call.State() == CallPhaseWaitingRoom {
+				call.setWaitingRoomAdmission()
+				call.setPhase(CallPhaseConnecting)
+			}
 		}
 		return
 	}
@@ -891,6 +942,10 @@ func (e *engine) onGroupUpdate(ev *events.CallGroupUpdate) {
 	e.mu.Unlock()
 	if call != nil {
 		call.setGroupState(groupCallStateFromUpdate(update))
+		if call.State() == CallPhaseWaitingRoom {
+			call.setWaitingRoomAdmission()
+			call.setPhase(CallPhaseConnecting)
+		}
 	}
 }
 

@@ -859,3 +859,59 @@ func TestCallAddParticipantsRetainsOrderedResults(t *testing.T) {
 		t.Fatalf("invite order = %v, want [10001 10002 10003]", got)
 	}
 }
+
+func TestCallRingParticipantDelegatesResolvedRosterTarget(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	eng, call := testEngineWithOutgoingCall()
+	type contextKey string
+	ctx := context.WithValue(context.Background(), contextKey("ring"), "preserved")
+	var gotContext context.Context
+	var gotCallID string
+	var gotTarget types.JID
+	eng.ringCallParticipant = func(callCtx context.Context, callID string, target types.JID) error {
+		gotContext = callCtx
+		gotCallID = callID
+		gotTarget = target
+		return nil
+	}
+
+	if err := call.RingParticipant(ctx, "  74170125783269@lid  "); err != nil {
+		t.Fatalf("RingParticipant: %v", err)
+	}
+	if gotContext != ctx || gotCallID != call.ID() {
+		t.Fatalf("ring delegation = context:%t call:%q", gotContext == ctx, gotCallID)
+	}
+	wantTarget := types.NewJID("74170125783269", types.HiddenUserServer)
+	if gotTarget != wantTarget {
+		t.Fatalf("ring target = %s, want %s", gotTarget, wantTarget)
+	}
+}
+
+func TestCallRingParticipantRejectsInvalidStateAndPreservesFailure(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	eng, call := testEngineWithOutgoingCall()
+	if err := call.RingParticipant(context.Background(), " "); err == nil {
+		t.Fatal("empty ring target accepted")
+	}
+	eng.ringCallParticipant = nil
+	if err := call.RingParticipant(context.Background(), "74170125783269@lid"); err == nil {
+		t.Fatal("unavailable ring signaling accepted")
+	}
+	sentinel := errors.New("ring rejected")
+	calls := 0
+	eng.ringCallParticipant = func(context.Context, string, types.JID) error {
+		calls++
+		return sentinel
+	}
+	if err := call.RingParticipant(context.Background(), "74170125783269@lid"); !errors.Is(err, sentinel) {
+		t.Fatalf("RingParticipant error = %v, want wrapped sentinel", err)
+	}
+	calls = 0
+	call.setPhase(CallPhaseEnded)
+	if err := call.RingParticipant(context.Background(), "74170125783269@lid"); err == nil {
+		t.Fatal("ended call accepted participant ring")
+	}
+	if calls != 0 {
+		t.Fatalf("ended call delegated ring signaling %d times", calls)
+	}
+}

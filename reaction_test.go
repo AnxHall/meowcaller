@@ -55,6 +55,17 @@ func TestAppDataReceiverDeduplicatesRetransmissions(t *testing.T) {
 	}
 }
 
+func TestAppDataReactionPreservesArbitraryUnicodeEmoji(t *testing.T) {
+	const emoji = "🧑🏽‍💻"
+	reactions, err := decodeAppDataReactions(encodeAppDataReaction(17, emoji))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reactions) != 1 || reactions[0].emoji != emoji {
+		t.Fatalf("decoded reactions = %#v", reactions)
+	}
+}
+
 func TestIncomingAppDataDispatchesOneTransientCallReaction(t *testing.T) {
 	_, call := testEngineWithOutgoingCall()
 	var receiver appDataReceiver

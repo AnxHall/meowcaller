@@ -37,6 +37,13 @@ type Call struct {
 	groupState              *GroupCallState
 	onGroupState            func(GroupCallState)
 	groupCallbackGeneration uint64
+	waitingRoomState        *WaitingRoomState
+	onWaitingRoomState      func(WaitingRoomState)
+	waitingRoomNotifyMu     sync.Mutex
+	waitingRoomGeneration   uint64
+	onHandRaise             func(HandRaiseState)
+	onScreenShare           func(ScreenShareState)
+	screenShares            map[types.JID]ScreenShareState
 }
 
 // GroupCallState is a sanitized group-call roster. Transaction zero may contain
@@ -49,10 +56,11 @@ type GroupCallState struct {
 
 // GroupCallParticipant is one participant in an authoritative group-call roster.
 type GroupCallParticipant struct {
-	JID     types.JID
-	PN      types.JID
-	State   string
-	Devices []GroupCallDevice
+	JID        types.JID
+	PN         types.JID
+	State      string
+	HandRaised bool
+	Devices    []GroupCallDevice
 }
 
 // GroupCallDevice is one participant device selected or considered by WhatsApp.
@@ -73,6 +81,38 @@ type CallReaction struct {
 	PID           uint32
 	HasPID        bool
 	Removed       bool
+}
+
+// WaitingRoomState is sanitized call-link admission state. It never exposes the link token.
+type WaitingRoomState struct {
+	Enabled       bool
+	IsAdmin       bool
+	InWaitingRoom bool
+	TransactionID uint32
+	Users         []WaitingRoomUser
+}
+
+// WaitingRoomUser is one user in the authoritative pending roster.
+type WaitingRoomUser struct {
+	JID   types.JID
+	PN    types.JID
+	State string
+}
+
+// HandRaiseState is one participant's persistent raised/lowered state.
+type HandRaiseState struct {
+	Participant types.JID
+	Raised      bool
+}
+
+// ScreenShareState is one participant's independent screen-share state.
+type ScreenShareState struct {
+	Participant      types.JID
+	Active           bool
+	Version          uint32
+	ScreenShareID    uint32
+	HasScreenShareID bool
+	Synthetic        bool
 }
 
 // ID returns the call-id (32 uppercase hex chars).
@@ -308,10 +348,205 @@ func (c *Call) AddParticipants(ctx context.Context, targets ...string) []error {
 	return results
 }
 
+// RingParticipant rings one non-connected participant already present in this call's roster.
+func (c *Call) RingParticipant(ctx context.Context, target string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	return c.eng.ringParticipant(ctx, c.id, target)
+}
+
 // SendReaction sends an emoji over this call's RTC app-data stream. Pass an empty
 // string to clear the reaction previously sent by this client.
 func (c *Call) SendReaction(emoji string) error {
 	return c.eng.sendReaction(c.id, emoji)
+}
+
+// SetHandRaised announces this client's persistent hand state.
+func (c *Call) SetHandRaised(raised bool) error {
+	return c.eng.setHandRaised(c.id, raised)
+}
+
+// StartScreenShare announces a version-2 screen share independently from camera video.
+func (c *Call) StartScreenShare(screenShareID *uint32) error {
+	return c.eng.setScreenShare(c.id, types.CallScreenShareStateStarted, screenShareID)
+}
+
+// StopScreenShare stops screen sharing without stopping camera video or ending the call.
+func (c *Call) StopScreenShare() error {
+	return c.eng.setScreenShare(c.id, types.CallScreenShareStateStopped, nil)
+}
+
+// OnHandRaise registers a participant hand-state listener.
+func (c *Call) OnHandRaise(fn func(HandRaiseState)) {
+	c.mu.Lock()
+	c.onHandRaise = fn
+	c.mu.Unlock()
+}
+
+// OnScreenShare registers an independent screen-share state listener.
+func (c *Call) OnScreenShare(fn func(ScreenShareState)) {
+	c.mu.Lock()
+	c.onScreenShare = fn
+	c.mu.Unlock()
+}
+
+// ScreenShares returns the currently active participant screen shares.
+func (c *Call) ScreenShares() []ScreenShareState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	shares := make([]ScreenShareState, 0, len(c.screenShares))
+	for _, share := range c.screenShares {
+		shares = append(shares, share)
+	}
+	return shares
+}
+
+// WaitingRoomState returns the latest sanitized call-link admission state.
+func (c *Call) WaitingRoomState() (WaitingRoomState, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.waitingRoomState == nil {
+		return WaitingRoomState{}, false
+	}
+	return cloneWaitingRoomState(*c.waitingRoomState), true
+}
+
+// OnWaitingRoomState registers a waiting-room listener and replays current state.
+func (c *Call) OnWaitingRoomState(fn func(WaitingRoomState)) {
+	c.mu.Lock()
+	c.onWaitingRoomState = fn
+	c.waitingRoomGeneration++
+	generation := c.waitingRoomGeneration
+	var replay *WaitingRoomState
+	if fn != nil && c.waitingRoomState != nil {
+		state := cloneWaitingRoomState(*c.waitingRoomState)
+		replay = &state
+	}
+	c.mu.Unlock()
+	if replay == nil {
+		return
+	}
+	c.waitingRoomNotifyMu.Lock()
+	defer c.waitingRoomNotifyMu.Unlock()
+	c.mu.Lock()
+	if c.waitingRoomGeneration != generation ||
+		c.waitingRoomState == nil ||
+		c.waitingRoomState.TransactionID != replay.TransactionID {
+		c.mu.Unlock()
+		return
+	}
+	current := cloneWaitingRoomState(*c.waitingRoomState)
+	currentFn := c.onWaitingRoomState
+	c.mu.Unlock()
+	if currentFn != nil {
+		currentFn(current)
+	}
+}
+
+// SetApprovalRequired changes call-link approval requirements for an admin call.
+func (c *Call) SetApprovalRequired(ctx context.Context, enabled bool) error {
+	return c.eng.setApprovalRequired(ctx, c.id, enabled)
+}
+
+// AdmitParticipant admits one waiting-room user.
+func (c *Call) AdmitParticipant(ctx context.Context, user string) error {
+	return c.eng.controlWaitingParticipant(ctx, c.id, user, true)
+}
+
+// DenyParticipant denies one waiting-room user.
+func (c *Call) DenyParticipant(ctx context.Context, user string) error {
+	return c.eng.controlWaitingParticipant(ctx, c.id, user, false)
+}
+
+func (c *Call) setWaitingRoomState(state WaitingRoomState) {
+	stored := cloneWaitingRoomState(state)
+	c.mu.Lock()
+	if c.waitingRoomState != nil &&
+		c.waitingRoomState.TransactionID != 0 &&
+		state.TransactionID <= c.waitingRoomState.TransactionID {
+		c.mu.Unlock()
+		return
+	}
+	c.waitingRoomState = &stored
+	c.waitingRoomGeneration++
+	generation := c.waitingRoomGeneration
+	c.mu.Unlock()
+	c.waitingRoomNotifyMu.Lock()
+	defer c.waitingRoomNotifyMu.Unlock()
+	c.mu.Lock()
+	if c.waitingRoomGeneration != generation || c.waitingRoomState == nil {
+		c.mu.Unlock()
+		return
+	}
+	current := cloneWaitingRoomState(*c.waitingRoomState)
+	fn := c.onWaitingRoomState
+	c.mu.Unlock()
+	if fn != nil {
+		fn(current)
+	}
+}
+
+func (c *Call) setWaitingRoomAdmission() {
+	c.mu.Lock()
+	if c.waitingRoomState == nil || !c.waitingRoomState.InWaitingRoom {
+		c.mu.Unlock()
+		return
+	}
+	c.waitingRoomState.InWaitingRoom = false
+	c.waitingRoomGeneration++
+	generation := c.waitingRoomGeneration
+	c.mu.Unlock()
+	c.waitingRoomNotifyMu.Lock()
+	defer c.waitingRoomNotifyMu.Unlock()
+	c.mu.Lock()
+	if c.waitingRoomGeneration != generation || c.waitingRoomState == nil {
+		c.mu.Unlock()
+		return
+	}
+	state := cloneWaitingRoomState(*c.waitingRoomState)
+	fn := c.onWaitingRoomState
+	c.mu.Unlock()
+	if fn != nil {
+		fn(state)
+	}
+}
+
+func (c *Call) dispatchHandRaise(state HandRaiseState) {
+	c.mu.Lock()
+	if c.groupState != nil {
+		for i := range c.groupState.Participants {
+			if c.groupState.Participants[i].JID.ToNonAD() == state.Participant.ToNonAD() {
+				c.groupState.Participants[i].HandRaised = state.Raised
+			}
+		}
+	}
+	fn := c.onHandRaise
+	c.mu.Unlock()
+	if fn != nil {
+		fn(state)
+	}
+}
+
+func (c *Call) dispatchScreenShare(state ScreenShareState) {
+	c.mu.Lock()
+	if c.screenShares == nil {
+		c.screenShares = make(map[types.JID]ScreenShareState)
+	}
+	key := state.Participant.ToNonAD()
+	if state.Active {
+		c.screenShares[key] = state
+	} else {
+		delete(c.screenShares, key)
+	}
+	fn := c.onScreenShare
+	c.mu.Unlock()
+	if fn != nil {
+		fn(state)
+	}
+}
+
+func cloneWaitingRoomState(state WaitingRoomState) WaitingRoomState {
+	state.Users = append([]WaitingRoomUser(nil), state.Users...)
+	return state
 }
 
 // Subscribe attaches p as the call's outbound audio player, replacing any previous one.

@@ -162,6 +162,65 @@ func TestVideoSenderGatesUpgradeUntilPeerAcceptance(t *testing.T) {
 	}
 }
 
+func TestVideoSenderSourceSwitchKeepsSSRCAndSequenceButRequiresIDR(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L45-L48
+	// Capture custom-reaction-video-screen-share-v2-20260726-033309, call
+	// 00A91AD82043E1FAF5A2B9B2C4507FFC, raw lines 17470, 17596, and 19373.
+	const ssrc = 0x22E5F501
+	pipe, err := NewMediaPipeline(iota32(), "111111111111111:0@lid", "222222222222222:0@lid", ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	sender := &videoSender{
+		pipe: pipe, stream: rtp.NewVideoRtpStream(ssrc, 137),
+		active: true, keyframeRequired: true,
+	}
+	idr := []byte{0, 0, 0, 1, 0x65, 1, 2, 3}
+	delta := []byte{0, 0, 0, 1, 0x41, 1, 2, 3}
+
+	camera := sender.protectAccessUnit(idr, 50*time.Millisecond)
+	if len(camera) != 1 {
+		t.Fatalf("camera IDR packets = %d, want 1", len(camera))
+	}
+	cameraHeader, ok := rtp.ParseRtpHeader(camera[0])
+	if !ok {
+		t.Fatal("camera packet has no RTP header")
+	}
+
+	sender.switchSource()
+	if packets := sender.protectAccessUnit(delta, 50*time.Millisecond); len(packets) != 0 {
+		t.Fatalf("screen delta before IDR produced %d packets", len(packets))
+	}
+	screen := sender.protectAccessUnit(idr, 50*time.Millisecond)
+	if len(screen) != 1 {
+		t.Fatalf("screen IDR packets = %d, want 1", len(screen))
+	}
+	screenHeader, ok := rtp.ParseRtpHeader(screen[0])
+	if !ok {
+		t.Fatal("screen packet has no RTP header")
+	}
+
+	sender.switchSource()
+	restored := sender.protectAccessUnit(idr, 50*time.Millisecond)
+	if len(restored) != 1 {
+		t.Fatalf("restored camera IDR packets = %d, want 1", len(restored))
+	}
+	restoredHeader, ok := rtp.ParseRtpHeader(restored[0])
+	if !ok {
+		t.Fatal("restored camera packet has no RTP header")
+	}
+
+	if cameraHeader.Ssrc != ssrc || screenHeader.Ssrc != ssrc || restoredHeader.Ssrc != ssrc {
+		t.Fatalf("source switch changed SSRC: camera=%08X screen=%08X restored=%08X",
+			cameraHeader.Ssrc, screenHeader.Ssrc, restoredHeader.Ssrc)
+	}
+	if screenHeader.SequenceNumber != cameraHeader.SequenceNumber+1 ||
+		restoredHeader.SequenceNumber != screenHeader.SequenceNumber+1 {
+		t.Fatalf("source switch broke sequence continuity: camera=%d screen=%d restored=%d",
+			cameraHeader.SequenceNumber, screenHeader.SequenceNumber, restoredHeader.SequenceNumber)
+	}
+}
+
 func TestMediaSrtcpSenderProtectsVideoReport(t *testing.T) {
 	sender, err := newMediaSrtcpSender(iota32(), "111111111111111:0@lid", 0x55667788, true)
 	if err != nil {
@@ -180,6 +239,36 @@ func TestMediaSrtcpSenderProtectsVideoReport(t *testing.T) {
 	}
 	if len(packet) != 60+14 {
 		t.Fatalf("protected report length = %d, want 74", len(packet))
+	}
+}
+
+func TestMediaSrtcpSenderProtectsPictureLossIndication(t *testing.T) {
+	callKey := iota32()
+	const (
+		selfLID    = "111111111111111:0@lid"
+		localSSRC  = uint32(0x55667788)
+		remoteSSRC = uint32(0x11223344)
+	)
+	sender, err := newMediaSrtcpSender(callKey, selfLID, localSSRC, true)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	receiver, err := newMediaSrtcpReceiver(callKey, selfLID)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+
+	packet, err := sender.pictureLossIndication(remoteSSRC)
+	if err != nil {
+		t.Fatalf("picture loss indication: %v", err)
+	}
+	plain, _, ok := receiver.unprotect(localSSRC, packet)
+	if !ok {
+		t.Fatal("protected PLI failed authentication")
+	}
+	want := rtp.BuildPictureLossIndication(localSSRC, remoteSSRC, true)
+	if !bytes.Equal(plain, want[:]) {
+		t.Fatalf("PLI plaintext = %x, want %x", plain, want)
 	}
 }
 

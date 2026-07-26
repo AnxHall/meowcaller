@@ -51,6 +51,44 @@ func TestH264FUARoundtrip(t *testing.T) {
 	}
 }
 
+func TestH264AccessUnitAssemblerWaitsForIDRAfterPacketGap(t *testing.T) {
+	idr := make([]byte, 2400)
+	idr[0] = 0x65
+	for i := 1; i < len(idr); i++ {
+		idr[i] = byte(i)
+	}
+	idrPackets := PackageH264NALU(idr)
+	if len(idrPackets) != 4 {
+		t.Fatalf("IDR packet count = %d, want 4", len(idrPackets))
+	}
+
+	var assembler H264AccessUnitAssembler
+	if got, complete, recovery := assembler.Push(100, false, idrPackets[0]); complete || recovery || got != nil {
+		t.Fatalf("first fragment = complete:%t recovery:%t bytes:%d", complete, recovery, len(got))
+	}
+	if got, complete, recovery := assembler.Push(102, false, idrPackets[2]); complete || !recovery || got != nil {
+		t.Fatalf("gapped fragment = complete:%t recovery:%t bytes:%d", complete, recovery, len(got))
+	}
+	if got, complete, recovery := assembler.Push(103, true, idrPackets[3]); complete || recovery || got != nil {
+		t.Fatalf("damaged IDR = complete:%t recovery:%t bytes:%d", complete, recovery, len(got))
+	}
+	if got, complete, recovery := assembler.Push(103, true, []byte{0x41, 0x01}); complete || recovery || got != nil {
+		t.Fatalf("reordered packet while recovering = complete:%t recovery:%t bytes:%d", complete, recovery, len(got))
+	}
+
+	delta := []byte{0x41, 0x9a, 0x01}
+	if got, complete, recovery := assembler.Push(104, true, delta); complete || recovery || got != nil {
+		t.Fatalf("delta after loss = complete:%t recovery:%t bytes:%d", complete, recovery, len(got))
+	}
+
+	recovery := []byte{0x65, 0x88, 0x84}
+	got, complete, request := assembler.Push(105, true, recovery)
+	want := append([]byte{0, 0, 0, 1}, recovery...)
+	if !complete || request || !bytes.Equal(got, want) {
+		t.Fatalf("recovery access unit = (%t, %t, %x), want (true, false, %x)", complete, request, got, want)
+	}
+}
+
 func TestH264STAPARoundtrip(t *testing.T) {
 	sps := []byte{0x67, 0x42, 0x00, 0x1f}
 	pps := []byte{0x68, 0xce, 0x3c, 0x80}

@@ -54,6 +54,13 @@ Core VoIP features are present:
 - Mid-call audio-to-video upgrade, acceptance, rejection, cancellation, and downgrade
 - Camera orientation and authenticated video keyframe feedback
 - Send and receive call emoji reactions over the dedicated RTC app-data stream
+- Create, preview, and join audio/video call links with waiting-room approval,
+  per-user admit/deny controls, and admission-gated media startup
+- Experimental group calls: start ad-hoc or group-JID-bound calls and add
+  participants in place, render the active roster, and re-ring disconnected
+  roster participants; live multi-participant media coverage remains partial
+- Raise/lower hands as persistent participant state
+- Start/stop version-2 screen-share signaling independently from camera video
 
 WhatsApp call signaling, call-key exchange, and relay election are provided by
 [whatsmeow](https://github.com/tulir/whatsmeow). Meowcaller owns the RTP/SRTP media
@@ -62,8 +69,8 @@ plane, codecs, pacing, video framing, reactions, and diagnostics.
 Things that are not yet implemented:
 
 - Opus codec fallback for clients not using MLOW (in progress; testing edge cases)
-- Group calls (WIP)
-- Call signalling features (raise hand, lobby)
+- Complete live E2E coverage for every group relay/media topology
+- Scheduled-call `EventMessage` creation in the browser example
 
 ## Credits
 

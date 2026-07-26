@@ -533,9 +533,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		e.mu.Unlock()
 	}()
 	type videoReceiveState struct {
-		depacketizer rtp.H264Depacketizer
-		accessUnit   []byte
-		orientation  int
+		assembler   rtp.H264AccessUnitAssembler
+		orientation int
 	}
 	videoReceiveStates := make(map[*participantAudioReceiver]*videoReceiveState)
 	appDataReceivers := make(map[*participantAudioReceiver]*appDataReceiver)
@@ -886,13 +885,28 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				})
 			}
 			videoWirePacket++
-			for _, nalu := range videoState.depacketizer.Depacketize(media.Payload) {
-				videoState.accessUnit = append(videoState.accessUnit, 0x00, 0x00, 0x00, 0x01)
-				videoState.accessUnit = append(videoState.accessUnit, nalu...)
+			frame, complete, recoveryNeeded := videoState.assembler.Push(vh.SequenceNumber, vh.Marker, media.Payload)
+			if recoveryNeeded {
+				packet, feedbackErr := videoRtcp.pictureLossIndication(vh.Ssrc)
+				if feedbackErr == nil {
+					_, feedbackErr = ch.Send(packet)
+				}
+				if feedbackErr != nil {
+					log.Warn().
+						Err(feedbackErr).
+						Uint32("ssrc", vh.Ssrc).
+						Msg("failed to request video keyframe after RTP loss")
+				} else {
+					log.Debug().
+						Uint32("ssrc", vh.Ssrc).
+						Msg("requested video keyframe after RTP loss")
+				}
+				e.c.diag.Emit("rtcp", map[string]any{
+					"event": "picture_loss_indication", "call_id": callID,
+					"media_ssrc": vh.Ssrc, "sent": feedbackErr == nil,
+				})
 			}
-			if vh.Marker && len(videoState.accessUnit) > 0 {
-				frame := videoState.accessUnit
-				videoState.accessUnit = nil
+			if complete {
 				if videoWireFrame < videoWireFrameLimit {
 					e.c.diag.Emit("video_wire", map[string]any{
 						"event": "access_unit", "direction": "in", "call_id": callID,
@@ -1310,6 +1324,18 @@ func (s *mediaSrtcpSender) groupSenderReport(stats rtp.RtcpSenderStats, nowMs ui
 	return packet, err
 }
 
+func (s *mediaSrtcpSender) pictureLossIndication(mediaSSRC uint32) ([]byte, error) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	plain := rtp.BuildPictureLossIndication(s.ssrc, mediaSSRC, s.profile)
+	packet, err := srtp.ProtectSrtcp(&s.keys, s.ssrc, s.index, plain[:])
+	if err == nil {
+		s.index++
+	}
+	return packet, err
+}
+
 func sendMediaSrtcpReceptionReports(
 	sender *mediaSrtcpSender,
 	stats rtp.RtcpSenderStats,
@@ -1442,6 +1468,16 @@ func (vs *videoSender) disable() {
 }
 
 func (vs *videoSender) requestKeyframe() {
+	vs.mu.Lock()
+	vs.keyframeRequired = true
+	vs.mu.Unlock()
+}
+
+func (vs *videoSender) switchSource() {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L45-L48
+	if vs == nil {
+		return
+	}
 	vs.mu.Lock()
 	vs.keyframeRequired = true
 	vs.mu.Unlock()

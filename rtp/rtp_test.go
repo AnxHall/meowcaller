@@ -140,17 +140,17 @@ func TestVideoStreamUsesOneTimestampPerAccessUnit(t *testing.T) {
 	}
 }
 
-func TestVideoRtpExtensionDisplayOrientation(t *testing.T) {
+func TestVideoRtpExtensionDisplayOrientationUsesCVOReceiverRotation(t *testing.T) {
 	tests := []struct {
 		frameInfo uint8
 		want      int
 	}{
 		{frameInfo: 0x20, want: 0},
-		{frameInfo: 0x21, want: 3},
+		{frameInfo: 0x21, want: 1},
 		{frameInfo: 0x22, want: 2},
-		{frameInfo: 0x23, want: 1},
-		{frameInfo: 0x33, want: 1},
-		{frameInfo: 0x0b, want: 1},
+		{frameInfo: 0x23, want: 3},
+		{frameInfo: 0x33, want: 3},
+		{frameInfo: 0x0b, want: 3},
 	}
 	for _, test := range tests {
 		extension := VideoRtpExtension{MediaFrameInfo: test.frameInfo}
@@ -170,8 +170,8 @@ func TestParseCapturedVideoOrientationWithoutTransportSequence(t *testing.T) {
 	if header.VideoExtension == nil {
 		t.Fatal("captured orientation metadata was discarded")
 	}
-	if got := header.VideoExtension.DisplayOrientation(); got != 1 {
-		t.Fatalf("captured display orientation = %d, want 1", got)
+	if got := header.VideoExtension.DisplayOrientation(); got != 3 {
+		t.Fatalf("captured display orientation = %d, want 3", got)
 	}
 }
 
@@ -399,6 +399,17 @@ func TestRtcpRequestsVideoKeyframe(t *testing.T) {
 	}
 	if RtcpRequestsKeyframe(pli, 0x99990000) {
 		t.Fatal("PLI for another SSRC was accepted")
+	}
+}
+
+func TestBuildPictureLossIndication(t *testing.T) {
+	got := BuildPictureLossIndication(0x11112222, 0x55556666, true)
+	want := [12]byte{0x91, RtcpPtPsfb, 0, 2, 0x11, 0x11, 0x22, 0x22, 0x55, 0x55, 0x66, 0x66}
+	if got != want {
+		t.Fatalf("PLI = %x, want %x", got, want)
+	}
+	if !RtcpRequestsKeyframe(got[:], 0x55556666) {
+		t.Fatal("built PLI does not request its media SSRC")
 	}
 }
 

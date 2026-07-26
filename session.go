@@ -33,6 +33,7 @@ const (
 	CallPhaseConnecting
 	CallPhaseActive
 	CallPhaseEnded
+	CallPhaseWaitingRoom
 )
 
 // CallSession is the per-call signaling state with validated phase transitions.
@@ -110,6 +111,12 @@ func (s *CallSession) TransitionTo(next CallPhase) bool {
 		ok = true
 	case s.phase == CallPhaseRinging && next == CallPhaseConnecting:
 		ok = true
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
+	case (s.phase == CallPhaseCalling || s.phase == CallPhaseConnecting) &&
+		next == CallPhaseWaitingRoom:
+		ok = true
+	case s.phase == CallPhaseWaitingRoom && next == CallPhaseConnecting:
+		ok = true
 	case s.phase == CallPhaseConnecting && next == CallPhaseActive:
 		ok = true
 	case s.phase == next:
@@ -142,6 +149,8 @@ func phaseName(p CallPhase) string {
 		return "active"
 	case CallPhaseEnded:
 		return "ended"
+	case CallPhaseWaitingRoom:
+		return "waiting_room"
 	default:
 		return "unknown"
 	}

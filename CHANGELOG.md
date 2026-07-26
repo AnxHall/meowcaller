@@ -16,6 +16,42 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   indexes and observed-versus-inferred analysis notes for the researched group
   call flows.
 
+### call-links/waiting-room — `KAT-verified`
+
+- Added captured call-link create/query/join signaling, reusable token versus
+  active-call identity, approval gating, pending heartbeats, typed roster
+  updates, per-user admit/deny, and dormant-to-group-media admission.
+- Added Meowcaller and browser APIs with token-free live-call state and no media
+  attachment while waiting.
+- Encoded the call-link service destination as a service JID and added one-click
+  generated-link copy/join controls; live audio and video link creation now
+  returns server-issued URLs.
+- Fixed the browser waiting-room event schema and exposed per-user Approve and
+  Reject actions backed by the captured admit/deny signaling.
+- Serialized waiting-room replay/update callbacks so an older roster cannot
+  overwrite a newer approval state in the web UI.
+- Extended the session transition table for outgoing waiting-room admission,
+  rejection, and terminal cleanup, with focused lifecycle KATs.
+
+### call/participant-state — `partial`
+
+- Added captured raised-hand and screen-share signaling, typed ACKs/events,
+  leave-driven state cleanup, public callbacks, and browser controls.
+- Arbitrary Unicode emoji reactions remain RTC app-data and now have an explicit
+  multi-code-point KAT.
+- Correlated camera, display, and restored-camera PT-97 packets in the direct
+  capture. Non-dual-stream screen sharing keeps the primary video SSRC and RTP
+  sequence timeline; source switches now require a fresh IDR and the browser
+  signals start before uploading display frames.
+
+### group-participant-ring — `KAT-verified`
+
+- Added a distinct re-ring path for non-connected users already present in an
+  active group roster. Captured-shape offers retain the call ID, target the
+  user's devices, and include only other connected participants in `group_info`.
+- Added `Call.RingParticipant` and a persistent browser participant roster with
+  per-user Ring controls. No separate user-facing ping protocol was observed.
+
 ### media/group_video_reactions — `partial`
 - Specified additive group-video signaling, participant-attributed H.264 delivery,
   and sender-attributed reaction rendering. Existing authenticated group media
@@ -77,6 +113,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   sequence ID 9 and normalized unknown participant orientations to zero at the
   web bridge boundary. Exact RTP and bridge regressions, full suite, race suite,
   and vet pass.
+- Corrected RTP CVO display orientation to use the standardized receiver
+  quarter-turn value directly. Android portrait no longer receives the inverse
+  rotation while iPhone portrait remains unchanged.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

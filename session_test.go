@@ -65,6 +65,27 @@ func TestIncomingStartsRinging(t *testing.T) {
 	}
 }
 
+func TestOutgoingWaitingRoomAdmissionAndRejectionTransitions(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
+	admitted := NewOutgoingSession("ADMITTED", peerJID(), creatorJID())
+	if !admitted.TransitionTo(CallPhaseCalling) ||
+		!admitted.TransitionTo(CallPhaseWaitingRoom) ||
+		!admitted.TransitionTo(CallPhaseConnecting) ||
+		!admitted.TransitionTo(CallPhaseActive) {
+		t.Fatalf("admission path stopped at phase %d", admitted.Phase())
+	}
+
+	rejected := NewOutgoingSession("REJECTED", peerJID(), creatorJID())
+	if !rejected.TransitionTo(CallPhaseCalling) ||
+		!rejected.TransitionTo(CallPhaseWaitingRoom) ||
+		!rejected.TransitionTo(CallPhaseEnded) {
+		t.Fatalf("rejection path stopped at phase %d", rejected.Phase())
+	}
+	if rejected.TransitionTo(CallPhaseConnecting) {
+		t.Fatal("ended waiting-room call resumed")
+	}
+}
+
 // TestMediaPipelineRoundTrips checks the protect→unprotect composition loopback.
 func TestMediaPipelineRoundTrips(t *testing.T) {
 	callKey := iota32()
