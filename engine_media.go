@@ -170,6 +170,14 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	if err != nil {
 		return err
 	}
+	hbhFECTXSSRC, err := rtp.DeriveWasmParticipantSsrc(callID, selfParticipantID, rtp.HBHFECTXSlotWord, log)
+	if err != nil {
+		return err
+	}
+	hbhFECRXSSRC, err := rtp.DeriveWasmParticipantSsrc(callID, selfParticipantID, rtp.HBHFECRXSlotWord, log)
+	if err != nil {
+		return err
+	}
 	streamSsrcs, err := rtp.DeriveWasmRelayStreamSsrcs(callID, selfParticipantID, log)
 	if err != nil {
 		return err
@@ -184,7 +192,11 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}
 	defer ch.Close()
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L53-L62
-	allocateState := newGroupRelayAllocateState(allocate, ep.Key)
+	allocateState := newGroupRelayAllocateStateWithHBHFEC(
+		allocate,
+		ep.Key,
+		[2]uint32{hbhFECTXSSRC, hbhFECRXSSRC},
+	)
 
 	// Send a consent ping (0x0801) immediately, together with the allocate and BEFORE any
 	// RTP. The relay won't forward the peer's media until consent (ping → pong) is

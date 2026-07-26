@@ -42,6 +42,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   refreshes now receive the app-data SSRC independently instead of inferring it
   from secondary-video slot 8. Collision rejection and exact app-data
   subscription propagation KATs pass; live multi-PID acceptance remains pending.
+- Corrected the multi-PID relay descriptor set after collision-free call
+  `7DC5731B5F943349B3E3089BF948D80C` proved the relay still stopped all inbound
+  RTP exactly when the second remote was subscribed. The authoritative WhatsApp
+  Allocate appends deterministic slot-7/slot-8 HBH-FEC TX/RX descriptors in true
+  multi-party SFU mode; Meowcaller now derives and advertises both without
+  changing the working one-remote shape. The exact 11-descriptor capture vector,
+  one-remote exclusion, atomic relay/roster integration, full suite, vet, and race
+  KATs pass; live multi-PID acceptance remains pending.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

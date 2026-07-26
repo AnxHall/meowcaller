@@ -584,7 +584,11 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 	reception.Observe(staleReceptionSSRC, 7, 960, 20, SampleRate)
 
 	initialAllocate := []byte{0x00, 0x01, 0x02}
-	allocateState := newGroupRelayAllocateState(initialAllocate, bytes.Repeat([]byte{0x12}, 16))
+	allocateState := newGroupRelayAllocateStateWithHBHFEC(
+		initialAllocate,
+		bytes.Repeat([]byte{0x12}, 16),
+		[2]uint32{11, 12},
+	)
 	endpoint := &types.RelayEndpoint{
 		RelayName: "zrh1c01",
 		IPv4:      "157.240.17.62",
@@ -660,13 +664,15 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 		t.Fatal("retry did not commit relay allocate")
 	}
 	attrs := stun.ParseStunAttributes(allocateState.Current())
-	var senderSubscriptions, receiverSubscriptions, participantCount []byte
+	var senderSubscriptions, receiverSubscriptions, streamDescriptors, participantCount []byte
 	for _, attr := range attrs {
 		switch attr.AttrType {
 		case 0x4025:
 			senderSubscriptions = attr.Value
 		case 0x4021:
 			receiverSubscriptions = attr.Value
+		case 0x4024:
+			streamDescriptors = attr.Value
 		case 0x805a:
 			participantCount = attr.Value
 		}
@@ -687,6 +693,13 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 	}
 	if got, want := participantCount, []byte{0x02}; !bytes.Equal(got, want) {
 		t.Fatalf("committed participant count = %x, want %x", got, want)
+	}
+	wantHBHFECDescriptors := []byte{
+		0x0a, 0x06, 0x08, 0x03, 0x10, 0x03, 0x18, 0x0b,
+		0x0a, 0x06, 0x08, 0x04, 0x10, 0x03, 0x18, 0x0c,
+	}
+	if !bytes.HasSuffix(streamDescriptors, wantHBHFECDescriptors) {
+		t.Fatalf("committed stream descriptors omitted HBH FEC streams: %x", streamDescriptors)
 	}
 	if reports := reception.Reports(40); len(reports) != 0 {
 		t.Fatalf("retry did not retain only committed reception SSRCs: %+v", reports)
