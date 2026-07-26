@@ -106,6 +106,15 @@ capture-vector KAT-verified; live multi-participant media retest pending
   relay classification. Exact subtype 2, 4, and 7 video/audio vectors pass and
   ordinary RTP remains byte-for-byte unchanged; malformed and unknown envelopes
   are rejected before SRTP.
+- Participant `242653052539031:0@lid` sends a valid one-byte RTP extension
+  `30 0b 51 00 00 61 00 02`: media-frame-info ID 3 is `0x0b`, initial-bandwidth
+  ID 5 and short-offset ID 6 are present, and transport-sequence ID 9 is absent.
+  The orientation bits therefore require one clockwise quarter turn. The current
+  parser rejects the complete extension solely because ID 9 is absent, leaves
+  participant orientation at `-1`, and the web modulo mapping renders that as
+  three clockwise quarter turns—exactly 180° from the captured orientation.
+  The frozen 718-record `video_wire.jsonl` has SHA-256
+  `4250558d3547da6181cf8b2bab80054ba0f9e2231c5c07033c531b33f9683165`.
 
 ## Inferences to validate live
 
@@ -170,6 +179,8 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
   state.
 - Media tests must prove participant metadata and frame bytes survive dispatch
   without aliasing.
+- RTP tests must prove captured video extensions retain frame orientation when
+  optional transport-sequence metadata is absent.
 - Relay tests must prove a committed connected roster emits the exact captured
   sender/receiver subscription protobufs for remote PIDs, and that the subscription
   update shares the roster/relay atomic commit boundary.

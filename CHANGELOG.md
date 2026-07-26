@@ -60,6 +60,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   subtype 2, 4, and 7 capture vectors expose valid inner RTP, ordinary RTP passes
   through unchanged, and malformed envelopes are rejected before SRTP. Focused
   and full KATs pass; live multi-participant media validation remains pending.
+- Recorded the upside-down participant-video failure. The participant ending in
+  `031` carries valid RTP orientation metadata but omits optional transport
+  sequence ID 9; the parser discards the whole extension, and the web renderer
+  turns the unknown `-1` fallback into a real three-quarter rotation.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:
