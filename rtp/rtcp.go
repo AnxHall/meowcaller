@@ -76,6 +76,10 @@ type RtcpReceptionReport struct {
 	DelaySinceLastSenderReport uint32
 }
 
+// RTCPGroupReportExtension is the opaque eight-byte suffix on one native group
+// audio reception report.
+type RTCPGroupReportExtension [8]byte
+
 // RtcpReceptionStats tracks one inbound RTP stream and produces interval loss,
 // jitter, LSR, and DLSR fields for periodic reception reports. Its methods are
 // safe to call from the media receive loop and the RTCP ticker concurrently.
@@ -341,6 +345,47 @@ func BuildSenderReportWithSdesAndReception(localSsrc uint32, stats *RtcpSenderSt
 	}
 	out = append(out, sdes[:]...)
 	return out
+}
+
+// BuildGroupSenderReport builds the capture-observed group audio SR with one
+// reception block, its opaque extension, and no SDES packet.
+func BuildGroupSenderReport(localSSRC uint32, stats *RtcpSenderStats, nowMs uint64, report *RtcpReceptionReport, extension RTCPGroupReportExtension) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L53-L75
+	if stats == nil {
+		stats = &RtcpSenderStats{}
+	}
+	sender := BuildSenderReport(localSSRC, stats, nowMs)
+	return buildGroupSenderReportFromSenderSection(sender, report, extension)
+}
+
+func buildGroupSenderReportFromSenderSection(sender [28]byte, report *RtcpReceptionReport, extension RTCPGroupReportExtension) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L53-L75
+	if report == nil {
+		return sender[:]
+	}
+	sender[0] = sender[0]&0xe0 | 1
+	out := make([]byte, 0, len(sender)+24+len(extension))
+	out = append(out, sender[:]...)
+	out = appendReceptionReport(out, report)
+	out = append(out, extension[:]...)
+	binary.BigEndian.PutUint16(out[2:4], uint16(len(out)/4-1))
+	return out
+}
+
+// BuildPictureLossIndication builds an RFC 4585 PLI asking the sender of
+// mediaSSRC for a fresh intra frame.
+func BuildPictureLossIndication(senderSSRC, mediaSSRC uint32, profileExtension bool) [12]byte {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/rtcp.rs#L16-L39
+	var packet [12]byte
+	packet[0] = 0x81
+	if profileExtension {
+		packet[0] |= 0x10
+	}
+	packet[1] = RtcpPtPsfb
+	binary.BigEndian.PutUint16(packet[2:4], 2)
+	binary.BigEndian.PutUint32(packet[4:8], senderSSRC)
+	binary.BigEndian.PutUint32(packet[8:12], mediaSSRC)
+	return packet
 }
 
 func appendReceptionReport(out []byte, report *RtcpReceptionReport) []byte {

@@ -39,6 +39,34 @@ func TestWarpMITagMatchesKAT(t *testing.T) {
 	if got, want := hex.EncodeToString(appended), doc.Inputs.SamplePacket+doc.E2eSrtp.WarpMITag4; got != want {
 		t.Errorf("appended = %s, want %s", got, want)
 	}
+	if !VerifyWarpMITag(authKey, packet, doc.Inputs.Roc, len(tag), tag) {
+		t.Error("valid WARP MI tag was rejected")
+	}
+
+	tamperedTag := append([]byte(nil), tag...)
+	tamperedTag[0] ^= 0x80
+	if VerifyWarpMITag(authKey, packet, doc.Inputs.Roc, len(tamperedTag), tamperedTag) {
+		t.Error("tampered WARP MI tag was accepted")
+	}
+
+	wrongKey := append([]byte(nil), authKey...)
+	wrongKey[0] ^= 0x80
+	if VerifyWarpMITag(wrongKey, packet, doc.Inputs.Roc, len(tag), tag) {
+		t.Error("WARP MI tag authenticated under the wrong participant key")
+	}
+
+	if VerifyWarpMITag(authKey, packet, doc.Inputs.Roc+1, len(tag), tag) {
+		t.Error("WARP MI tag authenticated under the wrong ROC")
+	}
+	if VerifyWarpMITag(authKey, packet, doc.Inputs.Roc, 0, nil) {
+		t.Error("empty WARP MI tag was accepted")
+	}
+	if VerifyWarpMITag(authKey, packet, doc.Inputs.Roc, len(tag), tag[:len(tag)-1]) {
+		t.Error("truncated WARP MI tag was accepted")
+	}
+	if VerifyWarpMITag(authKey, packet, doc.Inputs.Roc, 21, make([]byte, 21)) {
+		t.Error("oversized WARP MI tag was accepted")
+	}
 }
 
 // TestAudioPiggybackExtension checks the piggyback gating and the extension word.

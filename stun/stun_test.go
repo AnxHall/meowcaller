@@ -1,6 +1,7 @@
 package stun
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -145,6 +146,73 @@ func TestWasmStreamDescriptorsMatchCapturedTemplate(t *testing.T) {
 	}
 	if got := hex.EncodeToString(CreateWasmStreamDescriptors(ssrcs)); got != hex.EncodeToString(wasmStreamDescriptorsTemplate) {
 		t.Errorf("wasm stream descriptors = %s, want %s", got, hex.EncodeToString(wasmStreamDescriptorsTemplate))
+	}
+}
+
+func TestWasmGroupAllocateCarriesCapturedVideoSubscriptions(t *testing.T) {
+	ssrcs := [9]uint32{
+		0x3ea26c0c,
+		0x0bf99b28,
+		0xf42e4556,
+		0x14e8f126,
+		0xbb16134f,
+		0x98b14f00,
+		0xe0e04163,
+		0x74ed8516,
+		0xdea8a613,
+	}
+	participantPIDs := []uint32{1, 2}
+	transactionID := [12]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	endpointXOR := [6]byte{0x2c, 0x84, 0xbc, 0xe2, 0xb5, 0xc7}
+	packet := BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
+		transactionID,
+		[]byte{0x01, 0x02, 0x03},
+		endpointXOR,
+		ssrcs,
+		0xb31ded3e,
+		[2]uint32{0xc1a17938, 0x1bb20c84},
+		participantPIDs,
+		[]byte("0123456789abcdef"),
+	)
+	attrs := ParseStunAttributes(packet)
+	wantTypes := []uint16{0x4000, 0x4025, 0x4021, 0x4024, 0x805a, 0x0016, 0x0008}
+	if len(attrs) != len(wantTypes) {
+		t.Fatalf("group allocate attr count = %d, want %d", len(attrs), len(wantTypes))
+	}
+	for i, want := range wantTypes {
+		if attrs[i].AttrType != want {
+			t.Errorf("group allocate attr[%d].type = %#x, want %#x", i, attrs[i].AttrType, want)
+		}
+	}
+	wantSenderSubscriptions := "0a1f0a1d0a0fa6e2a3a701cfa6d8d80b809ec5c5091204080110011204080210010a130a110a0fe38281870e968ab6a70793cca2f50d0a1a0a180a0e8cd889f503a8b6e65fd68ab9a10f12020801120208020a110a0f0a05bedaf7980b1202080112020802"
+	if got := hex.EncodeToString(attrs[1].Value); got != wantSenderSubscriptions {
+		t.Errorf("group sender subscriptions = %s, want %s", got, wantSenderSubscriptions)
+	}
+	wantReceiverSubscriptions := "1202080112020802"
+	if got := hex.EncodeToString(attrs[2].Value); got != wantReceiverSubscriptions {
+		t.Errorf("group receiver subscriptions = %s, want %s", got, wantReceiverSubscriptions)
+	}
+	wantStreamDescriptors := "0a06188cd889f5030a07100118a8b6e65f0a08100218d68ab9a10f0a08080118a6e2a3a7010a0a0801100118cfa6d8d80b0a0a0801100218809ec5c5090a08080218e38281870e0a0a0802100118968ab6a7070a0a080210021893cca2f50d0a0a0803100318b8f2858d0c0a0a08041003188499c8dd01"
+	if got := hex.EncodeToString(attrs[3].Value); got != wantStreamDescriptors {
+		t.Errorf("group stream descriptors = %s, want %s", got, wantStreamDescriptors)
+	}
+	if got := hex.EncodeToString(attrs[4].Value); got != "02" {
+		t.Errorf("group participant count = %s, want 02", got)
+	}
+
+	oneParticipant := BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
+		transactionID,
+		[]byte{0x01, 0x02, 0x03},
+		endpointXOR,
+		ssrcs,
+		0xb31ded3e,
+		[2]uint32{0xc1a17938, 0x1bb20c84},
+		[]uint32{1},
+		[]byte("0123456789abcdef"),
+	)
+	oneParticipantAttrs := ParseStunAttributes(oneParticipant)
+	if got, want := oneParticipantAttrs[3].Value, CreateWasmStreamDescriptors(ssrcs); !bytes.Equal(got, want) {
+		t.Errorf("one-participant stream descriptors = %x, want no HBH-FEC suffix %x", got, want)
 	}
 }
 

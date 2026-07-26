@@ -12,6 +12,32 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
+type lifecycleAudioSource struct {
+	closeCount int
+}
+
+func (s *lifecycleAudioSource) ReadFrame() ([]float32, error) {
+	return nil, errors.New("unused")
+}
+
+func (s *lifecycleAudioSource) Close() error {
+	s.closeCount++
+	return nil
+}
+
+type lifecycleAudioSink struct {
+	closeCount int
+}
+
+func (s *lifecycleAudioSink) WriteFrame([]float32) error {
+	return nil
+}
+
+func (s *lifecycleAudioSink) Close() error {
+	s.closeCount++
+	return nil
+}
+
 func testEngineWithOutgoingCall() (*engine, *Call) {
 	c := &Client{}
 	c.eng = newEngine(c)
@@ -535,5 +561,25 @@ func TestPeerRejectEndsCall(t *testing.T) {
 	}
 	if reason != "rejected" {
 		t.Fatalf("reason = %q, want rejected", reason)
+	}
+}
+
+func TestFinishCallClosesAttachedAudioDevices(t *testing.T) {
+	source := &lifecycleAudioSource{}
+	sink := &lifecycleAudioSink{}
+	call := &Call{id: "CALL", phase: CallPhaseActive}
+	call.Play(source)
+	call.Receive(sink)
+	eng := &engine{calls: map[string]*engineCall{
+		"CALL": {call: call},
+	}}
+
+	eng.finishCall("CALL", "done")
+
+	if source.closeCount != 1 {
+		t.Fatalf("audio source close count = %d, want 1", source.closeCount)
+	}
+	if sink.closeCount != 1 {
+		t.Fatalf("audio sink close count = %d, want 1", sink.closeCount)
 	}
 }

@@ -126,6 +126,198 @@ func TestMediaPipelineRekeysReceivePathForAnsweringDevice(t *testing.T) {
 	}
 }
 
+func TestMediaPipelineRekeysReceivePathFromRawParticipantKey(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0xa5}, 32)
+	self := "111111111111111:0@lid"
+	peer := "222222222222222:7@lid"
+	const ssrc = 0x55667788
+	receiver, err := NewMediaPipeline(callKey, self, peer, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	payload := []byte{1, 2, 3, 4, 5}
+	header := rtp.RtpHeader{
+		PayloadType:    rtp.RtpPayloadTypeOpus,
+		SequenceNumber: 1,
+		Timestamp:      FrameSamples,
+		Ssrc:           ssrc,
+	}
+	keys, err := srtp.DeriveE2eKeysFromRaw(rawKey, rtp.FormatE2ESrtpParticipantID(peer))
+	if err != nil {
+		t.Fatalf("derive raw keys: %v", err)
+	}
+	packet := rtp.EncodeRtpHeader(&header)
+	encrypted, err := srtp.CryptPayload(&keys, ssrc, header.SequenceNumber, 0, payload)
+	if err != nil {
+		t.Fatalf("encrypt raw-key packet: %v", err)
+	}
+	packet = append(packet, encrypted...)
+	packet = srtp.AppendWarpMITag(keys.AuthKey[:], packet, 0, srtp.WarpMITagLen)
+
+	if _, _, ok := receiver.UnprotectAudio(packet); ok {
+		t.Fatal("call-key receiver unexpectedly authenticated raw-key packet before rekey")
+	}
+	if err = receiver.RekeyRecvFromRaw(rawKey, peer); err != nil {
+		t.Fatalf("RekeyRecvFromRaw: %v", err)
+	}
+	_, got, ok := receiver.UnprotectAudio(packet)
+	if !ok {
+		t.Fatal("raw-key receiver rejected participant packet")
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("raw-key payload = %x, want %x", got, payload)
+	}
+
+	peerReceiver, err := NewMediaPipeline(callKey, peer, self, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("peer receiver: %v", err)
+	}
+	outboundPayload := []byte{6, 7, 8}
+	outbound, err := receiver.ProtectAudio(outboundPayload)
+	if err != nil {
+		t.Fatalf("protect after receive rekey: %v", err)
+	}
+	_, got, ok = peerReceiver.UnprotectAudio(outbound)
+	if !ok || !bytes.Equal(got, outboundPayload) {
+		t.Fatal("raw receive rekey modified the send keys")
+	}
+
+	callKeyReceiver, err := NewMediaPipeline(callKey, self, peer, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("call-key receiver: %v", err)
+	}
+	callKeySender, err := NewMediaPipeline(callKey, peer, self, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("call-key sender: %v", err)
+	}
+	callKeyPacket, err := callKeySender.ProtectAudio(payload)
+	if err != nil {
+		t.Fatalf("protect call-key packet: %v", err)
+	}
+	if err = callKeyReceiver.RekeyRecvFromRaw(rawKey[:31], peer); err == nil {
+		t.Fatal("short raw receive key was accepted")
+	}
+	_, got, ok = callKeyReceiver.UnprotectAudio(callKeyPacket)
+	if !ok || !bytes.Equal(got, payload) {
+		t.Fatal("rejected raw receive rekey modified the working receive state")
+	}
+}
+
+func TestMediaPipelineRekeysSendPathFromSharedRawEpochWithoutRestartingRTP(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x5a}, 32)
+	self := "111111111111111:14@lid"
+	peer := "222222222222222:7@lid"
+	const ssrc = 0x55667788
+	sender, err := NewMediaPipeline(callKey, self, peer, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("sender: %v", err)
+	}
+	oldReceiver, err := NewMediaPipeline(callKey, peer, self, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("old receiver: %v", err)
+	}
+	newReceiver, err := NewMediaPipeline(rawKey, peer, self, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("new receiver: %v", err)
+	}
+	if err = newReceiver.RekeyRecvFromRawPreservingROC(rawKey, self); err != nil {
+		t.Fatalf("new receiver raw epoch: %v", err)
+	}
+
+	firstPayload := []byte{1, 2, 3}
+	first, err := sender.ProtectAudio(firstPayload)
+	if err != nil {
+		t.Fatalf("protect first: %v", err)
+	}
+	if _, got, ok := oldReceiver.UnprotectAudio(first); !ok || !bytes.Equal(got, firstPayload) {
+		t.Fatal("old call-key packet did not authenticate before rekey")
+	}
+
+	if err = sender.RekeySendFromRaw(rawKey, self); err != nil {
+		t.Fatalf("RekeySendFromRaw: %v", err)
+	}
+	secondPayload := []byte{4, 5, 6}
+	second, err := sender.ProtectAudio(secondPayload)
+	if err != nil {
+		t.Fatalf("protect second: %v", err)
+	}
+	header, ok := rtp.ParseRtpHeader(second)
+	if !ok {
+		t.Fatal("parse second RTP header")
+	}
+	if header.Ssrc != ssrc || header.SequenceNumber != 2 || header.Timestamp != FrameSamples {
+		t.Fatalf(
+			"continued RTP header = ssrc %#x seq %d timestamp %d, want %#x/2/%d",
+			header.Ssrc,
+			header.SequenceNumber,
+			header.Timestamp,
+			ssrc,
+			FrameSamples,
+		)
+	}
+	if _, _, ok = oldReceiver.UnprotectAudio(second); ok {
+		t.Fatal("old call-key receiver authenticated post-epoch packet")
+	}
+	if _, got, ok := newReceiver.UnprotectAudio(second); !ok || !bytes.Equal(got, secondPayload) {
+		t.Fatal("shared raw-epoch receiver rejected post-epoch packet")
+	}
+}
+
+func TestMediaPipelineRawReceiveEpochPreservesROC(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x6b}, 32)
+	self := "111111111111111:14@lid"
+	peer := "222222222222222:7@lid"
+	const ssrc = 0x55667788
+	receiver, err := NewMediaPipeline(callKey, self, peer, ssrc, FrameSamples)
+	if err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	protectAt := func(key []byte, raw bool, sequence uint16, roc uint32, payload []byte) []byte {
+		t.Helper()
+		var keys srtp.E2eSrtpKeys
+		var deriveErr error
+		participantID := rtp.FormatE2ESrtpParticipantID(peer)
+		if raw {
+			keys, deriveErr = srtp.DeriveE2eKeysFromRaw(key, participantID)
+		} else {
+			keys, deriveErr = srtp.DeriveE2eKeys(key, participantID)
+		}
+		if deriveErr != nil {
+			t.Fatalf("derive receive keys: %v", deriveErr)
+		}
+		header := rtp.RtpHeader{
+			PayloadType:    rtp.RtpPayloadTypeOpus,
+			SequenceNumber: sequence,
+			Timestamp:      uint32(sequence) * FrameSamples,
+			Ssrc:           ssrc,
+		}
+		packet := rtp.EncodeRtpHeader(&header)
+		encrypted, cryptErr := srtp.CryptPayload(&keys, ssrc, sequence, roc, payload)
+		if cryptErr != nil {
+			t.Fatalf("encrypt receive packet: %v", cryptErr)
+		}
+		packet = append(packet, encrypted...)
+		return srtp.AppendWarpMITag(keys.AuthKey[:], packet, roc, srtp.WarpMITagLen)
+	}
+
+	for _, sequence := range []uint16{0xfffe, 0xffff} {
+		packet := protectAt(callKey, false, sequence, 0, []byte{byte(sequence)})
+		if _, _, ok := receiver.UnprotectAudio(packet); !ok {
+			t.Fatalf("call-key packet seq %#x failed", sequence)
+		}
+	}
+	if err = receiver.RekeyRecvFromRawPreservingROC(rawKey, peer); err != nil {
+		t.Fatalf("RekeyRecvFromRawPreservingROC: %v", err)
+	}
+	wrapped := protectAt(rawKey, true, 0, 1, []byte{9, 8, 7})
+	if _, got, ok := receiver.UnprotectAudio(wrapped); !ok || !bytes.Equal(got, []byte{9, 8, 7}) {
+		t.Fatal("raw receive epoch reset ROC across continuing stream")
+	}
+}
+
 // TestProtectUsesSelfLidForSend pins the send keystream to the self LID.
 func TestProtectUsesSelfLidForSend(t *testing.T) {
 	callKey := iota32()
@@ -180,9 +372,18 @@ func TestRecvUsesPeerLidForRecv(t *testing.T) {
 	selfKeyedTx, _ := NewMediaPipeline(callKey, selfLid, peerLid, ssrc, 960)
 	wrong, _ := selfKeyedTx.ProtectAudio(opus)
 	us2, _ := NewMediaPipeline(callKey, selfLid, peerLid, ssrc, 960)
-	_, mis, _ := us2.UnprotectAudio(wrong)
-	if bytes.Equal(mis, opus) {
-		t.Error("recv must not recover a self-LID-keyed packet")
+	if _, _, ok = us2.UnprotectAudio(wrong); ok {
+		t.Error("recv must reject a self-LID-keyed packet")
+	}
+
+	tampered := append([]byte(nil), fromPeer...)
+	tampered[len(tampered)-1] ^= 0x80
+	us3, _ := NewMediaPipeline(callKey, selfLid, peerLid, ssrc, 960)
+	if _, _, ok = us3.UnprotectAudio(tampered); ok {
+		t.Error("recv must reject a packet with a tampered WARP MI tag")
+	}
+	if _, recovered, ok = us3.UnprotectAudio(fromPeer); !ok || !bytes.Equal(recovered, opus) {
+		t.Error("rejected packet must not poison receive rollover state")
 	}
 }
 

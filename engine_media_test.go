@@ -33,6 +33,23 @@ func TestVideoRtpDurationSamples(t *testing.T) {
 	}
 }
 
+func TestVideoPLIThrottleIsParticipantScoped(t *testing.T) {
+	lastSent := make(map[uint32]time.Time)
+	now := time.Unix(100, 0)
+	if !shouldSendVideoPLI(lastSent, 1, now) {
+		t.Fatal("first PLI was throttled")
+	}
+	if shouldSendVideoPLI(lastSent, 1, now.Add(videoPLIInterval-time.Millisecond)) {
+		t.Fatal("repeated PLI inside interval was sent")
+	}
+	if !shouldSendVideoPLI(lastSent, 2, now.Add(time.Millisecond)) {
+		t.Fatal("another participant's first PLI was throttled")
+	}
+	if !shouldSendVideoPLI(lastSent, 1, now.Add(videoPLIInterval)) {
+		t.Fatal("PLI at interval boundary remained throttled")
+	}
+}
+
 func TestVideoSenderStartsAtIDRAndUsesWhatsappHeaders(t *testing.T) {
 	callKey := iota32()
 	pipe, err := NewMediaPipeline(callKey, "111111111111111:0@lid", "222222222222222:0@lid", 0x55667788, FrameSamples)
@@ -121,9 +138,14 @@ func TestVideoSenderRecordsWireDiagnostics(t *testing.T) {
 		t.Fatalf("read video wire diagnostics: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{`"event":"access_unit"`, `"event":"packet"`, `"direction":"out"`, `"call_id":"test-call"`, `"header_hex":`, `"payload_hex":`, `"protected_hex":`} {
+	for _, want := range []string{`"event":"access_unit"`, `"event":"packet"`, `"direction":"out"`, `"call_id":"test-call"`, `"header_hex":`, `"payload_bytes":`, `"protected_bytes":`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("video wire diagnostics missing %s: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{`"payload_hex":`, `"protected_hex":`, `"annexb_hex":`} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("video wire diagnostics exposed sensitive media in %s", text)
 		}
 	}
 }

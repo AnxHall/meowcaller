@@ -60,3 +60,17 @@ func AppendWarpMITag(authKey, packetWithoutTag []byte, roc uint32, tagLen int, l
 	lg.Trace().Int("packet_bytes", len(packetWithoutTag)).Uint32("roc", roc).Int("tag_len", tagLen).Int("total_bytes", len(out)).Msg("appended warp mi tag")
 	return out
 }
+
+// VerifyWarpMITag authenticates a protected WARP packet and its rollover counter.
+func VerifyWarpMITag(authKey, packetWithoutTag []byte, roc uint32, tagLen int, receivedTag []byte, log ...zerolog.Logger) bool {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/2f001b5a3d6374cc5cf7177792c2a81f87a54080/wacore/src/voip/warp.rs#L45-L58
+	lg := pickLog(log)
+	if tagLen <= 0 || tagLen > sha1.Size || len(receivedTag) != tagLen {
+		lg.Debug().Int("tag_len", tagLen).Int("received_tag_len", len(receivedTag)).Msg("WARP MI tag length rejected")
+		return false
+	}
+	expected := ComputeWarpMITag(authKey, packetWithoutTag, roc, tagLen, lg)
+	ok := hmac.Equal(expected, receivedTag)
+	lg.Trace().Bool("authenticated", ok).Uint32("roc", roc).Int("packet_bytes", len(packetWithoutTag)).Int("tag_len", tagLen).Msg("verified WARP MI tag")
+	return ok
+}

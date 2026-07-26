@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 )
@@ -158,6 +159,38 @@ func TestSrtcpRoundTripsAndAuthenticates(t *testing.T) {
 	}
 }
 
+func TestDeriveE2eSRTCPKeysFromRawMatchesRawRootDerivation(t *testing.T) {
+	rawE2E := make([]byte, 32)
+	for i := range rawE2E {
+		rawE2E[i] = byte(0xa0 + i)
+	}
+	const participantID = "111111111111111:14@lid"
+
+	got, err := DeriveE2eSRTCPKeysFromRaw(rawE2E, participantID)
+	if err != nil {
+		t.Fatalf("derive SRTCP keys from raw E2E root: %v", err)
+	}
+	if want := mustHex(t, "96ec6c38976e1561a01929ef61627fd9"); !bytes.Equal(got.CipherKey[:], want) {
+		t.Fatalf("raw-root SRTCP cipher key = %x, want %x", got.CipherKey, want)
+	}
+	if want := mustHex(t, "b033e3437b17edaa45863a19a6a3969633353bc7"); !bytes.Equal(got.AuthKey[:], want) {
+		t.Fatalf("raw-root SRTCP auth key = %x, want %x", got.AuthKey, want)
+	}
+	if want := mustHex(t, "d66012ec5832edc623a9fd742ff1"); !bytes.Equal(got.Salt[:], want) {
+		t.Fatalf("raw-root SRTCP salt = %x, want %x", got.Salt, want)
+	}
+	want, err := DeriveE2eSrtcpKeys(rawE2E, participantID)
+	if err != nil {
+		t.Fatalf("derive equivalent SRTCP keys: %v", err)
+	}
+	if got != want {
+		t.Fatalf("raw-root SRTCP keys = %#v, want %#v", got, want)
+	}
+	if _, err = DeriveE2eSRTCPKeysFromRaw(rawE2E[:31], participantID); !errors.Is(err, errShortKey) {
+		t.Fatalf("short raw-root error = %v, want %v", err, errShortKey)
+	}
+}
+
 // TestRocTrackerWraps exercises both the send-side monotonic tracker and the
 // recv-side guess estimator across wraps, reorder dips, and late packets.
 func TestRocTrackerWraps(t *testing.T) {
@@ -209,5 +242,58 @@ func TestRocTrackerWraps(t *testing.T) {
 	}
 	if got := rx.GuessRoc(0x0001); got != 2 {
 		t.Errorf("state not corrupted by late packet: roc=%d, want 2", got)
+	}
+}
+
+func TestRecvRocEstimateCommitsOnlyAuthenticatedPacket(t *testing.T) {
+	var rx RecvRocTracker
+	if got := rx.EstimateRoc(0xFFFF); got != 0 {
+		t.Fatalf("initial estimate = %d, want 0", got)
+	}
+	if got := rx.EstimateRoc(0x0000); got != 0 {
+		t.Fatalf("uncommitted estimate mutated state: got %d, want 0", got)
+	}
+
+	roc := rx.EstimateRoc(0xFFFF)
+	rx.CommitRoc(roc, 0xFFFF)
+	if got := rx.EstimateRoc(0x0000); got != 1 {
+		t.Fatalf("authenticated wrap estimate = %d, want 1", got)
+	}
+
+	if got := rx.EstimateRoc(0x0001); got != 1 {
+		t.Fatalf("second uncommitted estimate = %d, want 1", got)
+	}
+	if got := rx.EstimateRoc(0x0000); got != 1 {
+		t.Fatalf("uncommitted estimate poisoned state: got %d, want 1", got)
+	}
+
+	rx.CommitRoc(1, 0x0000)
+	if got := rx.EstimateRoc(0x0001); got != 1 {
+		t.Fatalf("committed wrap state = %d, want 1", got)
+	}
+}
+
+func TestUnauthenticatedStaircaseCannotAdvanceROCWithoutCommit(t *testing.T) {
+	var rx RecvRocTracker
+	rx.GuessRoc(0x7FFE)
+	if rx.roc != 0 {
+		t.Fatalf("seeded ROC = %d, want 0", rx.roc)
+	}
+
+	_ = rx.EstimateRoc(0xFFFE)
+	_ = rx.EstimateRoc(0x7FFD)
+	if rx.roc != 0 {
+		t.Fatalf("estimate-only staircase advanced ROC to %d", rx.roc)
+	}
+	if got := rx.EstimateRoc(0x7FFF); got != 0 {
+		t.Fatalf("legitimate in-window estimate = %d, want 0", got)
+	}
+
+	roc := rx.EstimateRoc(0xFFFE)
+	rx.CommitRoc(roc, 0xFFFE)
+	roc = rx.EstimateRoc(0x7FFD)
+	rx.CommitRoc(roc, 0x7FFD)
+	if rx.roc != 1 {
+		t.Fatalf("committed staircase ROC = %d, want 1", rx.roc)
 	}
 }

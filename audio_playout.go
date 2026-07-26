@@ -79,6 +79,27 @@ func (p *audioPlayoutBuffer) Flush(sink AudioSink) error {
 	return err
 }
 
+func (p *audioPlayoutBuffer) Drain(sink AudioSink) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L20-L27
+	frames := append([][]float32(nil), p.prefill...)
+	if p.pending != nil {
+		frames = append(frames, p.pending.pcm)
+	}
+	p.pending = nil
+	p.prefill = nil
+	p.prefillSamples = 0
+	p.started = false
+	if sink == nil {
+		return nil
+	}
+	for _, frame := range frames {
+		if err := sink.WriteFrame(frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *audioPlayoutBuffer) reset(timestamp uint32, frame []float32) {
 	p.pending = &audioPlayoutFrame{timestamp: timestamp, pcm: frame}
 	p.prefill = nil

@@ -52,12 +52,19 @@ Core VoIP features are present:
 - Mid-call audio-to-video upgrade, acceptance, rejection, cancellation, and downgrade
 - Camera orientation and authenticated video keyframe feedback
 - Send and receive call emoji reactions over the dedicated RTC app-data stream
+- Experimental ad-hoc and group-bound group calls, including add/ring participant
+- Experimental reusable call links and approval waiting rooms
+- Experimental participant video/reactions, arbitrary emoji, hand state, and screen-share state
+
+The experimental group surface uses the latest upstream `go.mau.fi/whatsmeow`;
+it does not require a fork. See the
+[group-call feature guide](docs/whatsapp-group-call-features.md) and the
+`examples/web` browser test console.
 
 Things that are not yet implemented:
 
 - Opus codec fallback for clients not using MLOW (in progress; testing edge cases)
-- Group calls (WIP)
-- Call signalling features (raise hand, lobby)
+- Scheduled-call event messages (the call link itself is supported)
 
 ## Credits
 

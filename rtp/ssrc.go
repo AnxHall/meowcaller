@@ -20,6 +20,13 @@ const VideoSlotWord uint32 = 2
 // AppDataSlotWord is the relay stream slot for RTC app-data such as call reactions.
 const AppDataSlotWord uint32 = 6
 
+// HBHFECTXSlotWord and HBHFECRXSlotWord are the deterministic local hop-by-hop
+// FEC stream slots advertised when the relay switches to multi-party SFU mode.
+const (
+	HBHFECTXSlotWord uint32 = 7
+	HBHFECRXSlotWord uint32 = 8
+)
+
 // DeriveWasmParticipantSsrc derives a participant/stream SSRC:
 // HKDF-SHA256(salt=slotWord LE32, ikm=callID, info=lid, 4), read back as LE u32.
 func DeriveWasmParticipantSsrc(callID, lid string, slotWord uint32, log ...zerolog.Logger) (uint32, error) {

@@ -33,6 +33,7 @@ const (
 	CallPhaseConnecting
 	CallPhaseActive
 	CallPhaseEnded
+	CallPhaseWaitingRoom
 )
 
 // CallSession is the per-call signaling state with validated phase transitions.
@@ -110,6 +111,12 @@ func (s *CallSession) TransitionTo(next CallPhase) bool {
 		ok = true
 	case s.phase == CallPhaseRinging && next == CallPhaseConnecting:
 		ok = true
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
+	case (s.phase == CallPhaseCalling || s.phase == CallPhaseConnecting) &&
+		next == CallPhaseWaitingRoom:
+		ok = true
+	case s.phase == CallPhaseWaitingRoom && next == CallPhaseConnecting:
+		ok = true
 	case s.phase == CallPhaseConnecting && next == CallPhaseActive:
 		ok = true
 	case s.phase == next:
@@ -142,6 +149,8 @@ func phaseName(p CallPhase) string {
 		return "active"
 	case CallPhaseEnded:
 		return "ended"
+	case CallPhaseWaitingRoom:
+		return "waiting_room"
 	default:
 		return "unknown"
 	}
@@ -150,6 +159,7 @@ func phaseName(p CallPhase) string {
 // MediaPipeline composes the outbound (protect) and inbound (unprotect) E2E 1:1
 // media path. SFrame is omitted (plain Opus inside WAHKDF SRTP).
 type MediaPipeline struct {
+	sendMu       sync.Mutex
 	sendKeys     srtp.E2eSrtpKeys
 	recvKeys     srtp.E2eSrtpKeys
 	warpMITagLen int
@@ -166,15 +176,71 @@ type MediaPipeline struct {
 // RekeyRecv switches the receive keystream to the companion device that answered an
 // outgoing call. The send path remains keyed to this client's own LID.
 func (p *MediaPipeline) RekeyRecv(callKey []byte, peerJID string) error {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/aafac5cf46e770f59a1ef2f842d2404154038692/wacore/src/voip/session.rs#L171-L187
 	recvKeys, err := srtp.DeriveE2eKeys(callKey, rtp.FormatE2ESrtpParticipantID(peerJID))
 	if err != nil {
 		return err
 	}
+	p.installRecvKeys(recvKeys)
+	return nil
+}
+
+// RekeyRecvFromRaw switches the receive keystream to a participant's keygen-v2
+// raw E2E key. The send path remains unchanged.
+func (p *MediaPipeline) RekeyRecvFromRaw(rawE2E []byte, peerJID string) error {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/aafac5cf46e770f59a1ef2f842d2404154038692/wacore/src/voip/session.rs#L171-L187
+	recvKeys, err := srtp.DeriveE2eKeysFromRaw(rawE2E, rtp.FormatE2ESrtpParticipantID(peerJID))
+	if err != nil {
+		return err
+	}
+	p.installRecvKeys(recvKeys)
+	return nil
+}
+
+// RekeySendFromRaw switches the send keystream to a shared keygen-v2 raw epoch
+// derived with this client's own participant ID.
+func (p *MediaPipeline) RekeySendFromRaw(rawE2E []byte, selfJID string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L56-L64
+	sendKeys, err := srtp.DeriveE2eKeysFromRaw(rawE2E, rtp.FormatE2ESrtpParticipantID(selfJID))
+	if err != nil {
+		return err
+	}
+	p.installSendKeys(sendKeys)
+	return nil
+}
+
+// RekeyRecvFromRawPreservingROC switches the receive keystream to a shared
+// keygen-v2 raw epoch while retaining the continuing RTP stream's ROC state.
+func (p *MediaPipeline) RekeyRecvFromRawPreservingROC(rawE2E []byte, peerJID string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L56-L64
+	recvKeys, err := srtp.DeriveE2eKeysFromRaw(rawE2E, rtp.FormatE2ESrtpParticipantID(peerJID))
+	if err != nil {
+		return err
+	}
+	p.installRecvKeysPreservingROC(recvKeys)
+	return nil
+}
+
+func (p *MediaPipeline) installSendKeys(sendKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	p.sendKeys = sendKeys
+	p.sendMu.Unlock()
+}
+
+func (p *MediaPipeline) installRecvKeysPreservingROC(recvKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.recvMu.Lock()
+	p.recvKeys = recvKeys
+	p.recvMu.Unlock()
+}
+
+func (p *MediaPipeline) installRecvKeys(recvKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/aafac5cf46e770f59a1ef2f842d2404154038692/wacore/src/voip/session.rs#L171-L187
 	p.recvMu.Lock()
 	p.recvKeys = recvKeys
 	p.recvRoc = srtp.RecvRocTracker{}
 	p.recvMu.Unlock()
-	return nil
 }
 
 // NewMediaPipeline derives both directions from the 32-byte callKey: send keys from
@@ -208,6 +274,9 @@ func NewMediaPipeline(callKey []byte, selfJID, peerJID string, ssrc, samplesPerP
 // appends the WARP MI tag.
 func (p *MediaPipeline) ProtectAudio(opusPayload []byte) ([]byte, error) {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/src/voip/session.rs#L136-L150
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
 	header := p.stream.NextPacket(opusPayload, false)
 	roc := p.sendRoc.Advance(header.SequenceNumber)
 	packet := rtp.EncodeRtpHeader(&header)
@@ -232,6 +301,9 @@ func (p *MediaPipeline) ProtectAudio(opusPayload []byte) ([]byte, error) {
 //
 // NOT VALIDATED: the video send media path is unproven.
 func (p *MediaPipeline) ProtectRTP(header *rtp.RtpHeader, payload []byte) ([]byte, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
 	roc := p.sendRoc.Advance(header.SequenceNumber)
 	packet := rtp.EncodeRtpHeader(header)
 	encrypted, err := srtp.CryptPayload(&p.sendKeys, header.Ssrc, header.SequenceNumber, roc, payload)
@@ -256,9 +328,9 @@ func (p *MediaPipeline) SenderStats() rtp.RtcpSenderStats {
 	}
 }
 
-// UnprotectAudio strips the WARP MI tag (not verified), parses the header, and
+// UnprotectAudio authenticates and strips the WARP MI tag, parses the header, and
 // decrypts the payload, guessing the ROC from the recv tracker. ok=false on a
-// malformed packet.
+// malformed or unauthenticated packet.
 func (p *MediaPipeline) UnprotectAudio(packet []byte) (rtp.RtpHeader, []byte, bool) {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/src/voip/session.rs#L155-L175
 	if len(packet) < 12+p.warpMITagLen {
@@ -277,7 +349,15 @@ func (p *MediaPipeline) UnprotectAudio(packet []byte) (rtp.RtpHeader, []byte, bo
 		return rtp.RtpHeader{}, nil, false
 	}
 	p.recvMu.Lock()
-	roc := p.recvRoc.GuessRoc(header.SequenceNumber)
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/2f001b5a3d6374cc5cf7177792c2a81f87a54080/wacore/src/voip/session.rs#L239-L250
+	roc := p.recvRoc.EstimateRoc(header.SequenceNumber)
+	tag := packet[len(withoutTag):]
+	if !srtp.VerifyWarpMITag(p.recvKeys.AuthKey[:], withoutTag, roc, p.warpMITagLen, tag, p.log) {
+		p.recvMu.Unlock()
+		p.log.Debug().Uint32("ssrc", header.Ssrc).Uint16("seq", header.SequenceNumber).Uint32("roc", roc).Msg("unprotect: WARP MI authentication failed")
+		return rtp.RtpHeader{}, nil, false
+	}
+	p.recvRoc.CommitRoc(roc, header.SequenceNumber)
 	plain, err := srtp.CryptPayload(&p.recvKeys, header.Ssrc, header.SequenceNumber, roc, withoutTag[headerLen:])
 	p.recvMu.Unlock()
 	if err != nil {

@@ -140,23 +140,38 @@ func TestVideoStreamUsesOneTimestampPerAccessUnit(t *testing.T) {
 	}
 }
 
-func TestVideoRtpExtensionDisplayOrientation(t *testing.T) {
+func TestVideoRtpExtensionDisplayOrientationUsesCVOReceiverRotation(t *testing.T) {
 	tests := []struct {
 		frameInfo uint8
 		want      int
 	}{
 		{frameInfo: 0x20, want: 0},
-		{frameInfo: 0x21, want: 3},
+		{frameInfo: 0x21, want: 1},
 		{frameInfo: 0x22, want: 2},
-		{frameInfo: 0x23, want: 1},
-		{frameInfo: 0x33, want: 1},
-		{frameInfo: 0x0b, want: 1},
+		{frameInfo: 0x23, want: 3},
+		{frameInfo: 0x33, want: 3},
+		{frameInfo: 0x0b, want: 3},
 	}
 	for _, test := range tests {
 		extension := VideoRtpExtension{MediaFrameInfo: test.frameInfo}
 		if got := extension.DisplayOrientation(); got != test.want {
 			t.Errorf("frame info %#02x orientation = %d, want %d", test.frameInfo, got, test.want)
 		}
+	}
+}
+
+func TestParseCapturedVideoOrientationWithoutTransportSequence(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
+	packet := mustHex(t, "906100010003e77e0ba3152bdebe0002300b510000610002")
+	header, ok := ParseRtpHeader(packet)
+	if !ok {
+		t.Fatal("captured RTP header was rejected")
+	}
+	if header.VideoExtension == nil {
+		t.Fatal("captured orientation metadata was discarded")
+	}
+	if got := header.VideoExtension.DisplayOrientation(); got != 3 {
+		t.Fatalf("captured display orientation = %d, want 3", got)
 	}
 }
 
@@ -316,6 +331,39 @@ func TestWhatsappSenderReportCarriesReceptionState(t *testing.T) {
 	}
 }
 
+func TestGroupSenderReportMatchesAuthenticatedCapturePlaintext(t *testing.T) {
+	captured := mustHex(t, "81c8000e59754a60ee0e4948176163a50007d6ca000001310000bbe266fde7f100000000000000310000000000000000000000000000019000004650")
+	var sender [28]byte
+	copy(sender[:], captured[:28])
+	report := &RtcpReceptionReport{
+		Ssrc:                    0x66fde7f1,
+		ExtendedHighestSequence: 0x31,
+	}
+	var extension RTCPGroupReportExtension
+	copy(extension[:], captured[52:60])
+
+	got := buildGroupSenderReportFromSenderSection(sender, report, extension)
+	if !bytes.Equal(got, captured) {
+		t.Fatalf("group sender report = %x, want authenticated capture %x", got, captured)
+	}
+}
+
+func TestGroupSenderReportTreatsNilStatsAsZero(t *testing.T) {
+	report := &RtcpReceptionReport{Ssrc: 0x66fde7f1}
+
+	got := BuildGroupSenderReport(0x59754a60, nil, 0, report, RTCPGroupReportExtension{})
+
+	if len(got) != 60 {
+		t.Fatalf("group sender report length = %d, want 60", len(got))
+	}
+	if packets := binary.BigEndian.Uint32(got[20:24]); packets != 0 {
+		t.Fatalf("group sender report packets = %d, want 0", packets)
+	}
+	if octets := binary.BigEndian.Uint32(got[24:28]); octets != 0 {
+		t.Fatalf("group sender report octets = %d, want 0", octets)
+	}
+}
+
 func TestRtcpReceptionStatsTrackLossWrapAndSenderReport(t *testing.T) {
 	var reception RtcpReceptionStats
 	reception.Observe(0x12345678, 65534, 90000, 1000, 90000)
@@ -351,6 +399,17 @@ func TestRtcpRequestsVideoKeyframe(t *testing.T) {
 	}
 	if RtcpRequestsKeyframe(pli, 0x99990000) {
 		t.Fatal("PLI for another SSRC was accepted")
+	}
+}
+
+func TestBuildPictureLossIndication(t *testing.T) {
+	got := BuildPictureLossIndication(0x11112222, 0x55556666, true)
+	want := [12]byte{0x91, RtcpPtPsfb, 0, 2, 0x11, 0x11, 0x22, 0x22, 0x55, 0x55, 0x66, 0x66}
+	if got != want {
+		t.Fatalf("PLI = %x, want %x", got, want)
+	}
+	if !RtcpRequestsKeyframe(got[:], 0x55556666) {
+		t.Fatal("built PLI does not request its media SSRC")
 	}
 }
 

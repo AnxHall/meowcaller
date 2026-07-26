@@ -120,6 +120,34 @@ func TestAudioPlayoutResetsOnTimestampDiscontinuity(t *testing.T) {
 	}
 }
 
+func TestAudioPlayoutDrainHandsOffBufferedDirectFrames(t *testing.T) {
+	playout := newAudioPlayoutBuffer()
+	sink := &playoutTestSink{}
+	first := constantPCM(FrameSamples, 0.2)
+	second := constantPCM(FrameSamples, 0.3)
+	if _, err := playout.Push(0, first, sink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := playout.Push(FrameSamples, second, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.frames) != 0 {
+		t.Fatalf("prefill unexpectedly wrote %d frames", len(sink.frames))
+	}
+	if err := playout.Drain(sink); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if len(sink.frames) != 2 || len(sink.frames[0]) != FrameSamples || len(sink.frames[1]) != FrameSamples {
+		t.Fatalf("drained frame lengths = %v, want [%d %d]", frameLengths(sink.frames), FrameSamples, FrameSamples)
+	}
+	if sink.frames[0][0] != 0.2 || sink.frames[1][0] != 0.3 {
+		t.Fatalf("drained frame starts = [%f %f], want [0.2 0.3]", sink.frames[0][0], sink.frames[1][0])
+	}
+	if playout.pending != nil || len(playout.prefill) != 0 || playout.prefillSamples != 0 || playout.started {
+		t.Fatal("drain left direct playout state behind")
+	}
+}
+
 func frameLengths(frames [][]float32) []int {
 	lengths := make([]int, len(frames))
 	for i, frame := range frames {
