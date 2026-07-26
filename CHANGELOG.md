@@ -7,6 +7,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### web/group-features — `KAT-verified`
+
+- Added browser controls and persistent state for call-link creation/join,
+  approval waiting rooms, participant re-ring, hand state, arbitrary reactions,
+  and camera-preserving screen sharing.
+- Hardened independent participant video decoders, roster-driven renderer
+  cleanup, keyframe recovery, and display-source transitions. Focused web KATs
+  cover the HTTP, controller, SSE, and page contracts.
+
 ### diag/voip-capture — `KAT-verified`
 
 - Replaced the minimal extension with the headless VoIP-only v4 capture

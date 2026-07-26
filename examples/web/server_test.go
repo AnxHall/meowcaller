@@ -73,6 +73,35 @@ func TestVideoBridgeControlDispatchesReaction(t *testing.T) {
 	}
 }
 
+func TestVideoBridgeControlDispatchesCallLinkAndParticipantStateFields(t *testing.T) {
+	vb := &videoBridge{}
+	var got []vbControl
+	vb.OnControl(func(command vbControl) error {
+		got = append(got, command)
+		return nil
+	})
+	for _, body := range []string{
+		`{"action":"join_call_link_video","token":"TOKEN"}`,
+		`{"action":"start_screen_share","screen_share_id":1,"has_screen_share_id":true}`,
+		`{"action":"set_approval_required","enabled":true}`,
+		`{"action":"admit_waiting_user","user":"242653052539031@lid"}`,
+		`{"action":"deny_waiting_user","user":"15551234567@s.whatsapp.net"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/control", bytes.NewBufferString(body))
+		rec := httptest.NewRecorder()
+		vb.handleControl(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("%s status = %d", body, rec.Code)
+		}
+	}
+	if got[0].Token != "TOKEN" || !got[1].HasScreenShareID ||
+		got[1].ScreenShareID != 1 || !got[2].Enabled ||
+		got[3].User != "242653052539031@lid" ||
+		got[4].User != "15551234567@s.whatsapp.net" {
+		t.Fatalf("controls = %#v", got)
+	}
+}
+
 func TestVideoBridgeControlDispatchesParticipantTargets(t *testing.T) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 	vb := &videoBridge{}
@@ -94,6 +123,29 @@ func TestVideoBridgeControlDispatchesParticipantTargets(t *testing.T) {
 	if got.Action != "add_participants" || len(got.Targets) != 2 ||
 		got.Targets[0] != "15551234567" || got.Targets[1] != "15557654321" {
 		t.Fatalf("participant control = %+v", got)
+	}
+}
+
+func TestVideoBridgeControlDispatchesParticipantRing(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	vb := &videoBridge{}
+	var got vbControl
+	vb.OnControl(func(command vbControl) error {
+		got = command
+		return nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/control", bytes.NewBufferString(
+		`{"action":"ring_participant","target":"74170125783269@lid"}`,
+	))
+	rec := httptest.NewRecorder()
+
+	vb.handleControl(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if got.Action != "ring_participant" || got.Target != "74170125783269@lid" {
+		t.Fatalf("participant ring control = %+v", got)
 	}
 }
 

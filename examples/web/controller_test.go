@@ -25,6 +25,30 @@ func TestWebCallStatePreservesDisabledVideoState(t *testing.T) {
 	}
 }
 
+func TestWebWaitingRoomStateUsesBrowserFieldNames(t *testing.T) {
+	data, err := json.Marshal(webWaitingRoomState{
+		Event:   "waiting_room",
+		IsAdmin: true,
+		Users: []webWaitingRoomUser{{
+			JID:   types.NewJID("242653052539031", types.HiddenUserServer).String(),
+			PN:    types.NewJID("15551234567", types.DefaultUserServer).String(),
+			State: "waiting_room_joined",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		`"jid":"242653052539031@lid"`,
+		`"pn":"15551234567@s.whatsapp.net"`,
+		`"state":"waiting_room_joined"`,
+	} {
+		if !strings.Contains(string(data), field) {
+			t.Errorf("waiting-room payload %s does not contain %s", data, field)
+		}
+	}
+}
+
 func TestVideoBridgePageHidesPeerFramesWhileRemoteVideoIsOff(t *testing.T) {
 	for _, behavior := range []string{
 		"setRemoteVideoActive(false)",
@@ -297,6 +321,7 @@ func TestWebCallControllerAddParticipantsRequiresNormalizedTarget(t *testing.T) 
 		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
 			return meowcaller.CallPhaseActive
 		},
+		callVideo: func(*meowcaller.Call) bool { return true },
 	}
 
 	err := c.addParticipants([]string{" ", "\n"})
@@ -1435,5 +1460,252 @@ func TestVideoBridgePageKeepsParticipantInviteOutOfLifecycleHeader(t *testing.T)
 		if !strings.Contains(videoBridgePage, "s.event!=='"+event+"'") {
 			t.Fatalf("%s events can replace the lifecycle header", event)
 		}
+	}
+}
+
+func TestWebControllerCreatesAndPreviewsCallLinks(t *testing.T) {
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 4)
+	bridge.subs[events] = struct{}{}
+	controller := &webCallController{
+		ctx:    context.Background(),
+		bridge: bridge,
+		log:    zerolog.Nop(),
+		createCallLink: func(_ context.Context, opts meowcaller.CallLinkOptions) (meowcaller.CallLink, error) {
+			return meowcaller.CallLink{
+				Token: "TOKEN",
+				URL:   "https://call.whatsapp.com/video/TOKEN",
+				Video: opts.Video,
+			}, nil
+		},
+		previewCallLink: func(_ context.Context, token string, opts meowcaller.CallLinkOptions) (meowcaller.CallLinkPreview, error) {
+			return meowcaller.CallLinkPreview{
+				Token: token, Video: opts.Video, ApprovalRequired: true, IsAdmin: true,
+			}, nil
+		},
+	}
+	if err := controller.control(vbControl{Action: "create_call_link_video"}); err != nil {
+		t.Fatal(err)
+	}
+	created := <-events
+	if !strings.Contains(string(created.data), `"event":"call_link_created"`) ||
+		!strings.Contains(string(created.data), `"url":"https://call.whatsapp.com/video/TOKEN"`) {
+		t.Fatalf("created event = %s", created.data)
+	}
+	if err := controller.control(vbControl{
+		Action: "preview_call_link_video",
+		Token:  "TOKEN",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	preview := <-events
+	if !strings.Contains(string(preview.data), `"event":"call_link_preview"`) ||
+		!strings.Contains(string(preview.data), `"approval_required":true`) {
+		t.Fatalf("preview event = %s", preview.data)
+	}
+}
+
+func TestWebControllerDelegatesHandScreenAndWaitingRoomControls(t *testing.T) {
+	call := &meowcaller.Call{}
+	controller := &webCallController{
+		ctx:  context.Background(),
+		call: call,
+		log:  zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
+		callVideo: func(*meowcaller.Call) bool {
+			return true
+		},
+	}
+	var hand bool
+	var screen string
+	var approval bool
+	var admitted string
+	var denied string
+	controller.setHandRaised = func(_ *meowcaller.Call, raised bool) error {
+		hand = raised
+		return nil
+	}
+	controller.setScreenShare = func(_ *meowcaller.Call, active bool, _ *uint32) error {
+		if active {
+			screen = "started"
+		} else {
+			screen = "stopped"
+		}
+		return nil
+	}
+	controller.setApprovalRequired = func(_ context.Context, _ *meowcaller.Call, enabled bool) error {
+		approval = enabled
+		return nil
+	}
+	controller.admitWaitingUser = func(_ context.Context, _ *meowcaller.Call, user string) error {
+		admitted = user
+		return nil
+	}
+	controller.denyWaitingUser = func(_ context.Context, _ *meowcaller.Call, user string) error {
+		denied = user
+		return nil
+	}
+	for _, command := range []vbControl{
+		{Action: "raise_hand"},
+		{Action: "start_screen_share", ScreenShareID: 1, HasScreenShareID: true},
+		{Action: "stop_screen_share"},
+		{Action: "set_approval_required", Enabled: true},
+		{Action: "admit_waiting_user", User: "242653052539031@lid"},
+		{Action: "deny_waiting_user", User: "15551234567@s.whatsapp.net"},
+	} {
+		if err := controller.control(command); err != nil {
+			t.Fatalf("%s: %v", command.Action, err)
+		}
+	}
+	if !hand || screen != "stopped" || !approval ||
+		admitted != "242653052539031@lid" ||
+		denied != "15551234567@s.whatsapp.net" {
+		t.Fatalf(
+			"delegated state = hand:%t screen:%q approval:%t admitted:%q denied:%q",
+			hand, screen, approval, admitted, denied,
+		)
+	}
+}
+
+func TestWebControllerDelegatesParticipantRing(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	call := &meowcaller.Call{}
+	controller := &webCallController{
+		ctx:  context.Background(),
+		call: call,
+		log:  zerolog.Nop(),
+		callPhase: func(*meowcaller.Call) meowcaller.CallPhase {
+			return meowcaller.CallPhaseActive
+		},
+	}
+	var target string
+	controller.ringParticipant = func(_ context.Context, _ *meowcaller.Call, got string) error {
+		target = got
+		return nil
+	}
+	if err := controller.control(vbControl{
+		Action: "ring_participant",
+		Target: "74170125783269@lid",
+	}); err != nil {
+		t.Fatalf("ring_participant: %v", err)
+	}
+	if target != "74170125783269@lid" {
+		t.Fatalf("ring target = %q", target)
+	}
+}
+
+func TestWebGroupStateMarksOnlyDisconnectedParticipantsRingable(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	controller := &webCallController{
+		bridge:       bridge,
+		activeCallID: "CID",
+	}
+	controller.handleGroupState("CID", meowcaller.GroupCallState{
+		TransactionID: 41,
+		Participants: []meowcaller.GroupCallParticipant{
+			{JID: types.NewJID("156535032389744", types.HiddenUserServer), State: "connected"},
+			{JID: types.NewJID("74170125783269", types.HiddenUserServer), State: "invited"},
+		},
+	})
+	var state webGroupCallState
+	if err := json.Unmarshal(bridge.groupState, &state); err != nil {
+		t.Fatalf("decode group state: %v", err)
+	}
+	if len(state.Participants) != 2 {
+		t.Fatalf("participant count = %d", len(state.Participants))
+	}
+	if state.Participants[0].CanRing || !state.Participants[1].CanRing {
+		t.Fatalf("ring capabilities = connected:%t invited:%t",
+			state.Participants[0].CanRing, state.Participants[1].CanRing)
+	}
+}
+
+func TestVideoBridgePageExposesCapturedGroupCallControls(t *testing.T) {
+	for _, behavior := range []string{
+		`id="callLink"`,
+		`id="generatedCallLink"`,
+		`id="copyGeneratedCallLink"`,
+		`id="joinGeneratedCallLink"`,
+		"copyGeneratedCallLink",
+		"joinGeneratedCallLink",
+		"create_call_link_video",
+		"join_call_link_video",
+		`id="customReaction"`,
+		"raise_hand",
+		"lower_hand",
+		"start_screen_share",
+		"navigator.mediaDevices.getDisplayMedia",
+		"waiting_room",
+		"admit_waiting_user",
+		"deny_waiting_user",
+		"approve.textContent='Approve'",
+		"reject.textContent='Reject'",
+		"u.state==='waiting_room_joined'",
+		"{user:u.jid}",
+		`id="participantRoster"`,
+		"ring_participant",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("page does not contain %q", behavior)
+		}
+	}
+}
+
+func TestVideoBridgeSignalsScreenShareBeforeDisplayFrames(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L45-L48
+	signalAt := strings.Index(videoBridgePage, "await control('start_screen_share'")
+	captureAt := strings.Index(videoBridgePage, "await startCapture(display")
+	if signalAt < 0 || captureAt < 0 || signalAt >= captureAt {
+		t.Fatalf("screen-share start order = signal:%d capture:%d", signalAt, captureAt)
+	}
+}
+
+func TestVideoBridgeResetsDecodersAcrossErrorsAndSourceSwitches(t *testing.T) {
+	for _, behavior := range []string{
+		"function resetRemoteDecoder()",
+		"function resetParticipantDecoder(r)",
+		"function getParticipantDecoder(r)",
+		"error:e=>{resetRemoteDecoder();log('decoder',e.message)}",
+		"error:e=>{resetParticipantDecoder(r);log('participant decoder',r.key,e.message)}",
+		"if(!groupMode)resetRemoteDecoder()",
+		"resetParticipantDecoder(r);refreshParticipantLabel(r)",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("decoder recovery does not contain %q", behavior)
+		}
+	}
+}
+
+func TestVideoBridgeKeepsRosterParticipantStateWithoutVideoTiles(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L45-L48
+	for _, behavior := range []string{
+		"screenSharers.has(p.jid)",
+		"renderParticipantRoster()",
+		"sharing?' · sharing screen':''",
+	} {
+		if !strings.Contains(videoBridgePage, behavior) {
+			t.Errorf("participant roster state does not contain %q", behavior)
+		}
+	}
+}
+
+func TestVideoBridgeCompensatesFailedScreenCaptureAndPreservesFailedStop(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L45-L48
+	if !strings.Contains(videoBridgePage, "if(screenShareStarted)await control('stop_screen_share')") {
+		t.Fatal("screen-capture failure has no compensating stop signal")
+	}
+	stopStart := strings.Index(videoBridgePage, "async function stopScreenShare()")
+	stopEnd := strings.Index(videoBridgePage[stopStart:], "async function startScreenShare()")
+	if stopStart < 0 || stopEnd < 0 {
+		t.Fatal("screen-share functions unavailable")
+	}
+	stopBody := videoBridgePage[stopStart : stopStart+stopEnd]
+	signalAt := strings.Index(stopBody, "await control('stop_screen_share')")
+	clearAt := strings.Index(stopBody, "sharingScreen=false")
+	if signalAt < 0 || clearAt < 0 || signalAt >= clearAt {
+		t.Fatalf("stop screen-share order = signal:%d clear:%d", signalAt, clearAt)
 	}
 }

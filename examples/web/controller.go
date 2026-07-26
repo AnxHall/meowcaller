@@ -50,10 +50,50 @@ type webGroupCallState struct {
 }
 
 type webGroupCallParticipant struct {
-	JID     string               `json:"jid"`
-	PN      string               `json:"pn,omitempty"`
-	State   string               `json:"state"`
-	Devices []webGroupCallDevice `json:"devices"`
+	JID        string               `json:"jid"`
+	PN         string               `json:"pn,omitempty"`
+	State      string               `json:"state"`
+	HandRaised bool                 `json:"hand_raised"`
+	CanRing    bool                 `json:"can_ring"`
+	Devices    []webGroupCallDevice `json:"devices"`
+}
+
+type webCallLinkState struct {
+	Event            string `json:"event"`
+	Token            string `json:"token,omitempty"`
+	URL              string `json:"url,omitempty"`
+	Video            bool   `json:"video"`
+	ApprovalRequired bool   `json:"approval_required"`
+	IsAdmin          bool   `json:"is_admin"`
+	Creator          string `json:"creator,omitempty"`
+}
+
+type webWaitingRoomState struct {
+	Event         string               `json:"event"`
+	CallID        string               `json:"call_id"`
+	Enabled       bool                 `json:"enabled"`
+	IsAdmin       bool                 `json:"is_admin"`
+	InWaitingRoom bool                 `json:"in_waiting_room"`
+	TransactionID uint32               `json:"transaction_id"`
+	Users         []webWaitingRoomUser `json:"users"`
+}
+
+type webWaitingRoomUser struct {
+	JID   string `json:"jid"`
+	PN    string `json:"pn,omitempty"`
+	State string `json:"state"`
+}
+
+type webParticipantState struct {
+	Event            string `json:"event"`
+	CallID           string `json:"call_id"`
+	Participant      string `json:"participant"`
+	Raised           bool   `json:"raised"`
+	Active           bool   `json:"active"`
+	Version          uint32 `json:"version,omitempty"`
+	ScreenShareID    uint32 `json:"screen_share_id,omitempty"`
+	HasScreenShareID bool   `json:"has_screen_share_id,omitempty"`
+	Synthetic        bool   `json:"synthetic,omitempty"`
 }
 
 type webGroupCallDevice struct {
@@ -91,13 +131,22 @@ type webCallController struct {
 	dialCall                  func(context.Context, string, meowcaller.CallOptions) (*meowcaller.Call, error)
 	startGroupCall            func(context.Context, []string, meowcaller.GroupCallOptions) (*meowcaller.Call, error)
 	startGroupCallByID        func(context.Context, string, meowcaller.GroupCallOptions) (*meowcaller.Call, error)
+	createCallLink            func(context.Context, meowcaller.CallLinkOptions) (meowcaller.CallLink, error)
+	previewCallLink           func(context.Context, string, meowcaller.CallLinkOptions) (meowcaller.CallLinkPreview, error)
+	joinCallLink              func(context.Context, string, meowcaller.CallLinkOptions) (*meowcaller.Call, error)
 	inviteParticipants        func(context.Context, *meowcaller.Call, ...string) []error
+	ringParticipant           func(context.Context, *meowcaller.Call, string) error
 	callPhase                 func(*meowcaller.Call) meowcaller.CallPhase
 	callVideo                 func(*meowcaller.Call) bool
 	startCallVideo            func(*meowcaller.Call) error
 	acceptCallVideo           func(*meowcaller.Call) error
 	stopCallVideo             func(*meowcaller.Call) error
 	setCallVideoEnabled       func(*meowcaller.Call, bool) error
+	setHandRaised             func(*meowcaller.Call, bool) error
+	setScreenShare            func(*meowcaller.Call, bool, *uint32) error
+	setApprovalRequired       func(context.Context, *meowcaller.Call, bool) error
+	admitWaitingUser          func(context.Context, *meowcaller.Call, string) error
+	denyWaitingUser           func(context.Context, *meowcaller.Call, string) error
 	listenGroupState          func(*meowcaller.Call, func(meowcaller.GroupCallState))
 	attachMedia               func(*meowcaller.Call) error
 	attachCall                func(*meowcaller.Call) error
@@ -119,6 +168,9 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 		ctx: ctx, client: client, bridge: bridge, log: log,
 		inviteParticipants: func(ctx context.Context, call *meowcaller.Call, targets ...string) []error {
 			return call.AddParticipants(ctx, targets...)
+		},
+		ringParticipant: func(ctx context.Context, call *meowcaller.Call, target string) error {
+			return call.RingParticipant(ctx, target)
 		},
 		callPhase: func(call *meowcaller.Call) meowcaller.CallPhase {
 			return call.State()
@@ -146,6 +198,9 @@ func newWebCallController(ctx context.Context, client *meowcaller.Client, bridge
 	c.dialCall = client.CallWithOptions
 	c.startGroupCall = client.GroupCallWithOptions
 	c.startGroupCallByID = client.GroupCallByIDWithOptions
+	c.createCallLink = client.CreateCallLink
+	c.previewCallLink = client.PreviewCallLink
+	c.joinCallLink = client.JoinCallLink
 	bridge.OnControl(c.control)
 	bridge.OnFrame(c.sendVideoFrame)
 	client.OnIncomingCall(c.onIncomingCall)
@@ -210,6 +265,35 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 			PID: reaction.PID, HasPID: reaction.HasPID, Removed: reaction.Removed,
 		})
 	})
+	call.OnWaitingRoomState(func(state meowcaller.WaitingRoomState) {
+		users := make([]webWaitingRoomUser, len(state.Users))
+		for i, user := range state.Users {
+			users[i] = webWaitingRoomUser{
+				JID: user.JID.String(), PN: user.PN.String(), State: user.State,
+			}
+		}
+		c.bridge.PublishEvent(webWaitingRoomState{
+			Event: "waiting_room", CallID: call.ID(),
+			Enabled: state.Enabled, IsAdmin: state.IsAdmin,
+			InWaitingRoom: state.InWaitingRoom,
+			TransactionID: state.TransactionID,
+			Users:         users,
+		})
+	})
+	call.OnHandRaise(func(state meowcaller.HandRaiseState) {
+		c.bridge.PublishEvent(webParticipantState{
+			Event: "hand_raise", CallID: call.ID(),
+			Participant: state.Participant.String(), Raised: state.Raised,
+		})
+	})
+	call.OnScreenShare(func(state meowcaller.ScreenShareState) {
+		c.bridge.PublishEvent(webParticipantState{
+			Event: "screen_share", CallID: call.ID(),
+			Participant: state.Participant.String(), Active: state.Active,
+			Version: state.Version, ScreenShareID: state.ScreenShareID,
+			HasScreenShareID: state.HasScreenShareID, Synthetic: state.Synthetic,
+		})
+	})
 	listenGroupState := c.listenGroupState
 	if listenGroupState == nil {
 		listenGroupState = func(call *meowcaller.Call, listener func(meowcaller.GroupCallState)) {
@@ -229,10 +313,33 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 	call.OnReady(func() {
 		c.publish(webCallState{Event: "ready", CallID: call.ID(), Peer: call.Peer().String(), Video: call.IsVideo()})
 	})
+	var mediaOnce sync.Once
+	attachMedia := func() error {
+		var attachErr error
+		mediaOnce.Do(func() {
+			if c.attachMedia != nil {
+				attachErr = c.attachMedia(call)
+				return
+			}
+			if err := wireMic(call); err != nil {
+				attachErr = err
+				return
+			}
+			attachErr = wireSpeaker(call)
+		})
+		return attachErr
+	}
 	call.OnStateChange(func(phase meowcaller.CallPhase) {
 		c.publish(webCallState{
 			Event: "phase", CallID: call.ID(), Peer: call.Peer().String(), Phase: int(phase), Video: call.IsVideo(),
 		})
+		if phase != meowcaller.CallPhaseWaitingRoom && phase != meowcaller.CallPhaseEnded {
+			if err := attachMedia(); err != nil {
+				c.publish(webCallState{
+					Event: "media_error", CallID: call.ID(), Message: err.Error(),
+				})
+			}
+		}
 	})
 	call.OnEnd(func(reason string) {
 		c.mu.Lock()
@@ -256,13 +363,10 @@ func (c *webCallController) attach(call *meowcaller.Call) error {
 		c.mu.Unlock()
 		c.publish(webCallState{Event: "ended", CallID: call.ID(), Peer: call.Peer().String(), Message: reason})
 	})
-	if c.attachMedia != nil {
-		return c.attachMedia(call)
+	if call.State() == meowcaller.CallPhaseWaitingRoom {
+		return nil
 	}
-	if err := wireMic(call); err != nil {
-		return err
-	}
-	return wireSpeaker(call)
+	return attachMedia()
 }
 
 func (c *webCallController) sendVideoFrame(accessUnit []byte) {
@@ -352,9 +456,121 @@ func (c *webCallController) control(command vbControl) error {
 			Emoji: command.Emoji, Sender: "self", Removed: command.Emoji == "",
 		})
 		return nil
+	case "create_call_link_audio", "create_call_link_video":
+		if c.createCallLink == nil {
+			return errors.New("call-link signaling is unavailable")
+		}
+		video := command.Action == "create_call_link_video"
+		link, err := c.createCallLink(c.ctx, meowcaller.CallLinkOptions{Video: video})
+		if err != nil {
+			return err
+		}
+		c.bridge.PublishEvent(webCallLinkState{
+			Event: "call_link_created", Token: link.Token, URL: link.URL, Video: link.Video,
+		})
+		return nil
+	case "preview_call_link_audio", "preview_call_link_video":
+		if c.previewCallLink == nil {
+			return errors.New("call-link signaling is unavailable")
+		}
+		video := command.Action == "preview_call_link_video"
+		preview, err := c.previewCallLink(
+			c.ctx,
+			strings.TrimSpace(command.Token),
+			meowcaller.CallLinkOptions{Video: video},
+		)
+		if err != nil {
+			return err
+		}
+		c.bridge.PublishEvent(webCallLinkState{
+			Event: "call_link_preview", Token: preview.Token, Video: preview.Video,
+			ApprovalRequired: preview.ApprovalRequired, IsAdmin: preview.IsAdmin,
+			Creator: preview.Creator.String(),
+		})
+		return nil
+	case "join_call_link_audio", "join_call_link_video":
+		return c.joinLink(command.Token, command.Action == "join_call_link_video")
+	case "set_approval_required":
+		call, err := c.activeCall()
+		if err != nil {
+			return err
+		}
+		if c.setApprovalRequired != nil {
+			return c.setApprovalRequired(c.ctx, call, command.Enabled)
+		}
+		return call.SetApprovalRequired(c.ctx, command.Enabled)
+	case "admit_waiting_user", "deny_waiting_user":
+		call, err := c.activeCall()
+		if err != nil {
+			return err
+		}
+		user := strings.TrimSpace(command.User)
+		if user == "" {
+			return errors.New("waiting-room user is required")
+		}
+		if command.Action == "admit_waiting_user" {
+			if c.admitWaitingUser != nil {
+				return c.admitWaitingUser(c.ctx, call, user)
+			}
+			return call.AdmitParticipant(c.ctx, user)
+		}
+		if c.denyWaitingUser != nil {
+			return c.denyWaitingUser(c.ctx, call, user)
+		}
+		return call.DenyParticipant(c.ctx, user)
+	case "raise_hand", "lower_hand":
+		call, err := c.activeCall()
+		if err != nil {
+			return err
+		}
+		raised := command.Action == "raise_hand"
+		if c.setHandRaised != nil {
+			return c.setHandRaised(call, raised)
+		}
+		return call.SetHandRaised(raised)
+	case "start_screen_share", "stop_screen_share":
+		call, err := c.activeCall()
+		if err != nil {
+			return err
+		}
+		active := command.Action == "start_screen_share"
+		if active {
+			callVideo := c.callVideo
+			if callVideo == nil {
+				callVideo = func(call *meowcaller.Call) bool { return call.IsVideo() }
+			}
+			if !callVideo(call) {
+				return errors.New("screen sharing requires active video")
+			}
+		}
+		var screenShareID *uint32
+		if command.HasScreenShareID {
+			value := command.ScreenShareID
+			screenShareID = &value
+		}
+		if c.setScreenShare != nil {
+			return c.setScreenShare(call, active, screenShareID)
+		}
+		if active {
+			return call.StartScreenShare(screenShareID)
+		}
+		return call.StopScreenShare()
 	case "add_participants":
 		// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 		return c.addParticipants(command.Targets)
+	case "ring_participant":
+		call, err := c.activeCall()
+		if err != nil {
+			return err
+		}
+		target := strings.TrimSpace(command.Target)
+		if target == "" {
+			return errors.New("ring target is required")
+		}
+		if c.ringParticipant != nil {
+			return c.ringParticipant(c.ctx, call, target)
+		}
+		return call.RingParticipant(c.ctx, target)
 	case "hangup":
 		call, err := c.activeCall()
 		if err != nil {
@@ -364,6 +580,57 @@ func (c *webCallController) control(command vbControl) error {
 	default:
 		return fmt.Errorf("unknown action %q", command.Action)
 	}
+}
+
+func (c *webCallController) joinLink(token string, video bool) error {
+	const reservation = "web-call-link-join-pending"
+
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("call-link token or URL is required")
+	}
+	if c.joinCallLink == nil {
+		return errors.New("call-link signaling is unavailable")
+	}
+	c.mu.Lock()
+	if c.call != nil || c.pending != nil || c.activeCallID != "" {
+		c.mu.Unlock()
+		return errors.New("another call is already active")
+	}
+	c.activeCallID = reservation
+	c.mu.Unlock()
+	call, err := c.joinCallLink(c.ctx, token, meowcaller.CallLinkOptions{Video: video})
+	if err != nil {
+		c.clearCallStartReservation(reservation)
+		return err
+	}
+	if call == nil {
+		c.clearCallStartReservation(reservation)
+		return errors.New("call-link join returned no call")
+	}
+	c.mu.Lock()
+	if c.activeCallID != reservation {
+		c.mu.Unlock()
+		_ = c.hangup(call)
+		return errors.New("call ownership changed while joining link")
+	}
+	c.call = call
+	c.activeCallID = call.ID()
+	c.mu.Unlock()
+	if err = c.attach(call); err != nil {
+		c.clearFailedCallStart(call)
+		_ = c.hangup(call)
+		return err
+	}
+	event := "call_link_joining"
+	if call.State() == meowcaller.CallPhaseWaitingRoom {
+		event = "waiting_room"
+	}
+	c.publish(webCallState{
+		Event: event, CallID: call.ID(), Peer: call.Peer().String(),
+		Phase: int(call.State()), Video: video,
+	})
+	return nil
 }
 
 func (c *webCallController) addParticipants(targets []string) error {
@@ -692,7 +959,9 @@ func (c *webCallController) handleGroupState(callID string, state meowcaller.Gro
 		}
 		webState.Participants[participantIndex] = webGroupCallParticipant{
 			JID: participant.JID.String(), PN: participant.PN.String(),
-			State: participant.State, Devices: devices,
+			State: participant.State, HandRaised: participant.HandRaised,
+			CanRing: participant.State != "" && participant.State != "connected",
+			Devices: devices,
 		}
 	}
 	if c.beforeGroupStatePublish != nil {
