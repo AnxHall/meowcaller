@@ -1,0 +1,263 @@
+{
+  "schema": "meowcaller.voip-analysis-index.v1",
+  "capture": {
+    "path": "diag/captures/call-link-e2e-v2-20260726-041034.jsonl",
+    "capture_version": 2,
+    "events": 20486,
+    "bytes": 24843973,
+    "sha256": "48bd3e71b3da3e3a0fcc954597de4f80208b4636f7ab4a5dabe1f7b7f8b16943",
+    "time_start": "2026-07-26T02:09:21.597Z",
+    "time_end": "2026-07-26T02:12:06.131Z",
+    "fresh_flow_start_line": 3631,
+    "fresh_flow_start_time": "2026-07-26T02:11:02.089Z"
+  },
+  "tabs": [
+    {
+      "tab_id": 818526425,
+      "role": "link_creator_and_waiting_room_admin",
+      "events": 9409,
+      "user_jid": "156535032389744@lid",
+      "device_jid": "156535032389744:15@lid"
+    },
+    {
+      "tab_id": 825906957,
+      "role": "link_joiner",
+      "events": 11055,
+      "user_jid": "242653052539031@lid",
+      "device_jid": "242653052539031:2@lid"
+    },
+    {
+      "tab_id": 818526431,
+      "role": "cdp_only",
+      "events": 22
+    }
+  ],
+  "link": {
+    "token": "PNtK9cGQ1OrmsKqnWPo0wN",
+    "media": "video",
+    "url": "https://call.whatsapp.com/video/PNtK9cGQ1OrmsKqnWPo0wN",
+    "creator_jid": "156535032389744@lid",
+    "creator_device_jid": "156535032389744:15@lid",
+    "created_by_tab": 818526425
+  },
+  "sessions": [
+    {
+      "call_id": "0067CBB85B113E16600396BD25346DB3",
+      "waiting_room_enabled": false,
+      "creator_join_ack_line": 4070,
+      "joiner_join_ack_line": 4735,
+      "joiner_admitted_immediately": true,
+      "ended_by_creator_line": 8482
+    },
+    {
+      "call_id": "00AF16E8F3C700B81311EE5A19EA7531",
+      "waiting_room_enabled": true,
+      "creator_join_ack_line": 12158,
+      "toggle_enabled_line": 12279,
+      "first_joiner_join_ack_line": 12768,
+      "first_waiting_room_update_line": 12790,
+      "deny_line": 12853,
+      "deny_terminate_line": 12857,
+      "second_joiner_join_ack_line": 13443,
+      "second_waiting_room_update_line": 13471,
+      "admit_line": 13527,
+      "admitted_group_update_joiner_line": 13542,
+      "admitted_group_update_admin_line": 13553
+    }
+  ],
+  "wire_protocol": {
+    "create": {
+      "request_tag": "link_create",
+      "request_route": "call",
+      "request_attributes": {
+        "media": "video"
+      },
+      "ack_type": "link_create",
+      "ack_returns": [
+        "media",
+        "token"
+      ]
+    },
+    "preview": {
+      "request_tag": "link_query",
+      "request_route": "call",
+      "request_attributes": [
+        "token",
+        "media"
+      ],
+      "ack_type": "link_query",
+      "ack_returns": [
+        "link_creator",
+        "link_creator_pn",
+        "media",
+        "token",
+        "waiting_room.enabled",
+        "waiting_room.is_admin"
+      ]
+    },
+    "join": {
+      "request_tag": "link_join",
+      "request_route": "call",
+      "request_children": [
+        "audio",
+        "video",
+        "net",
+        "capability"
+      ],
+      "ack_type": "link_join",
+      "approval_disabled_result": [
+        "group_info",
+        "waiting_room",
+        "uploadfieldstat",
+        "voip_settings"
+      ],
+      "approval_enabled_result": [
+        "waiting_room"
+      ]
+    },
+    "toggle": {
+      "request_tag": "waiting_room_toggle",
+      "request_route": "CALL_ID@call",
+      "request_attributes": [
+        "call-id",
+        "call-creator",
+        "enabled"
+      ],
+      "ack_type": "waiting_room_toggle"
+    },
+    "waiting_heartbeat": {
+      "request_tag": "heartbeat",
+      "request_route": "CALL_ID@call",
+      "type": "waiting_room",
+      "ack_type": "heartbeat"
+    },
+    "deny": {
+      "request_tag": "waiting_room_deny",
+      "request_route": "CALL_ID@call",
+      "request_child": "user jid",
+      "ack_type": "waiting_room_deny",
+      "joiner_result": "terminate reason=waiting_room_deny",
+      "admin_user_state": "waiting_room_terminated"
+    },
+    "admit": {
+      "request_tag": "waiting_room_admit",
+      "request_route": "CALL_ID@call",
+      "request_child": "user jid",
+      "ack_type": "waiting_room_admit",
+      "joiner_result": "group_update with relay allocation",
+      "admin_result": "group_update with rekey=1"
+    }
+  },
+  "phases": [
+    {
+      "name": "link_create_request",
+      "time": "2026-07-26T02:11:02.089Z",
+      "line": 3631
+    },
+    {
+      "name": "link_create_ack",
+      "time": "2026-07-26T02:11:02.524Z",
+      "line": 3636
+    },
+    {
+      "name": "creator_preview",
+      "time": "2026-07-26T02:11:07.112Z",
+      "line": 3761
+    },
+    {
+      "name": "creator_join_approval_off",
+      "time": "2026-07-26T02:11:10.389Z",
+      "line": 3995
+    },
+    {
+      "name": "second_user_join_approval_off",
+      "time": "2026-07-26T02:11:18.015Z",
+      "line": 4661
+    },
+    {
+      "name": "creator_rejoins_new_session",
+      "time": "2026-07-26T02:11:34.284Z",
+      "line": 12095
+    },
+    {
+      "name": "approval_enabled",
+      "time": "2026-07-26T02:11:35.466Z",
+      "line": 12202
+    },
+    {
+      "name": "joiner_enters_waiting_room",
+      "time": "2026-07-26T02:11:40.400Z",
+      "line": 12768
+    },
+    {
+      "name": "admin_denies_joiner",
+      "time": "2026-07-26T02:11:41.900Z",
+      "line": 12853
+    },
+    {
+      "name": "joiner_denied",
+      "time": "2026-07-26T02:11:41.963Z",
+      "line": 12857
+    },
+    {
+      "name": "joiner_reenters_waiting_room",
+      "time": "2026-07-26T02:11:47.957Z",
+      "line": 13443
+    },
+    {
+      "name": "admin_admits_joiner",
+      "time": "2026-07-26T02:11:49.149Z",
+      "line": 13527
+    },
+    {
+      "name": "joiner_receives_group_and_relay",
+      "time": "2026-07-26T02:11:49.307Z",
+      "line": 13542
+    },
+    {
+      "name": "admin_receives_group_rekey",
+      "time": "2026-07-26T02:11:49.345Z",
+      "line": 13553
+    }
+  ],
+  "source_counts": {
+    "wa-logger": 12325,
+    "wa-logger-raw": 3901,
+    "worker-hook": 1392,
+    "peer-connection": 934,
+    "cdp": 735,
+    "cdp-command": 405,
+    "wawap": 212,
+    "voip-stack": 190,
+    "media-devices": 144,
+    "page-input": 108,
+    "rtc-datachannel": 44,
+    "media-track": 36,
+    "audio-context": 32,
+    "call-model": 20,
+    "capture": 8
+  },
+  "observed": [
+    "Creating a video link sends link_create to the call service and receives the opaque token in the typed ACK.",
+    "Previewing a link is a link_query operation that returns creator identity, media type, approval state, and whether the querying account is the administrator.",
+    "Joining is a separate link_join operation carrying media capabilities.",
+    "With approval disabled, link_join returns group_info and the participant joins immediately.",
+    "With approval enabled, link_join returns only waiting-room call context and the client begins type=waiting_room heartbeats.",
+    "The administrator receives waiting_room_update entries with user state waiting_room_joined.",
+    "Denying sends waiting_room_deny and terminates the requester with reason waiting_room_deny.",
+    "Admitting sends waiting_room_admit and promotes the requester through an ordinary group_update, relay allocation, and membership rekey.",
+    "The link token remains stable while separate active sessions use different call IDs."
+  ],
+  "not_observed": [
+    "A waiting_room_toggle request with enabled=0.",
+    "waitingRoomAdmitAll.",
+    "Call-link revocation, deletion, or expiration.",
+    "An audio-link creation request.",
+    "A waiting-room timeout."
+  ],
+  "hypotheses": [
+    "Disabling approval uses the observed waiting_room_toggle shape with enabled=0; this needs a direct capture before treating it as proven.",
+    "Audio call links use the same link_create/query/join topology with media=audio and no video child in link_join.",
+    "The waiting-room heartbeat keeps the pending request alive and discoverable until admit, deny, timeout, or client departure."
+  ]
+}

@@ -1,0 +1,232 @@
+{
+  "schema": "meowcaller-group-call-analysis/v1",
+  "capture": {
+    "path": "diag/captures/whatsapp-20260724-222532.jsonl",
+    "capture_schema": "wa-voip-diag/v2",
+    "events": 19285,
+    "bytes": 26287992,
+    "sha256": "9d6463714430c55ddb3ccb95e153f1d06d11a1feea7a153d1ea95f39f48b6889",
+    "first_utc": "2026-07-24T20:24:19.405Z",
+    "last_utc": "2026-07-24T20:28:45.830Z",
+    "web_version": "2.3000.1043800089"
+  },
+  "call": {
+    "id": "0032CD59A427AD3B9B48F33A71C85FE8",
+    "creator_device": "74170125783269:43@lid",
+    "relay_uuid": "6A8PiepgzdOjjRhD",
+    "group_jid": null,
+    "call_id_continuous": true
+  },
+  "tabs": [
+    {
+      "tab_id": 818525627,
+      "session_id": "e6b948c1-6fd0-49f2-9aea-e6b930644d72",
+      "role": "creator_adder",
+      "user": "74170125783269@lid",
+      "device": "74170125783269:43@lid",
+      "pid": 1
+    },
+    {
+      "tab_id": 825906294,
+      "session_id": "412dd1ec-9874-449c-a927-321202c99c3a",
+      "role": "added_participant",
+      "user": "156535032389744@lid",
+      "device": "156535032389744:14@lid",
+      "pid": 2
+    }
+  ],
+  "participants": [
+    {
+      "alias": "A",
+      "role": "creator_adder",
+      "user": "74170125783269@lid",
+      "device": "74170125783269:43@lid",
+      "platform": "web",
+      "pid": 1,
+      "audio_ssrc": 1500858976,
+      "audio_ssrc_hex": "59754A60"
+    },
+    {
+      "alias": "B",
+      "role": "original_callee",
+      "user": "242653052539031@lid",
+      "device": "242653052539031@lid",
+      "platform": "iphone",
+      "pid": 0,
+      "audio_ssrc": 1674111746,
+      "audio_ssrc_hex": "63C8EB02"
+    },
+    {
+      "alias": "C",
+      "role": "added_participant",
+      "user": "156535032389744@lid",
+      "device": "156535032389744:14@lid",
+      "platform": "web",
+      "pid": 2,
+      "audio_ssrc": 1727916017,
+      "audio_ssrc_hex": "66FDE7F1"
+    }
+  ],
+  "phases": [
+    {
+      "name": "initial_offer",
+      "utc": "2026-07-24T20:27:17.737Z",
+      "line": 6729
+    },
+    {
+      "name": "one_to_one_connected",
+      "utc": "2026-07-24T20:27:20.339Z",
+      "line": 7750
+    },
+    {
+      "name": "invite_to_call",
+      "utc": "2026-07-24T20:27:37.191Z",
+      "line": 9448
+    },
+    {
+      "name": "group_offer_transaction_7",
+      "utc": "2026-07-24T20:27:37.482Z",
+      "line": 9572
+    },
+    {
+      "name": "invitee_receipt_transaction_9",
+      "utc": "2026-07-24T20:27:37.870Z",
+      "line": 9895
+    },
+    {
+      "name": "three_connected_transaction_14",
+      "utc": "2026-07-24T20:27:42.435Z",
+      "lines": [10293, 10302]
+    },
+    {
+      "name": "invitee_rekey_transaction_14",
+      "utc": "2026-07-24T20:27:42.531Z",
+      "lines": [10480, 10604]
+    },
+    {
+      "name": "original_peer_left_transaction_16",
+      "utc": "2026-07-24T20:27:47.979Z",
+      "lines": [13640, 13650]
+    },
+    {
+      "name": "creator_rekey_transaction_16",
+      "utc": "2026-07-24T20:27:48.087Z",
+      "line": 14135
+    },
+    {
+      "name": "added_endpoint_first_stack_rtp_from_creator",
+      "utc": "2026-07-24T20:27:43.329Z",
+      "line": 12631
+    },
+    {
+      "name": "bidirectional_group_rtp_worker_hook_visible",
+      "utc": "2026-07-24T20:27:48.149Z",
+      "lines": [15213, 15253, 15660]
+    },
+    {
+      "name": "group_ended_transaction_18",
+      "utc": "2026-07-24T20:27:51.073Z",
+      "lines": [17118, 17168]
+    }
+  ],
+  "relay": {
+    "shared": [
+      "uuid",
+      "relay_transaction_id",
+      "candidate_pool"
+    ],
+    "participant_specific": [
+      "self_pid",
+      "participant_uuid",
+      "tokens",
+      "relay_key",
+      "hbh_key",
+      "reflexive_endpoint"
+    ],
+    "transactions": [
+      {
+        "id": 1,
+        "group_transaction": 14,
+        "relays": ["zrh1c01", "mxp1c01", "fra3c01"]
+      },
+      {
+        "id": 2,
+        "group_transaction": 16,
+        "relays": ["zrh1c01", "mxp2c01", "fra5c02"]
+      }
+    ]
+  },
+  "media": {
+    "payload_type_audio": 120,
+    "streams": [
+      {
+        "sender": "A",
+        "receiver": "C",
+        "ssrc": 1500858976,
+        "first_received_sequence": 299,
+        "last_received_sequence": 323,
+        "received_packets": 25,
+        "first_received_utc": "2026-07-24T20:27:48.209Z"
+      },
+      {
+        "sender": "C",
+        "receiver": "A",
+        "ssrc": 1727916017,
+        "first_sent_sequence": 39,
+        "last_sent_sequence": 76,
+        "sent_packets": 38,
+        "first_sent_utc": "2026-07-24T20:27:48.149Z"
+      },
+      {
+        "sender": "B",
+        "receiver": "A",
+        "ssrc": 1674111746,
+        "first_received_sequence": 1,
+        "last_received_sequence": 168,
+        "received_packets": 168
+      }
+    ],
+    "added_endpoint_received_media_before_creator_rekey": true,
+    "worker_hook_bidirectional_visibility_after_creator_rekey": true,
+    "worker_hook_capture_gap": {
+      "creator_send_last_before_gap_sequence": 251,
+      "creator_send_first_after_gap_sequence": 299,
+      "last_before_gap_utc": "2026-07-24T20:27:42.473Z",
+      "first_after_gap_utc": "2026-07-24T20:27:48.182Z",
+      "interpretation": "channel recreation/capture visibility gap; not evidence of silence"
+    },
+    "codec": {
+      "name": "MLow",
+      "sample_rate_hz": 16000,
+      "channels": 1,
+      "frame_duration_ms": 60,
+      "target_bitrate_bps": 25000,
+      "dtx": true,
+      "fec": true,
+      "plc": true
+    }
+  },
+  "observed": [
+    "The 1:1 call is upgraded in place.",
+    "The call JID is a signaling address, not a second call ID.",
+    "The server replicates device-to-PID and device-to-SSRC state.",
+    "Relay credentials are participant-specific.",
+    "Only one endpoint receives rekey=1 per observed group transaction.",
+    "The selected endpoint sends enc_rekey directly to every other connected device.",
+    "RTP keeps sender SSRC and sequence continuity across receivers.",
+    "The added endpoint receives creator RTP before transaction-16 rekeying.",
+    "The later rekey coincides with stream recreation and a worker-hook capture gap.",
+    "Both captured official clients eventually exchange audio RTP."
+  ],
+  "hypotheses": [
+    "rekey=1 designates the originator of the next participant-key epoch.",
+    "PID values are reusable call-local slots.",
+    "Final summary connected labels describe historical participation."
+  ],
+  "implementation_gaps": [
+    "whatsmeow has no outbound group enc_rekey generation and fan-out.",
+    "whatsmeow does not parse or represent group_info rekey=1.",
+    "meowcaller cannot install a participant-scoped raw outbound send key.",
+    "The send-key transition is not coordinated with the roster transaction."
+  ]
+}

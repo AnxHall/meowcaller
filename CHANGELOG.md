@@ -7,6 +7,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### diag/voip-capture — `KAT-verified`
+
+- Replaced the minimal extension with the headless VoIP-only v4 capture
+  architecture, preserving capture schema v2 while omitting the general logging
+  UI and `.wslc` export surface.
+- Added focused hook, packaging, and WAM tests plus compact immutable-capture
+  indexes and observed-versus-inferred analysis notes for the researched group
+  call flows.
+
 ### media/group_video_reactions — `partial`
 - Specified additive group-video signaling, participant-attributed H.264 delivery,
   and sender-attributed reaction rendering. Existing authenticated group media

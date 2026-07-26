@@ -1,0 +1,211 @@
+{
+  "schema": "meowcaller.voip-analysis-index.v1",
+  "capture": {
+    "path": "diag/captures/group-call-multi-add-v2-20260723-135301.jsonl",
+    "capture_version": 2,
+    "events": 7192,
+    "bytes": 9572198,
+    "sha256": "a91028746497b58d962f14fe5ed4d8036f3ca1c7f2091af5caa52f8430947def"
+  },
+  "call": {
+    "call_id": "0013AE8E463F60BFE6A1AF5247556691",
+    "mode_before": "one_to_one_audio",
+    "mode_after": "ad_hoc_group_audio",
+    "group_jid_present": false,
+    "call_id_changed": false,
+    "relay_uuid": "4zU_x0oNjDRf-IHS"
+  },
+  "batch_behavior": {
+    "picker_targets": 2,
+    "invite_to_call_invocations": 2,
+    "offers": 2,
+    "combined_multi_invitee_offer_observed": false,
+    "invocation_spacing_ms": 30,
+    "server_canonical_merge_observed": true
+  },
+  "participants": [
+    {
+      "alias": "self",
+      "jid": "156535032389744@lid",
+      "active_device": "156535032389744:14@lid",
+      "platform": "web",
+      "pid": 1,
+      "outcome": "connected"
+    },
+    {
+      "alias": "original_peer",
+      "jid": "242653052539031@lid",
+      "active_device": "242653052539031@lid",
+      "platform": "iphone",
+      "pid": 0,
+      "outcome": "connected"
+    },
+    {
+      "alias": "invitee_a",
+      "jid": "74170125783269@lid",
+      "candidate_devices": [
+        "74170125783269@lid",
+        "74170125783269:43@lid",
+        "74170125783269:44@lid",
+        "74170125783269:45@lid"
+      ],
+      "active_device": "74170125783269@lid",
+      "platform": "android",
+      "pid": 2,
+      "outcome": "connected",
+      "primary_audio_ssrc": "0x913F26B0",
+      "rtp_observed": true
+    },
+    {
+      "alias": "invitee_b",
+      "jid": "9908623781998@lid",
+      "candidate_devices": [
+        "9908623781998@lid",
+        "9908623781998:63@lid",
+        "9908623781998:64@lid"
+      ],
+      "outcome": "receipt",
+      "pid": null,
+      "primary_audio_ssrc_reserved": "0x7E984B20",
+      "rtp_observed": false
+    }
+  ],
+  "invites": [
+    {
+      "invitee": "invitee_a",
+      "method_line": 2083,
+      "method_sequence": 20385,
+      "method_time": "2026-07-23T11:55:14.787Z",
+      "device_count": 4,
+      "offer_line": 2123,
+      "offer_time": "2026-07-23T11:55:14.837Z",
+      "offer_ack_transaction": 8,
+      "receipt_transaction": 10,
+      "connected_transaction": 23
+    },
+    {
+      "invitee": "invitee_b",
+      "method_line": 2105,
+      "method_sequence": 20401,
+      "method_time": "2026-07-23T11:55:14.817Z",
+      "device_count": 3,
+      "offer_line": 2319,
+      "offer_time": "2026-07-23T11:55:15.532Z",
+      "offer_ack_transaction": 17,
+      "receipt_transaction": 19,
+      "connected_transaction": null
+    }
+  ],
+  "transactions": [
+    {
+      "id": 8,
+      "line": 2202,
+      "time": "2026-07-23T11:55:15.152Z",
+      "states": {
+        "invitee_a": "outgoing"
+      }
+    },
+    {
+      "id": 10,
+      "line": 2305,
+      "time": "2026-07-23T11:55:15.526Z",
+      "states": {
+        "invitee_a": "receipt"
+      }
+    },
+    {
+      "id": 17,
+      "line": 2370,
+      "time": "2026-07-23T11:55:15.836Z",
+      "states": {
+        "invitee_a": "receipt",
+        "invitee_b": "outgoing"
+      }
+    },
+    {
+      "id": 19,
+      "line": 2440,
+      "time": "2026-07-23T11:55:16.311Z",
+      "states": {
+        "invitee_a": "receipt",
+        "invitee_b": "receipt"
+      }
+    },
+    {
+      "id": 23,
+      "line": 2788,
+      "time": "2026-07-23T11:55:20.777Z",
+      "relay_transaction": 1,
+      "states": {
+        "self": "connected",
+        "original_peer": "connected",
+        "invitee_a": "connected",
+        "invitee_b": "receipt"
+      }
+    },
+    {
+      "id": 25,
+      "line": 6013,
+      "time": "2026-07-23T11:55:36.376Z",
+      "states": {
+        "self": "invited",
+        "original_peer": "connected",
+        "invitee_a": "connected",
+        "invitee_b": "receipt"
+      }
+    },
+    {
+      "id": 26,
+      "line": 6956,
+      "time": "2026-07-23T11:55:38.132Z",
+      "states": {
+        "self": "invited",
+        "original_peer": "invited",
+        "invitee_a": "connected",
+        "invitee_b": "receipt"
+      }
+    },
+    {
+      "id": 27,
+      "line": 7042,
+      "time": "2026-07-23T11:55:39.570Z",
+      "event": "group_call_ended"
+    }
+  ],
+  "relay": {
+    "uuid_stable": true,
+    "relay_key_rotated": true,
+    "hbh_key_stable": true,
+    "tokens_rotated": true,
+    "auth_token_rotated": true,
+    "active_relay_stable": true,
+    "group_media_peer_count": 2,
+    "pending_invitees_excluded_from_media_peer_count": true
+  },
+  "keying": {
+    "rekey_transaction": 23,
+    "rekey_sender": "invitee_a",
+    "roster_records_processed": 4,
+    "connected_participant_keys_updated": 3,
+    "pending_invitee_key_updated": false
+  },
+  "timing_ms": {
+    "confirm_to_invitee_a_connected": 6304,
+    "invitee_a_offer_to_connected": 5940,
+    "confirm_to_local_hangup": 21730
+  },
+  "observed": [
+    "A two-person picker selection creates two singular inviteToCall calls.",
+    "Each invite has independent device fanout, offer, ack and receipt transactions.",
+    "The server merges independent invitation tracks into a canonical roster.",
+    "Only connected invitees receive PIDs, active media streams and SFrame updates.",
+    "RTP from an added participant is observed on its preallocated SSRC.",
+    "The local caller explicitly ends the call."
+  ],
+  "hypotheses": [
+    "The second offer's omitted state attributes are caused by an optimistic-update race.",
+    "Multiple invite operations are processed concurrently rather than merely queued rapidly.",
+    "Two accepting invitees may connect in one critical update.",
+    "Transaction number gaps carry no semantic meaning beyond server versioning."
+  ]
+}

@@ -1,0 +1,212 @@
+{
+  "schema": "meowcaller.voip-analysis-index.v1",
+  "capture": {
+    "path": "diag/captures/group-mobile-hand-raise-screen-share-v2-20260726-033924.jsonl",
+    "capture_version": 2,
+    "events": 14147,
+    "bytes": 21988664,
+    "sha256": "9ac05ee3161370020172ffeb5e4f5b3b066dcf049fdb1372cbc62e6e1e2e7248"
+  },
+  "tabs": [
+    {
+      "tab_id": 818526425,
+      "role": "call_creator_and_observer",
+      "events": 12606
+    },
+    {
+      "tab_id": 825906857,
+      "role": "nonparticipating_secondary_tab",
+      "events": 1541
+    }
+  ],
+  "call": {
+    "call_id": "006C151B7929963D0FE0DB9E0774817D",
+    "call_creator_device": "156535032389744:15@lid",
+    "initial_peer": "242653052539031@lid",
+    "added_peer": "74170125783269@lid",
+    "started_as": "one_to_one_audio",
+    "ended_as": "ad_hoc_group_video",
+    "server_created_group_call": true,
+    "group_jid_present": false,
+    "maximum_participant_count": 3,
+    "connected_limit": 32,
+    "codec": "H264"
+  },
+  "hand_raise": {
+    "sender": "242653052539031@lid",
+    "transport": "call signaling",
+    "outer_child": "user_action",
+    "action": "raise_hand",
+    "state_child": "raise_hand",
+    "state_attribute": "raise-hand-state",
+    "raise_value": 1,
+    "lower_value": 0,
+    "ack_type": "user_action",
+    "raises_received": 2,
+    "lowers_received": 1,
+    "participant_model_field": "is_hand_raised",
+    "reaction_app_data_used": false,
+    "emoji_transmitted": false
+  },
+  "screen_share": {
+    "sender": "242653052539031@lid",
+    "start_signal_received": "2026-07-26T01:48:39.332Z",
+    "receiver_started": "2026-07-26T01:48:39.374Z",
+    "receiver_stopped": "2026-07-26T01:48:42.449Z",
+    "active_duration_ms": 3063,
+    "version": 2,
+    "screenshare_state": 1,
+    "screen_share_id": 1,
+    "ack_type": "screen_share",
+    "codec": "H264",
+    "stream_role": 2,
+    "decoded_frames": 10,
+    "rendered_frames": 10,
+    "receive_bitrate_bps": 60825,
+    "average_decode_fps": 3.27,
+    "average_encoded_width": 347,
+    "average_encoded_height": 744,
+    "first_decoded_frame_ms": 482,
+    "last_observed_formats": [
+      {
+        "width": 448,
+        "height": 960
+      },
+      {
+        "width": 336,
+        "height": 720
+      }
+    ],
+    "explicit_stop_stanza_observed": false,
+    "stop_trigger": "screen_sharer_participant_left"
+  },
+  "screen_share_ssrcs": {
+    "participant_device": "242653052539031:0@lid",
+    "stream_id_0": [
+      "0x2AC2EB4F",
+      "0xA9DDF11E",
+      "0x7B9AFEB6"
+    ],
+    "stream_id_1": [
+      "0xA8C884D2",
+      "0x823F1868",
+      "0x7F6B606C"
+    ]
+  },
+  "current_code_comparison": {
+    "whatsmeow_branch": "rajeh/group-calls",
+    "whatsmeow_user_action_handler": false,
+    "whatsmeow_screen_share_handler": false,
+    "whatsmeow_typed_user_action_event": false,
+    "whatsmeow_typed_screen_share_event": false,
+    "whatsmeow_typed_ack_required": true,
+    "generic_ack_preserves_required_type": false,
+    "meowcaller_hand_raise_api": false,
+    "meowcaller_screen_share_api": false,
+    "web_hand_raise_control": false,
+    "web_screen_share_control": false,
+    "existing_reaction_support_reusable_for_hand_raise": false
+  },
+  "phases": [
+    {
+      "name": "direct_audio_call_started",
+      "time": "2026-07-26T01:47:44.897Z",
+      "line": 659
+    },
+    {
+      "name": "direct_audio_call_accepted",
+      "time": "2026-07-26T01:47:48.496Z",
+      "line": 2579
+    },
+    {
+      "name": "ad_hoc_group_update",
+      "time": "2026-07-26T01:48:06.397Z",
+      "line": 4276,
+      "transaction_id": 12,
+      "participant_count": 3
+    },
+    {
+      "name": "three_participants_connected",
+      "time": "2026-07-26T01:48:14.850Z",
+      "line": 5147
+    },
+    {
+      "name": "hand_raised",
+      "time": "2026-07-26T01:48:16.132Z",
+      "line": 6351,
+      "state": 1
+    },
+    {
+      "name": "hand_lowered",
+      "time": "2026-07-26T01:48:19.272Z",
+      "line": 6715,
+      "state": 0
+    },
+    {
+      "name": "hand_raised_again",
+      "time": "2026-07-26T01:48:20.643Z",
+      "line": 6835,
+      "state": 1
+    },
+    {
+      "name": "participant_model_confirms_hand_raised",
+      "time": "2026-07-26T01:48:31.956Z",
+      "line": 8508
+    },
+    {
+      "name": "mobile_screen_share_started",
+      "time": "2026-07-26T01:48:39.332Z",
+      "line": 10251,
+      "screenshare_state": 1,
+      "version": 2,
+      "screen_share_id": 1
+    },
+    {
+      "name": "screen_share_first_frame_latency_reported",
+      "time": "2026-07-26T01:48:42.608Z",
+      "line": 11705,
+      "relative_to_accept_ms": 482
+    },
+    {
+      "name": "screen_sharer_left_and_receiver_stopped",
+      "time": "2026-07-26T01:48:42.449Z",
+      "line": 11146
+    },
+    {
+      "name": "remaining_call_ended",
+      "time": "2026-07-26T01:48:44.347Z",
+      "line": 13206
+    }
+  ],
+  "source_counts": {
+    "wa-logger": 9320,
+    "worker-hook": 1676,
+    "wa-logger-raw": 1175,
+    "peer-connection": 1144,
+    "cdp": 420,
+    "wawap": 166,
+    "cdp-command": 132,
+    "voip-stack": 50,
+    "media-devices": 16,
+    "page-input": 16,
+    "rtc-datachannel": 14,
+    "audio-context": 8,
+    "call-model": 8,
+    "media-track": 2
+  },
+  "observed": [
+    "A direct audio call is converted in place into a server-created ad-hoc group call on the same call ID and without a group JID.",
+    "Raise hand is a user_action call signal, not a reaction emoji or RTP app-data payload.",
+    "raise-hand-state 1 raises the hand and 0 lowers it; each incoming user_action is acknowledged with ACK type user_action.",
+    "The participant model persists the final raised state as is_hand_raised=true.",
+    "The mobile screen-share start uses screen_share state 1, version 2, and screen_share_id 1.",
+    "The receiver acknowledges the screen-share signal with ACK type screen_share.",
+    "Mobile screen-share media is H.264 stream role 2 and produced 10 decoded and rendered frames.",
+    "The receiver stopped screen sharing when the sharing participant left; no explicit state-2 screen_share stanza was captured."
+  ],
+  "hypotheses": [
+    "Raise hand is exposed only for group calls because it feeds a group participant-ranking model; this capture does not test a one-to-one protocol rejection.",
+    "screen_share_id selects one of the preallocated screen-share stream identities or generations; its exact derivation is not established.",
+    "The call server may fan participant-originated user_action and screen_share signals out to other participants, but the mobile sender's original destination was not captured."
+  ]
+}

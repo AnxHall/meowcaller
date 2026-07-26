@@ -1,0 +1,221 @@
+{
+  "artifact": "compact index for whatsapp-20260723-100703.jsonl",
+  "snapshot": {
+    "kind": "immutable prefix of append-only active capture",
+    "lines": 15464,
+    "bytes": 17571607,
+    "sha256": "815be1406e6a4df5070ffad1f1be531df4b0ec580217de13a555b0750dec5e2e",
+    "jsonl_valid": true
+  },
+  "schemas": {
+    "meowcaller-wa-diagnostics/v1": 111,
+    "wa-voip-diag/v2": 15353
+  },
+  "v2_sources": {
+    "audio-context": 8,
+    "call-model": 12,
+    "capture": 4,
+    "cdp": 348,
+    "cdp-command": 245,
+    "media-devices": 24,
+    "media-track": 3,
+    "page-input": 42,
+    "peer-connection": 651,
+    "rtc-datachannel": 16,
+    "voip-stack": 70,
+    "wa-logger": 8545,
+    "wa-logger-raw": 1995,
+    "wawap": 114,
+    "worker-hook": 3276
+  },
+  "page_session": {
+    "id": "48a60759-5761-43e6-937e-ad2c8907b316",
+    "events": 9489,
+    "sequence_min": 1,
+    "sequence_max": 9489,
+    "duplicates": 0,
+    "missing": 0,
+    "web_version": "2.3000.1043690208",
+    "tab_id": 825905971
+  },
+  "call": {
+    "id": "00789FDA2E6B8842B8EFE01ABD5F5B3A",
+    "route": "00789FDA2E6B8842B8EFE01ABD5F5B3A@call",
+    "group_jid": "120363411251996986@g.us",
+    "creator_device": "156535032389744:14@lid",
+    "relay_uuid": "nfK81MNvSQ-FB8ES",
+    "self_participant_uuid": "UlZfKfSF",
+    "connected_limit": 32,
+    "start_utc": "2026-07-23T08:57:44.048Z",
+    "local_end_utc": "2026-07-23T08:58:50.859Z",
+    "server_end_utc": "2026-07-23T08:58:54.255Z",
+    "server_end_reason": "group_call_ended",
+    "server_summary_duration_ms": 70273
+  },
+  "participants": [
+    {
+      "role": "self/creator",
+      "user_lid": "156535032389744@lid",
+      "active_device": "156535032389744:14@lid",
+      "platform": "web",
+      "pid": 0
+    },
+    {
+      "role": "participant_a",
+      "user_lid": "242653052539031@lid",
+      "active_device": "242653052539031@lid",
+      "platform": "iphone",
+      "pid": 1
+    },
+    {
+      "role": "participant_b",
+      "user_lid": "74170125783269@lid",
+      "active_device": "74170125783269@lid",
+      "platform": "android",
+      "pid": 2
+    }
+  ],
+  "group_transactions": [
+    {
+      "id": 8,
+      "media": "audio",
+      "self": "connected",
+      "participant_a": "outgoing",
+      "participant_b": "outgoing"
+    },
+    {
+      "id": 16,
+      "media": "audio",
+      "self": "connected/pid0",
+      "participant_a": "connected/pid1",
+      "participant_b": "receipt"
+    },
+    {
+      "id": 20,
+      "media": "audio",
+      "self": "connected/pid0",
+      "participant_a": "connected/pid1",
+      "participant_b": "connected/pid2"
+    },
+    {
+      "id": 22,
+      "media": "video",
+      "av_upgrader": "74170125783269@lid",
+      "self": "connected/pid0",
+      "participant_a": "connected/pid1",
+      "participant_b": "connected/pid2"
+    }
+  ],
+  "relay": {
+    "transactions": [0, 1, 2, 3],
+    "allocated_ipv4": [
+      "57.144.205.57:3478",
+      "157.240.17.133:3478",
+      "157.240.203.133:3478",
+      "157.240.253.133:3478"
+    ],
+    "elected": "157.240.17.133:3478",
+    "elected_name": "zrh1c01",
+    "transport": "UDP over WebRTC data channel to WARP SFU",
+    "relay_key_sha256": "e1e7deced9537eb4b3b89b8ee204a07434eee1941fc9fe39645382193918b0be",
+    "hbh_key_sha256": "a45cdc8bf14e3c7fbdfdb32ae943ac5a550f7187bb3282ec15332b4b2e571fbc"
+  },
+  "peer_connections": {
+    "prewarm": [1, 2],
+    "transfer_probe": [3],
+    "connected_ipv4": {
+      "4": "157.240.17.133:3478",
+      "6": "157.240.203.133:3478",
+      "8": "157.240.253.133:3478"
+    },
+    "failed_ipv6_attempts": [5, 7, 9],
+    "primary_final_data_channel": {
+      "pc_id": 4,
+      "messages_received": 2175,
+      "messages_sent": 1020,
+      "bytes_received": 670063,
+      "bytes_sent": 96352
+    }
+  },
+  "worker_data_channel": {
+    "first_utc": "2026-07-23T08:57:47.834Z",
+    "last_utc": "2026-07-23T08:58:51.151Z",
+    "session_id": "9A95A25E82D466EF32B081572734D76F",
+    "events": {
+      "receive_stun_classified": 2159,
+      "send_stun_classified": 1010,
+      "receive_rtp_or_rtcp_classified": 16,
+      "send_rtp_or_rtcp_classified": 32,
+      "receive_unknown": 24,
+      "send_unknown": 2
+    }
+  },
+  "active_ssrcs": {
+    "self_pid0": {
+      "audio": ["3EA26C0C", "0BF99B28", "F42E4556"],
+      "video0": ["14E8F126", "BB16134F", "98B14F00"],
+      "video1": ["E0E04163", "74ED8516", "DEA8A613"],
+      "app_data": "B31DED3E"
+    },
+    "participant_a_pid1": {
+      "audio": ["44832A08", "8488896E", "511802FB"],
+      "video0": ["28C63480", "5663F111", "B6C92533"],
+      "video1": ["F8B52F4D", "E00B15AD", "F238A1B8"],
+      "app_data": "442CDC0D"
+    },
+    "participant_b_pid2": {
+      "audio": ["BABF1390", "36BE2EEF", "49E68A00"],
+      "video0": ["C8E2F7F7", "070CF38E", "6A95FF5E"],
+      "video1": ["FE523E9F", "C0292A13", "3B0A41A9"],
+      "app_data": "501FBA54"
+    }
+  },
+  "participant_rekeys": [
+    {
+      "sender": "242653052539031@lid",
+      "transaction": 16,
+      "bytes": 32,
+      "keygen": 2,
+      "sha256": "6af64f687825a9e6e68e42a11dc1da43cf806884100f9e1f094f339cc8d03a5c"
+    },
+    {
+      "sender": "74170125783269@lid",
+      "transaction": 20,
+      "bytes": 32,
+      "keygen": 2,
+      "sha256": "0d722e613ff96b0f8c6571e6102b58dc063d8de2fc16570b9e1eedc3c6474c4f"
+    }
+  ],
+  "media": {
+    "audio": {
+      "codec": "MLow",
+      "sample_rate_hz": 16000,
+      "frame_ms": 60,
+      "payload_types": [120, 121, 122]
+    },
+    "video": {
+      "codec": "H.264",
+      "browser_capture": "1280x720@15fps",
+      "group_upgrade": true,
+      "group_downgrade": false
+    },
+    "sframe_stream_flags_observed_enabled": false,
+    "screen_share_observed": false,
+    "reaction_observed": false
+  },
+  "diagnostic_gaps": {
+    "cdp_command_errors": 245,
+    "unsupported_domain_counts": {
+      "ServiceWorker.enable": 49,
+      "Security.enable": 49,
+      "Media.enable": 49,
+      "WebAudio.enable": 47,
+      "Performance.enable": 47,
+      "Target.setAutoAttach": 2,
+      "DOMStorage.enable": 1
+    },
+    "page_input_events_present": 42,
+    "worker_packet_classifier_is_heuristic": true,
+    "raw_capture_is_still_appendable": true
+  }
+}

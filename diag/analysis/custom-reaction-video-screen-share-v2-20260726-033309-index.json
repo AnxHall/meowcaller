@@ -1,0 +1,179 @@
+{
+  "schema": "meowcaller.voip-analysis-index.v1",
+  "capture": {
+    "path": "diag/captures/custom-reaction-video-screen-share-v2-20260726-033309.jsonl",
+    "capture_version": 2,
+    "events": 22846,
+    "bytes": 34680076,
+    "sha256": "99cd42822715706d42bb1e672c1f13323154f7fe69cf01e589aef60d212b5631"
+  },
+  "tabs": [
+    {
+      "tab_id": 818526425,
+      "role": "caller_and_screen_sharer",
+      "events": 13876
+    },
+    {
+      "tab_id": 825906857,
+      "role": "callee_and_screen_share_receiver",
+      "events": 8970
+    }
+  ],
+  "call": {
+    "call_id": "00A91AD82043E1FAF5A2B9B2C4507FFC",
+    "call_creator_device": "156535032389744:15@lid",
+    "caller_peer": "242653052539031@lid",
+    "callee_device": "242653052539031:2@lid",
+    "started_as": "one_to_one_audio",
+    "ended_as": "one_to_one_video",
+    "group_jid_present": false,
+    "participant_count": 2,
+    "codec": "H264"
+  },
+  "reaction": {
+    "emoji": "😃",
+    "ui_click_time": "2026-07-26T01:36:56.886Z",
+    "send_method_time": "2026-07-26T01:36:56.939Z",
+    "receiver_event_time": "2026-07-26T01:36:56.978Z",
+    "transport": "RTP app-data",
+    "app_data_version": 2,
+    "sender_app_data_ssrc": "0x7E2590E7",
+    "receiver_packets": 1,
+    "reported_bytes": 24,
+    "xmpp_stanza_observed": false,
+    "state_changed_again_after_ms": 5027
+  },
+  "video_upgrade": {
+    "request_time": "2026-07-26T01:37:07.957Z",
+    "request_state": 11,
+    "enabled_state": 1,
+    "enabled_time": "2026-07-26T01:37:08.852Z",
+    "codec": "H264",
+    "caller_camera": {
+      "label": "FaceTime HD Camera (3A71:F4B5)",
+      "width": 1280,
+      "height": 720,
+      "frame_rate": 30
+    },
+    "callee_camera": {
+      "label": "OBS Virtual Camera",
+      "width": 1280,
+      "height": 720,
+      "frame_rate": 30
+    }
+  },
+  "screen_share": {
+    "display_media_requested": "2026-07-26T01:37:15.844Z",
+    "display_media_returned": "2026-07-26T01:37:21.505Z",
+    "start_signal_sent": "2026-07-26T01:37:21.656Z",
+    "start_signal_received": "2026-07-26T01:37:21.806Z",
+    "stop_signal_sent": "2026-07-26T01:37:28.033Z",
+    "stop_signal_received": "2026-07-26T01:37:28.148Z",
+    "active_duration_ms": 6377,
+    "version": 2,
+    "start_state": 1,
+    "stop_state": 2,
+    "capture_width": 1242,
+    "capture_height": 720,
+    "content_classification": "document",
+    "camera_restored_after_stop": true,
+    "call_ended_by_stop": false,
+    "codec_renegotiation_observed": false,
+    "preallocated_distinct_screen_share_ssrcs": true
+  },
+  "phases": [
+    {
+      "name": "audio_call_start",
+      "time": "2026-07-26T01:36:43.225Z",
+      "line": 7978
+    },
+    {
+      "name": "audio_call_accepted",
+      "time": "2026-07-26T01:36:47.161Z",
+      "line": 9785
+    },
+    {
+      "name": "custom_reaction_sent",
+      "time": "2026-07-26T01:36:56.939Z",
+      "line": 11691,
+      "emoji": "😃"
+    },
+    {
+      "name": "custom_reaction_received",
+      "time": "2026-07-26T01:36:56.986Z",
+      "line": 11699
+    },
+    {
+      "name": "video_upgrade_requested",
+      "time": "2026-07-26T01:37:07.957Z",
+      "line": 12946
+    },
+    {
+      "name": "video_enabled",
+      "time": "2026-07-26T01:37:08.852Z",
+      "line": 14704
+    },
+    {
+      "name": "display_capture_requested",
+      "time": "2026-07-26T01:37:15.844Z",
+      "line": 16686
+    },
+    {
+      "name": "screen_share_started",
+      "time": "2026-07-26T01:37:21.656Z",
+      "line": 17508,
+      "screenshare_state": 1,
+      "version": 2
+    },
+    {
+      "name": "screen_share_stopped",
+      "time": "2026-07-26T01:37:28.033Z",
+      "line": 19040,
+      "screenshare_state": 2,
+      "version": 2
+    },
+    {
+      "name": "camera_restored",
+      "time": "2026-07-26T01:37:28.092Z",
+      "line": 19071
+    },
+    {
+      "name": "call_ended",
+      "time": "2026-07-26T01:37:29.808Z",
+      "line": 19516
+    }
+  ],
+  "source_counts": {
+    "wa-logger": 9759,
+    "wa-logger-raw": 6044,
+    "worker-hook": 3243,
+    "peer-connection": 1366,
+    "cdp": 1044,
+    "page-input": 525,
+    "cdp-command": 349,
+    "wawap": 255,
+    "media-devices": 125,
+    "voip-stack": 70,
+    "rtc-datachannel": 22,
+    "audio-context": 16,
+    "call-model": 15,
+    "media-track": 9,
+    "capture": 4
+  },
+  "observed": [
+    "The custom emoji is passed verbatim to sendReaction as a UTF-8 string.",
+    "The reaction is delivered over version-2 RTP app-data rather than a call stanza.",
+    "Both endpoints emit ReactionStateChanged, and the receiver reports one valid 24-byte app-data RTP packet.",
+    "The audio call upgrades to H.264 video on the same call ID.",
+    "Display capture is requested only after video is enabled in this UI flow.",
+    "Screen-share control uses a version-2 screen_share stanza with state 1 for start and state 2 for stop.",
+    "Screen sharing uses a dedicated capture driver and preallocated screen-share SSRC identities.",
+    "Stopping screen sharing restores camera capture and leaves the video call active."
+  ],
+  "hypotheses": [
+    "The second ReactionStateChanged event about five seconds later is automatic transient-reaction expiry.",
+    "WhatsApp accepts arbitrary valid UTF-8 reaction strings, not only the preset emoji set.",
+    "The WhatsApp Web UI requires video to be enabled before screen sharing, but the wire protocol requirement is not established by this capture.",
+    "The active screen-share media uses the preallocated screen-share SSRC family; this capture does not directly correlate an active RTP packet to one of those SSRCs."
+  ]
+}

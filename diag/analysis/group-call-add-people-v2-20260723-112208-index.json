@@ -1,0 +1,163 @@
+{
+  "schema": "meowcaller.voip-analysis-index.v1",
+  "capture": {
+    "path": "diag/captures/group-call-add-people-v2-20260723-112208.jsonl",
+    "capture_version": 2,
+    "events": 8372,
+    "bytes": 12762523,
+    "sha256": "d565e26f2ca48483525c5bf4dcc2c1bf5ae616299190d128f5f35f74ac50d6c6"
+  },
+  "call": {
+    "call_id": "0063F48A8B4CA7D1DAF665F1CC8EB545",
+    "mode_before": "one_to_one_audio",
+    "mode_after": "ad_hoc_group_audio",
+    "group_jid_present": false,
+    "call_id_changed": false,
+    "original_peer_changed": false
+  },
+  "participants": [
+    {
+      "alias": "self",
+      "jid": "156535032389744@lid",
+      "creator_device": "156535032389744:14@lid",
+      "pid": 1
+    },
+    {
+      "alias": "original_peer",
+      "jid": "242653052539031@lid",
+      "candidate_devices": [
+        "242653052539031@lid",
+        "242653052539031:1@lid"
+      ],
+      "active_platform": "iPhone",
+      "pid": 0
+    },
+    {
+      "alias": "invitee",
+      "jid": "74170125783269@lid",
+      "candidate_devices": [
+        "74170125783269@lid",
+        "74170125783269:43@lid",
+        "74170125783269:44@lid",
+        "74170125783269:45@lid"
+      ],
+      "active_device": "74170125783269@lid",
+      "active_platform": "Android",
+      "pid": 2
+    }
+  ],
+  "phases": [
+    {
+      "name": "one_to_one_active",
+      "time": "2026-07-23T09:38:36.961Z",
+      "line": 1835,
+      "sequence": 11709,
+      "participant_count": 2,
+      "is_group_call": false
+    },
+    {
+      "name": "invite_dispatched",
+      "time": "2026-07-23T09:38:46.548Z",
+      "line": 3177,
+      "sequence": 12238,
+      "device_fanout": 4
+    },
+    {
+      "name": "local_group_optimistic",
+      "time": "2026-07-23T09:38:46.586Z",
+      "line": 3193,
+      "sequence": 12252,
+      "participant_count": 3,
+      "is_group_call": true,
+      "server_created": false,
+      "invitee_numeric_state": 2
+    },
+    {
+      "name": "offer_ack_outgoing",
+      "time": "2026-07-23T09:38:47.662Z",
+      "line": 3320,
+      "transaction": 8,
+      "invitee_wire_state": "outgoing"
+    },
+    {
+      "name": "offer_receipt",
+      "time": "2026-07-23T09:38:48.147Z",
+      "line": 3414,
+      "transaction": 10,
+      "invitee_wire_state": "receipt"
+    },
+    {
+      "name": "server_group_created",
+      "time": "2026-07-23T09:38:48.161Z",
+      "line": 3427,
+      "sequence": 12390,
+      "server_created": true,
+      "connected_limit": 32,
+      "invitee_numeric_state": 3
+    },
+    {
+      "name": "invitee_connected",
+      "time": "2026-07-23T09:38:56.997Z",
+      "line": 3987,
+      "transaction": 16,
+      "group_relay_transaction": 1,
+      "connected_pids": [0, 1, 2]
+    },
+    {
+      "name": "invitee_departed",
+      "time": "2026-07-23T09:39:00.228Z",
+      "line": 5603,
+      "transaction": 18,
+      "group_relay_transaction": 2,
+      "invitee_wire_state": "invited",
+      "remaining_connected_pids": [0, 1]
+    },
+    {
+      "name": "group_call_ended",
+      "time": "2026-07-23T09:39:02.014Z",
+      "line": 7141,
+      "sequence": 15394,
+      "transaction": 20,
+      "reason": "group_call_ended"
+    }
+  ],
+  "relay": {
+    "relay_uuid_stable": true,
+    "active_relay_stable": true,
+    "initial_to_group_relay_key_rotated": true,
+    "group_tx1_to_tx2_relay_key_rotated": false,
+    "hbh_key_stable_across_all_allocations": true,
+    "tokens_rotated_each_allocation": true,
+    "auth_token_rotated_each_allocation": true,
+    "standby_topology_changed_at_transaction_18": true
+  },
+  "media": {
+    "audio_only": true,
+    "candidate_device_ssrcs_preallocated": true,
+    "original_ssrcs_preserved": true,
+    "original_rtp_sequence_continuity_observed": true,
+    "invitee_rtp_packets_observed": false,
+    "participant_indexed_key_state_observed": true
+  },
+  "timing_ms": {
+    "confirm_to_connected": 10786,
+    "network_offer_to_connected": 9589,
+    "invitee_connected_duration": 3231
+  },
+  "observed": [
+    "The active one-to-one call is upgraded in place.",
+    "No group JID is present.",
+    "The invite is fanned out to four devices.",
+    "One Android device joins as PID 2.",
+    "Group updates and relay allocations are transaction ordered.",
+    "Original media SSRCs survive membership graph rebuilds.",
+    "Participant key state is pruned when the invitee departs."
+  ],
+  "hypotheses": [
+    "accepted_elsewhere is multi-device fanout cleanup.",
+    "Transaction gaps are normal server version progression.",
+    "Rekey authorship follows join/departure membership responsibility.",
+    "Invitee departure caused the later whole-call termination.",
+    "Numeric participant state names match the inferred wire-state labels."
+  ]
+}
