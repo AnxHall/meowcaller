@@ -7,6 +7,21 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### api/upstream-group-call-adapter — `partial`
+- Added a latest-upstream-Whatsmeow compatibility layer for initial ad-hoc and
+  group-bound calls, active-call participant invite/ring, active-group
+  preaccept/accept, call links, approval waiting rooms, hand state, and
+  screen-share state. Unsupported call actions use binary nodes through
+  `DangerousInternals` and the existing raw call hook; no Titan fork or
+  `replace go.mau.fi/whatsmeow` directive is required.
+- Preserved the existing 1:1 signaling path. Raw group controls are parsed once
+  and receive the capture-shaped typed ACK, while unrelated call actions remain
+  under upstream whatsmeow.
+- Added public transaction-ordered participant/waiting-room snapshots,
+  participant-attributed reactions/video, group-ID dialing, and browser-console
+  coverage. Builder/parser and adapter KATs pass; fresh live end-to-end
+  validation remains pending.
+
 ### media/group_rtcp_feedback — `partial`
 - Corrected the wire contract from authenticated group traffic. Native
   post-recreation audio reports are 60-byte SR-only plaintexts with one RFC

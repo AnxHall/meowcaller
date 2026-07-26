@@ -12,6 +12,7 @@ const (
 	mtuPayloadMax = 800
 
 	maxFuReassemblyBytes = 4 << 20
+	maxAccessUnitBytes   = 8 << 20
 )
 
 // AUHasIDR reports whether an Annex-B access unit contains an IDR NAL unit.
@@ -162,6 +163,67 @@ type H264Depacketizer struct {
 	fuType   byte
 	fuNriF   byte
 	fuActive bool
+	overflow bool
+}
+
+// H264AccessUnitAssembler reconstructs complete Annex-B access units while
+// withholding damaged interframes until an IDR restores decoder state.
+type H264AccessUnitAssembler struct {
+	depacketizer   H264Depacketizer
+	accessUnit     []byte
+	expectedSeq    uint16
+	hasSequence    bool
+	keyframeNeeded bool
+}
+
+// Push consumes one ordered RTP payload and returns a complete, decodable access
+// unit when the marker closes the frame.
+func (a *H264AccessUnitAssembler) Push(sequence uint16, marker bool, payload []byte) ([]byte, bool, bool) {
+	// Source of truth: https://github.com/JotaDev66/WaCalls/blob/2d6a1f666426049a89ef9541414e771acdcf8a16/internal/voip/transport/h264_packet.go#L138-L210
+	recoveryNeeded := false
+	if a.hasSequence && sequence != a.expectedSeq {
+		recoveryNeeded = !a.keyframeNeeded
+		a.depacketizer = H264Depacketizer{}
+		a.accessUnit = nil
+		a.keyframeNeeded = true
+	}
+	a.hasSequence = true
+	a.expectedSeq = sequence + 1
+
+	for _, nalu := range a.depacketizer.Depacketize(payload) {
+		if len(a.accessUnit)+4+len(nalu) > maxAccessUnitBytes {
+			recoveryNeeded = recoveryNeeded || !a.keyframeNeeded
+			a.depacketizer = H264Depacketizer{}
+			a.accessUnit = nil
+			a.keyframeNeeded = true
+			break
+		}
+		a.accessUnit = append(a.accessUnit, 0x00, 0x00, 0x00, 0x01)
+		a.accessUnit = append(a.accessUnit, nalu...)
+	}
+	if a.depacketizer.overflow {
+		recoveryNeeded = recoveryNeeded || !a.keyframeNeeded
+		a.depacketizer = H264Depacketizer{}
+		a.accessUnit = nil
+		a.keyframeNeeded = true
+	}
+	if !marker {
+		return nil, false, recoveryNeeded
+	}
+
+	accessUnit := a.accessUnit
+	a.accessUnit = nil
+	a.depacketizer = H264Depacketizer{}
+	if len(accessUnit) == 0 {
+		return nil, false, recoveryNeeded
+	}
+	if a.keyframeNeeded {
+		if !AUHasIDR(accessUnit) {
+			return nil, false, recoveryNeeded
+		}
+		a.keyframeNeeded = false
+	}
+	return accessUnit, true, recoveryNeeded
 }
 
 // Depacketize consumes one RTP payload and returns the NAL units it produced (zero for a
@@ -210,6 +272,12 @@ func (d *H264Depacketizer) Depacketize(payload []byte) [][]byte {
 		body := payload[2:]
 
 		if startBit != 0 {
+			if 1+len(body) > maxFuReassemblyBytes {
+				d.fuActive = false
+				d.fuBuf = d.fuBuf[:0]
+				d.overflow = true
+				return nil
+			}
 			d.fuActive = true
 			d.fuType = origType
 			d.fuNriF = fbitAndNri
@@ -219,6 +287,7 @@ func (d *H264Depacketizer) Depacketize(payload []byte) [][]byte {
 			if len(d.fuBuf)+len(body) > maxFuReassemblyBytes {
 				d.fuActive = false
 				d.fuBuf = d.fuBuf[:0]
+				d.overflow = true
 				return nil
 			}
 			d.fuBuf = append(d.fuBuf, body...)

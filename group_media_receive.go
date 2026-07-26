@@ -94,27 +94,28 @@ type preparedParticipantReceiveUpdate struct {
 }
 
 type participantReceiveRegistry struct {
-	mu             sync.RWMutex
-	callID         string
-	callKey        []byte
-	selfLID        string
-	selfID         string
-	fallbackID     string
-	transactionID  uint32
-	hasGroupUpdate bool
-	decoderFactory func() participantAudioDecoder
-	byDeviceID     map[string]*participantAudioReceiver
-	byPID          map[uint32]*participantAudioReceiver
-	bySSRC         map[uint32]*participantAudioReceiver
-	byVideoSSRC    map[uint32]*participantAudioReceiver
-	byAppDataSSRC  map[uint32]*participantAudioReceiver
-	bySRTCPSSRC    map[uint32]*participantAudioReceiver
-	sendPipes      []*MediaPipeline
-	srtcpSenders   []*mediaSrtcpSender
-	pendingEpochs  map[uint32][]byte
-	installedEpoch installedGroupRawEpoch
-	hasEpoch       bool
-	log            zerolog.Logger
+	mu               sync.RWMutex
+	callID           string
+	callKey          []byte
+	selfLID          string
+	selfID           string
+	fallbackID       string
+	transactionID    uint32
+	rosterGeneration uint64
+	hasGroupUpdate   bool
+	decoderFactory   func() participantAudioDecoder
+	byDeviceID       map[string]*participantAudioReceiver
+	byPID            map[uint32]*participantAudioReceiver
+	bySSRC           map[uint32]*participantAudioReceiver
+	byVideoSSRC      map[uint32]*participantAudioReceiver
+	byAppDataSSRC    map[uint32]*participantAudioReceiver
+	bySRTCPSSRC      map[uint32]*participantAudioReceiver
+	sendPipes        []*MediaPipeline
+	srtcpSenders     []*mediaSrtcpSender
+	pendingEpochs    map[uint32][]byte
+	installedEpoch   installedGroupRawEpoch
+	hasEpoch         bool
+	log              zerolog.Logger
 }
 
 func newParticipantReceiveRegistry(
@@ -207,7 +208,7 @@ func (r *participantReceiveRegistry) newReceiver(userJID, deviceJID types.JID, p
 }
 
 func (r *participantReceiveRegistry) ApplyGroupUpdateTransaction(
-	update types.GroupCallUpdate,
+	update groupCallUpdate,
 	apply func(commit func()) error,
 ) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
@@ -260,7 +261,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdateTransaction(
 	return nil
 }
 
-func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpdate) error {
+func (r *participantReceiveRegistry) ApplyGroupUpdate(update groupCallUpdate) error {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L83-L100
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L139-L141
 	return r.ApplyGroupUpdateTransaction(update, func(commit func()) error {
@@ -270,7 +271,7 @@ func (r *participantReceiveRegistry) ApplyGroupUpdate(update types.GroupCallUpda
 }
 
 func (r *participantReceiveRegistry) prepareGroupUpdateLocked(
-	update types.GroupCallUpdate,
+	update groupCallUpdate,
 ) (*preparedParticipantReceiveUpdate, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L110-L120
 	prepared := &preparedParticipantReceiveUpdate{
@@ -409,6 +410,11 @@ func (r *participantReceiveRegistry) prepareGroupUpdateLocked(
 
 func (r *participantReceiveRegistry) commitGroupUpdateLocked(prepared *preparedParticipantReceiveUpdate) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L122-L137
+	for participantID, receiver := range r.byDeviceID {
+		if prepared.byDeviceID[participantID] != receiver {
+			clearParticipantReceiverKeys(receiver)
+		}
+	}
 	for _, next := range prepared.metadata {
 		next.receiver.mu.Lock()
 		next.receiver.userJID = next.userJID
@@ -424,6 +430,7 @@ func (r *participantReceiveRegistry) commitGroupUpdateLocked(prepared *preparedP
 	r.byAppDataSSRC = prepared.byAppDataSSRC
 	r.bySRTCPSSRC = prepared.bySRTCPSSRC
 	r.transactionID = prepared.transactionID
+	r.rosterGeneration++
 	r.hasGroupUpdate = true
 	if prepared.epoch != nil {
 		r.installPreparedGroupRawEpochLocked(prepared.epoch)
@@ -468,13 +475,49 @@ func clearParticipantReceiverKeys(receiver *participantAudioReceiver) {
 	if receiver == nil {
 		return
 	}
-	receiver.pipe.sendKeys = srtp.E2eSrtpKeys{}
-	receiver.pipe.recvKeys = srtp.E2eSrtpKeys{}
-	receiver.videoPipe.sendKeys = srtp.E2eSrtpKeys{}
-	receiver.videoPipe.recvKeys = srtp.E2eSrtpKeys{}
-	receiver.appDataPipe.sendKeys = srtp.E2eSrtpKeys{}
-	receiver.appDataPipe.recvKeys = srtp.E2eSrtpKeys{}
-	receiver.srtcp.keys = srtp.E2eSrtpKeys{}
+	receiver.pipe.installSendKeys(srtp.E2eSrtpKeys{})
+	receiver.pipe.installRecvKeys(srtp.E2eSrtpKeys{})
+	receiver.videoPipe.installSendKeys(srtp.E2eSrtpKeys{})
+	receiver.videoPipe.installRecvKeys(srtp.E2eSrtpKeys{})
+	receiver.appDataPipe.installSendKeys(srtp.E2eSrtpKeys{})
+	receiver.appDataPipe.installRecvKeys(srtp.E2eSrtpKeys{})
+	receiver.srtcp.installKeys(srtp.E2eSrtpKeys{})
+}
+
+func (r *participantReceiveRegistry) clear() {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L117-L128
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	clear(r.callKey)
+	clear(r.installedEpoch.rawKey)
+	for transactionID, rawKey := range r.pendingEpochs {
+		clear(rawKey)
+		delete(r.pendingEpochs, transactionID)
+	}
+	for _, receiver := range r.byDeviceID {
+		clearParticipantReceiverKeys(receiver)
+	}
+	for _, sendPipe := range r.sendPipes {
+		sendPipe.installSendKeys(srtp.E2eSrtpKeys{})
+		sendPipe.installRecvKeys(srtp.E2eSrtpKeys{})
+	}
+	for _, sender := range r.srtcpSenders {
+		sender.installKeys(srtp.E2eSrtpKeys{})
+	}
+	r.callKey = nil
+	r.installedEpoch = installedGroupRawEpoch{}
+	r.hasEpoch = false
+	r.byDeviceID = nil
+	r.byPID = nil
+	r.bySSRC = nil
+	r.byVideoSSRC = nil
+	r.byAppDataSSRC = nil
+	r.bySRTCPSSRC = nil
+	r.sendPipes = nil
+	r.srtcpSenders = nil
 }
 
 // HasCommittedGroupUpdate reports whether one authoritative group roster has
@@ -585,9 +628,6 @@ func (r *participantReceiveRegistry) prepareGroupRawEpochLocked(
 	receivers map[string]*participantAudioReceiver,
 ) (*preparedGroupRawEpoch, error) {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L110-L126
-	if len(r.sendPipes) == 0 {
-		return nil, fmt.Errorf("meowcaller: group media sender is not attached")
-	}
 	sendKeys, err := srtp.DeriveE2eKeysFromRaw(rawKey, r.selfID)
 	if err != nil {
 		return nil, fmt.Errorf("meowcaller: derive group send epoch: %w", err)
@@ -684,6 +724,7 @@ func (r *participantReceiveRegistry) RekeyFallback(peerLID string) error {
 	}
 	r.byPID = make(map[uint32]*participantAudioReceiver)
 	r.fallbackID = participantID
+	r.rosterGeneration++
 	return nil
 }
 
@@ -769,12 +810,35 @@ func (r *participantReceiveRegistry) ActiveParticipantIDs() []string {
 	return participantIDs
 }
 
+func (r *participantReceiveRegistry) ActiveReceiverSnapshot() (uint64, map[*participantAudioReceiver]struct{}) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L89-L100
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	active := make(map[*participantAudioReceiver]struct{}, len(r.byDeviceID))
+	for _, receiver := range r.byDeviceID {
+		active[receiver] = struct{}{}
+	}
+	return r.rosterGeneration, active
+}
+
 func (r *participantReceiveRegistry) ActiveAudioSSRCs() []uint32 {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L133-L135
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	ssrcs := make([]uint32, 0, len(r.bySSRC))
 	for ssrc := range r.bySSRC {
+		ssrcs = append(ssrcs, ssrc)
+	}
+	slices.Sort(ssrcs)
+	return ssrcs
+}
+
+func (r *participantReceiveRegistry) ActiveVideoSSRCs() []uint32 {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L133-L135
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ssrcs := make([]uint32, 0, len(r.byVideoSSRC))
+	for ssrc := range r.byVideoSSRC {
 		ssrcs = append(ssrcs, ssrc)
 	}
 	slices.Sort(ssrcs)

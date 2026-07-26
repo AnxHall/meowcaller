@@ -402,6 +402,17 @@ func TestRtcpRequestsVideoKeyframe(t *testing.T) {
 	}
 }
 
+func TestBuildPictureLossIndication(t *testing.T) {
+	got := BuildPictureLossIndication(0x11112222, 0x55556666, true)
+	want := [12]byte{0x91, RtcpPtPsfb, 0, 2, 0x11, 0x11, 0x22, 0x22, 0x55, 0x55, 0x66, 0x66}
+	if got != want {
+		t.Fatalf("PLI = %x, want %x", got, want)
+	}
+	if !RtcpRequestsKeyframe(got[:], 0x55556666) {
+		t.Fatal("built PLI does not request its media SSRC")
+	}
+}
+
 // TestRtcpClassification checks the RTCP/RTP discriminator.
 func TestRtcpClassification(t *testing.T) {
 	k := loadKat(t)

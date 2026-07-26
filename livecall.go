@@ -1,6 +1,7 @@
 package meowcaller
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -8,45 +9,245 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-// Call is one live 1:1 call. Place one with Client.Call, or receive one (unanswered)
-// in an OnIncomingCall listener. Attach outbound audio with Subscribe/Play and inbound
-// audio with Receive, and lifecycle listeners with OnReady/OnEnd/OnStateChange. All
-// methods are safe for concurrent use.
+// Call is one live direct or group call. A direct call may become an ad-hoc group
+// call through AddParticipant. All methods are safe for concurrent use.
 type Call struct {
 	eng  *engine
 	id   string
 	peer types.JID
 
-	mu                     sync.Mutex
-	phase                  CallPhase
-	player                 *Player
-	sink                   AudioSink
-	onReady                func()
-	onEnd                  func(reason string)
-	onState                func(CallPhase)
-	onPeerAccept           func()
-	peerAccepted           bool
-	acceptNotified         bool
-	onMuteState            func(muted bool)
-	videoSink              VideoSink
-	onVideoState           func(VideoState)
-	onVideoKeyframeRequest func()
-	onReaction             func(CallReaction)
+	mu                        sync.Mutex
+	phase                     CallPhase
+	player                    *Player
+	sink                      AudioSink
+	onReady                   func()
+	onEnd                     func(reason string)
+	onState                   func(CallPhase)
+	onPeerAccept              func()
+	peerAccepted              bool
+	acceptNotified            bool
+	onMuteState               func(muted bool)
+	videoSink                 VideoSink
+	onVideoState              func(VideoState)
+	onVideoKeyframeRequest    func()
+	onParticipantVideoFrame   func(ParticipantVideoFrame)
+	onReaction                func(CallReaction)
+	groupState                *GroupCallState
+	onGroupState              func(GroupCallState)
+	groupCallbackGeneration   uint64
+	waitingRoomState          *WaitingRoomState
+	onWaitingRoomState        func(WaitingRoomState)
+	waitingRoomGeneration     uint64
+	waitingCallbackGeneration uint64
+	notifyMu                  sync.Mutex
+	notifyRunning             bool
+	notifyQueue               []func()
+	onHandRaise               func(HandRaiseState)
+	handRaises                map[types.JID]bool
+	onScreenShare             func(ScreenShareState)
+	screenShares              map[types.JID]ScreenShareState
+}
+
+// GroupCallState is a sanitized group-call roster. Transaction zero may contain
+// selected outgoing targets before the first authoritative server transaction.
+type GroupCallState struct {
+	TransactionID  uint32
+	RekeyRequested bool
+	Participants   []GroupCallParticipant
+}
+
+// GroupCallParticipant is one participant in an authoritative group-call roster.
+type GroupCallParticipant struct {
+	JID        types.JID
+	PN         types.JID
+	State      string
+	HandRaised bool
+	Devices    []GroupCallDevice
+}
+
+// GroupCallDevice is one participant device selected or considered by WhatsApp.
+type GroupCallDevice struct {
+	JID      types.JID
+	Platform string
+	PID      uint32
+	HasPID   bool
 }
 
 // CallReaction is a transient emoji reaction received over the call's RTC app-data stream.
 // An empty Emoji with Removed set means the sender cleared their reaction.
 type CallReaction struct {
-	Emoji   string
-	Sender  types.JID
-	Removed bool
+	Emoji         string
+	ParticipantID string
+	Sender        types.JID
+	Device        types.JID
+	PID           uint32
+	HasPID        bool
+	Removed       bool
+}
+
+// WaitingRoomState is sanitized call-link admission state. It never exposes the link token.
+type WaitingRoomState struct {
+	Enabled       bool
+	IsAdmin       bool
+	InWaitingRoom bool
+	TransactionID uint32
+	Users         []WaitingRoomUser
+}
+
+// WaitingRoomUser is one user in the authoritative pending roster.
+type WaitingRoomUser struct {
+	JID   types.JID
+	PN    types.JID
+	State string
+}
+
+// HandRaiseState is one participant's persistent raised/lowered state.
+type HandRaiseState struct {
+	Participant types.JID
+	Raised      bool
+}
+
+// ScreenShareState is one participant's independent screen-share state.
+type ScreenShareState struct {
+	Participant      types.JID
+	Active           bool
+	Version          uint32
+	ScreenShareID    uint32
+	HasScreenShareID bool
+	Synthetic        bool
 }
 
 // ID returns the call-id (32 uppercase hex chars).
 func (c *Call) ID() string { return c.id }
 
 // Peer returns the remote party's LID.
-func (c *Call) Peer() types.JID { return c.peer }
+func (c *Call) Peer() types.JID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.peer
+}
+
+// GroupState returns the latest group-call roster, if this is a group call.
+func (c *Call) GroupState() (GroupCallState, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.groupState == nil {
+		return GroupCallState{}, false
+	}
+	return cloneGroupCallState(*c.groupState), true
+}
+
+// OnGroupState registers a callback for group-call roster state. The latest
+// cached state, including a selected-target seed, is replayed immediately.
+func (c *Call) OnGroupState(fn func(GroupCallState)) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
+	c.mu.Lock()
+	c.onGroupState = fn
+	c.groupCallbackGeneration++
+	callbackGeneration := c.groupCallbackGeneration
+	var replay *GroupCallState
+	if fn != nil && c.groupState != nil {
+		state := cloneGroupCallState(*c.groupState)
+		replay = &state
+	}
+	c.mu.Unlock()
+	if replay == nil {
+		return
+	}
+	c.enqueueNotification(func() {
+		c.mu.Lock()
+		if c.groupCallbackGeneration != callbackGeneration ||
+			c.onGroupState == nil {
+			c.mu.Unlock()
+			return
+		}
+		currentFn := c.onGroupState
+		c.mu.Unlock()
+		currentFn(*replay)
+	})
+}
+
+func (c *Call) setGroupState(state GroupCallState) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
+	stored := cloneGroupCallState(state)
+	c.mu.Lock()
+	if c.groupState != nil &&
+		c.groupState.TransactionID != 0 &&
+		state.TransactionID <= c.groupState.TransactionID {
+		c.mu.Unlock()
+		return
+	}
+	for i := range stored.Participants {
+		stored.Participants[i].HandRaised = c.handRaises[stored.Participants[i].JID.ToNonAD()]
+	}
+	c.groupState = &stored
+	callbackGeneration := c.groupCallbackGeneration
+	hasCallback := c.onGroupState != nil
+	c.mu.Unlock()
+	if !hasCallback {
+		return
+	}
+	c.enqueueNotification(func() {
+		c.mu.Lock()
+		if c.groupCallbackGeneration != callbackGeneration ||
+			c.onGroupState == nil {
+			c.mu.Unlock()
+			return
+		}
+		fn := c.onGroupState
+		c.mu.Unlock()
+		fn(cloneGroupCallState(stored))
+	})
+}
+
+func groupCallStateFromUpdate(update groupCallUpdate) GroupCallState {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L68
+	state := GroupCallState{
+		TransactionID:  update.TransactionID,
+		RekeyRequested: update.RekeyRequested,
+		Participants:   make([]GroupCallParticipant, len(update.Participants)),
+	}
+	for participantIndex, participant := range update.Participants {
+		devices := make([]GroupCallDevice, len(participant.Devices))
+		for deviceIndex, device := range participant.Devices {
+			devices[deviceIndex] = GroupCallDevice{
+				JID:      device.JID,
+				Platform: device.Platform,
+				PID:      device.PID,
+				HasPID:   device.HasPID,
+			}
+		}
+		state.Participants[participantIndex] = GroupCallParticipant{
+			JID: participant.JID, PN: participant.PN, State: participant.State,
+			Devices: devices,
+		}
+	}
+	return state
+}
+
+func cloneGroupCallState(state GroupCallState) GroupCallState {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
+	clone := state
+	clone.Participants = make([]GroupCallParticipant, len(state.Participants))
+	for participantIndex, participant := range state.Participants {
+		clone.Participants[participantIndex] = participant
+		clone.Participants[participantIndex].Devices = append(
+			[]GroupCallDevice(nil),
+			participant.Devices...,
+		)
+	}
+	return clone
+}
+
+func (c *Call) setPeer(peer types.JID) {
+	if peer.IsEmpty() {
+		return
+	}
+	c.mu.Lock()
+	c.peer = peer
+	c.mu.Unlock()
+}
 
 // State returns the call's current phase.
 func (c *Call) State() CallPhase {
@@ -109,10 +310,252 @@ func (c *Call) SetVideoOrientation(orientation int) error {
 	return c.eng.setVideoOrientation(c.id, orientation)
 }
 
+// AddParticipant invites one person to this established call.
+func (c *Call) AddParticipant(ctx context.Context, target string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	return c.eng.inviteParticipant(ctx, c.id, target)
+}
+
+// AddParticipants invites each person independently and returns index-aligned results.
+func (c *Call) AddParticipants(ctx context.Context, targets ...string) []error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	results := make([]error, len(targets))
+	for i, target := range targets {
+		results[i] = c.AddParticipant(ctx, target)
+	}
+	return results
+}
+
+// RingParticipant rings one non-connected participant already present in this call's roster.
+func (c *Call) RingParticipant(ctx context.Context, target string) error {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	return c.eng.ringParticipant(ctx, c.id, target)
+}
+
 // SendReaction sends an emoji over this call's RTC app-data stream. Pass an empty
 // string to clear the reaction previously sent by this client.
 func (c *Call) SendReaction(emoji string) error {
 	return c.eng.sendReaction(c.id, emoji)
+}
+
+// SetHandRaised announces this client's persistent hand state.
+func (c *Call) SetHandRaised(raised bool) error {
+	return c.eng.setHandRaised(c.id, raised)
+}
+
+// StartScreenShare announces a version-2 screen share independently from camera video.
+func (c *Call) StartScreenShare(screenShareID *uint32) error {
+	return c.eng.setScreenShare(c.id, true, screenShareID)
+}
+
+// StopScreenShare stops screen sharing without stopping camera video or ending the call.
+func (c *Call) StopScreenShare() error {
+	return c.eng.setScreenShare(c.id, false, nil)
+}
+
+// OnHandRaise registers a participant hand-state listener.
+func (c *Call) OnHandRaise(fn func(HandRaiseState)) {
+	c.mu.Lock()
+	c.onHandRaise = fn
+	c.mu.Unlock()
+}
+
+// OnScreenShare registers an independent screen-share state listener.
+func (c *Call) OnScreenShare(fn func(ScreenShareState)) {
+	c.mu.Lock()
+	c.onScreenShare = fn
+	c.mu.Unlock()
+}
+
+// ScreenShares returns the currently active participant screen shares.
+func (c *Call) ScreenShares() []ScreenShareState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	shares := make([]ScreenShareState, 0, len(c.screenShares))
+	for _, share := range c.screenShares {
+		shares = append(shares, share)
+	}
+	return shares
+}
+
+// WaitingRoomState returns the latest sanitized call-link admission state.
+func (c *Call) WaitingRoomState() (WaitingRoomState, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.waitingRoomState == nil {
+		return WaitingRoomState{}, false
+	}
+	return cloneWaitingRoomState(*c.waitingRoomState), true
+}
+
+// OnWaitingRoomState registers a waiting-room listener and replays current state.
+func (c *Call) OnWaitingRoomState(fn func(WaitingRoomState)) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	c.mu.Lock()
+	c.onWaitingRoomState = fn
+	c.waitingCallbackGeneration++
+	callbackGeneration := c.waitingCallbackGeneration
+	var replay *WaitingRoomState
+	if fn != nil && c.waitingRoomState != nil {
+		state := cloneWaitingRoomState(*c.waitingRoomState)
+		replay = &state
+	}
+	c.mu.Unlock()
+	if replay == nil {
+		return
+	}
+	c.enqueueNotification(func() {
+		c.mu.Lock()
+		if c.waitingCallbackGeneration != callbackGeneration ||
+			c.onWaitingRoomState == nil {
+			c.mu.Unlock()
+			return
+		}
+		currentFn := c.onWaitingRoomState
+		c.mu.Unlock()
+		currentFn(*replay)
+	})
+}
+
+// SetApprovalRequired changes call-link approval requirements for an admin call.
+func (c *Call) SetApprovalRequired(ctx context.Context, enabled bool) error {
+	return c.eng.setApprovalRequired(ctx, c.id, enabled)
+}
+
+// AdmitParticipant admits one waiting-room user.
+func (c *Call) AdmitParticipant(ctx context.Context, user string) error {
+	return c.eng.controlWaitingParticipant(ctx, c.id, user, true)
+}
+
+// DenyParticipant denies one waiting-room user.
+func (c *Call) DenyParticipant(ctx context.Context, user string) error {
+	return c.eng.controlWaitingParticipant(ctx, c.id, user, false)
+}
+
+func (c *Call) setWaitingRoomState(state WaitingRoomState) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	stored := cloneWaitingRoomState(state)
+	c.mu.Lock()
+	if c.waitingRoomState != nil &&
+		c.waitingRoomState.TransactionID != 0 &&
+		state.TransactionID <= c.waitingRoomState.TransactionID {
+		c.mu.Unlock()
+		return
+	}
+	c.waitingRoomState = &stored
+	c.waitingRoomGeneration++
+	callbackGeneration := c.waitingCallbackGeneration
+	c.mu.Unlock()
+	c.enqueueNotification(func() {
+		c.mu.Lock()
+		if c.waitingCallbackGeneration != callbackGeneration ||
+			c.onWaitingRoomState == nil {
+			c.mu.Unlock()
+			return
+		}
+		fn := c.onWaitingRoomState
+		c.mu.Unlock()
+		fn(cloneWaitingRoomState(stored))
+	})
+}
+
+func (c *Call) setWaitingRoomAdmission() {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	c.mu.Lock()
+	if c.waitingRoomState == nil || !c.waitingRoomState.InWaitingRoom {
+		c.mu.Unlock()
+		return
+	}
+	c.waitingRoomState.InWaitingRoom = false
+	c.waitingRoomGeneration++
+	callbackGeneration := c.waitingCallbackGeneration
+	state := cloneWaitingRoomState(*c.waitingRoomState)
+	c.mu.Unlock()
+	c.enqueueNotification(func() {
+		c.mu.Lock()
+		if c.waitingCallbackGeneration != callbackGeneration ||
+			c.onWaitingRoomState == nil {
+			c.mu.Unlock()
+			return
+		}
+		fn := c.onWaitingRoomState
+		c.mu.Unlock()
+		fn(state)
+	})
+}
+
+func (c *Call) enqueueNotification(notification func()) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	if notification == nil {
+		return
+	}
+	c.notifyMu.Lock()
+	c.notifyQueue = append(c.notifyQueue, notification)
+	if c.notifyRunning {
+		c.notifyMu.Unlock()
+		return
+	}
+	c.notifyRunning = true
+	for len(c.notifyQueue) > 0 {
+		next := c.notifyQueue[0]
+		c.notifyQueue[0] = nil
+		c.notifyQueue = c.notifyQueue[1:]
+		c.notifyMu.Unlock()
+		next()
+		c.notifyMu.Lock()
+	}
+	c.notifyRunning = false
+	c.notifyQueue = nil
+	c.notifyMu.Unlock()
+}
+
+func (c *Call) dispatchHandRaise(state HandRaiseState) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
+	c.mu.Lock()
+	if c.handRaises == nil {
+		c.handRaises = make(map[types.JID]bool)
+	}
+	key := state.Participant.ToNonAD()
+	if state.Raised {
+		c.handRaises[key] = true
+	} else {
+		delete(c.handRaises, key)
+	}
+	if c.groupState != nil {
+		for i := range c.groupState.Participants {
+			if c.groupState.Participants[i].JID.ToNonAD() == key {
+				c.groupState.Participants[i].HandRaised = state.Raised
+			}
+		}
+	}
+	fn := c.onHandRaise
+	c.mu.Unlock()
+	if fn != nil {
+		fn(state)
+	}
+}
+
+func (c *Call) dispatchScreenShare(state ScreenShareState) {
+	c.mu.Lock()
+	if c.screenShares == nil {
+		c.screenShares = make(map[types.JID]ScreenShareState)
+	}
+	key := state.Participant.ToNonAD()
+	if state.Active {
+		c.screenShares[key] = state
+	} else {
+		delete(c.screenShares, key)
+	}
+	fn := c.onScreenShare
+	c.mu.Unlock()
+	if fn != nil {
+		fn(state)
+	}
+}
+
+func cloneWaitingRoomState(state WaitingRoomState) WaitingRoomState {
+	state.Users = append([]WaitingRoomUser(nil), state.Users...)
+	return state
 }
 
 // Subscribe attaches p as the call's outbound audio player, replacing any previous one.
@@ -174,6 +617,27 @@ func (c *Call) OnVideoKeyframeRequest(fn func()) {
 	c.mu.Lock()
 	c.onVideoKeyframeRequest = fn
 	c.mu.Unlock()
+}
+
+// OnParticipantVideoFrame registers a callback for authenticated H.264 access
+// units with their group participant identity. It is additive to ReceiveVideo.
+func (c *Call) OnParticipantVideoFrame(fn func(ParticipantVideoFrame)) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	c.mu.Lock()
+	c.onParticipantVideoFrame = fn
+	c.mu.Unlock()
+}
+
+func (c *Call) dispatchParticipantVideoFrame(frame ParticipantVideoFrame) bool {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	c.mu.Lock()
+	fn := c.onParticipantVideoFrame
+	c.mu.Unlock()
+	if fn == nil {
+		return false
+	}
+	fn(cloneParticipantVideoFrame(frame))
+	return true
 }
 
 // OnReaction registers a callback for emoji reactions targeting this call.

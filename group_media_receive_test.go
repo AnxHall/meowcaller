@@ -41,47 +41,47 @@ func mediaTestJID(user string, device uint16) types.JID {
 	return types.JID{User: user, Device: device, Server: types.HiddenUserServer}
 }
 
-func mediaTestGroupUpdate(self, peer, added, pending types.JID, transactionID uint32, includeAdded bool) types.GroupCallUpdate {
-	participants := []types.GroupCallParticipant{
+func mediaTestGroupUpdate(self, peer, added, pending types.JID, transactionID uint32, includeAdded bool) groupCallUpdate {
+	participants := []groupCallParticipant{
 		{
 			JID:   self.ToNonAD(),
 			State: "connected",
-			Devices: []types.GroupCallDevice{{
+			Devices: []groupCallDevice{{
 				JID: self, PID: 1, HasPID: true,
 			}},
 		},
 		{
 			JID:   peer.ToNonAD(),
 			State: "connected",
-			Devices: []types.GroupCallDevice{{
+			Devices: []groupCallDevice{{
 				JID: peer, PID: 0, HasPID: true,
 			}},
 		},
 		{
 			JID:   pending.ToNonAD(),
 			State: "receipt",
-			Devices: []types.GroupCallDevice{
+			Devices: []groupCallDevice{
 				{JID: pending, PID: 3, HasPID: true},
 			},
 		},
 	}
 	if includeAdded {
-		participants = append(participants, types.GroupCallParticipant{
+		participants = append(participants, groupCallParticipant{
 			JID:   added.ToNonAD(),
 			State: "connected",
-			Devices: []types.GroupCallDevice{
+			Devices: []groupCallDevice{
 				{JID: added, PID: 2, HasPID: true},
 				{JID: mediaTestJID(added.User, added.Device+1)},
 			},
 		})
 	} else {
-		participants = append(participants, types.GroupCallParticipant{
+		participants = append(participants, groupCallParticipant{
 			JID:     added.ToNonAD(),
 			State:   "invited",
-			Devices: []types.GroupCallDevice{{JID: added}},
+			Devices: []groupCallDevice{{JID: added}},
 		})
 	}
-	return types.GroupCallUpdate{CallID: "CID", TransactionID: transactionID, Participants: participants}
+	return groupCallUpdate{CallID: "CID", TransactionID: transactionID, Participants: participants}
 }
 
 func protectParticipantAudio(t *testing.T, callKey []byte, self, sender types.JID, payload []byte) ([]byte, uint32) {
@@ -253,6 +253,58 @@ func TestParticipantReceiveRegistryAppliesSharedRawEpochToSenderAndEveryReceiver
 	}
 	if err = registry.ApplyGroupRawEpoch(17, bytes.Repeat([]byte{0x5a}, 32)); err == nil {
 		t.Fatal("conflicting transaction-wide epoch was accepted")
+	}
+}
+
+func TestParticipantReceiveRegistryRetiresParticipantStateAndClearsDiscardedRegistry(t *testing.T) {
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0xa5}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry(
+		"CID",
+		callKey,
+		self.String(),
+		peer.String(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(
+		mediaTestGroupUpdate(self, peer, added, pending, 17, true),
+	); err != nil {
+		t.Fatalf("apply group roster: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("apply shared raw epoch: %v", err)
+	}
+	addedID := rtp.FormatE2ESrtpParticipantID(added.String())
+	retired := registry.byDeviceID[addedID]
+	if retired == nil || retired.pipe.recvKeys == (srtp.E2eSrtpKeys{}) {
+		t.Fatal("added participant did not receive epoch keys")
+	}
+
+	if err = registry.ApplyGroupUpdate(
+		mediaTestGroupUpdate(self, peer, added, pending, 18, false),
+	); err != nil {
+		t.Fatalf("retire participant: %v", err)
+	}
+	_, active := registry.ActiveReceiverSnapshot()
+	if _, ok := active[retired]; ok {
+		t.Fatal("retired participant remained active")
+	}
+	if retired.pipe.recvKeys != (srtp.E2eSrtpKeys{}) {
+		t.Fatal("retired participant retained media keys")
+	}
+
+	registry.clear()
+	if registry.callKey != nil ||
+		registry.installedEpoch.rawKey != nil ||
+		registry.byDeviceID != nil {
+		t.Fatal("discarded registry retained key or participant state")
 	}
 }
 
@@ -826,24 +878,24 @@ func TestParticipantReceiveRegistryPreservesFallbackAcrossPrePIDGroupUpdate(t *t
 		t.Fatalf("new registry: %v", err)
 	}
 	fallback := registry.byDeviceID[registry.fallbackID]
-	update := types.GroupCallUpdate{
+	update := groupCallUpdate{
 		CallID:        "CID",
 		TransactionID: 9,
-		Participants: []types.GroupCallParticipant{
+		Participants: []groupCallParticipant{
 			{
 				JID:     self.ToNonAD(),
 				State:   "connected",
-				Devices: []types.GroupCallDevice{{JID: self}},
+				Devices: []groupCallDevice{{JID: self}},
 			},
 			{
 				JID:     peer.ToNonAD(),
 				State:   "connected",
-				Devices: []types.GroupCallDevice{{JID: peer}},
+				Devices: []groupCallDevice{{JID: peer}},
 			},
 			{
 				JID:     invited.ToNonAD(),
 				State:   "receipt",
-				Devices: []types.GroupCallDevice{{JID: invited}},
+				Devices: []groupCallDevice{{JID: invited}},
 			},
 		},
 	}
@@ -891,26 +943,26 @@ func TestParticipantReceiveRegistryPreservesFallbackWhenOnlySelfHasPID(t *testin
 		t.Fatal("direct fallback did not authenticate before group update")
 	}
 
-	update := types.GroupCallUpdate{
+	update := groupCallUpdate{
 		CallID:        "CID",
 		TransactionID: 9,
-		Participants: []types.GroupCallParticipant{
+		Participants: []groupCallParticipant{
 			{
 				JID:   self.ToNonAD(),
 				State: "connected",
-				Devices: []types.GroupCallDevice{{
+				Devices: []groupCallDevice{{
 					JID: self, PID: 1, HasPID: true,
 				}},
 			},
 			{
 				JID:     peer.ToNonAD(),
 				State:   "connected",
-				Devices: []types.GroupCallDevice{{JID: peer}},
+				Devices: []groupCallDevice{{JID: peer}},
 			},
 			{
 				JID:     invited.ToNonAD(),
 				State:   "receipt",
-				Devices: []types.GroupCallDevice{{JID: invited}},
+				Devices: []groupCallDevice{{JID: invited}},
 			},
 		},
 	}
@@ -954,19 +1006,19 @@ func TestParticipantReceiveRegistryPrePIDUpdatePrunesNonFallbackReceivers(t *tes
 		t.Fatal("PID-bearing update did not activate both remotes")
 	}
 
-	update := types.GroupCallUpdate{
+	update := groupCallUpdate{
 		CallID:        "CID",
 		TransactionID: 9,
-		Participants: []types.GroupCallParticipant{
+		Participants: []groupCallParticipant{
 			{
 				JID:     self.ToNonAD(),
 				State:   "connected",
-				Devices: []types.GroupCallDevice{{JID: self}},
+				Devices: []groupCallDevice{{JID: self}},
 			},
 			{
 				JID:     peer.ToNonAD(),
 				State:   "connected",
-				Devices: []types.GroupCallDevice{{JID: peer}},
+				Devices: []groupCallDevice{{JID: peer}},
 			},
 		},
 	}
@@ -1027,6 +1079,11 @@ func TestParticipantReceiveRegistryActivatesAndRoutesConnectedPIDDevices(t *test
 	slices.Sort(wantAudioSSRCs)
 	if got := registry.ActiveAudioSSRCs(); !slices.Equal(got, wantAudioSSRCs) {
 		t.Fatalf("active audio SSRCs = %v, want %v", got, wantAudioSSRCs)
+	}
+	wantVideoSSRCs := []uint32{originalPeer.videoSSRC, addedReceiver.videoSSRC}
+	slices.Sort(wantVideoSSRCs)
+	if got := registry.ActiveVideoSSRCs(); !slices.Equal(got, wantVideoSSRCs) {
+		t.Fatalf("active video SSRCs = %v, want %v", got, wantVideoSSRCs)
 	}
 	if _, ok := registry.byPID[1]; ok {
 		t.Fatal("local PID was activated as a remote receiver")
@@ -1271,6 +1328,46 @@ func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testin
 	}
 	if applyCalls != 2 || commitCalls != 1 {
 		t.Fatalf("duplicate invoked apply/commit: (%d, %d), want (2, 1)", applyCalls, commitCalls)
+	}
+}
+
+func TestParticipantReceiveRegistryCarriesEpochToLateAttachedSender(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	callKey := iota32()
+	rawKey := bytes.Repeat([]byte{0x5d}, 32)
+	self := mediaTestJID("111111111111111", 14)
+	peer := mediaTestJID("222222222222222", 0)
+	added := mediaTestJID("333333333333333", 43)
+	pending := mediaTestJID("444444444444444", 63)
+	registry, err := newParticipantReceiveRegistry(
+		"CID", callKey, self.String(), peer.String(), nil,
+	)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	if err = registry.ApplyGroupUpdate(
+		mediaTestGroupUpdate(self, peer, added, pending, 17, false),
+	); err != nil {
+		t.Fatalf("apply roster before sender: %v", err)
+	}
+	if err = registry.ApplyGroupRawEpoch(17, rawKey); err != nil {
+		t.Fatalf("install epoch before sender: %v", err)
+	}
+	sender, err := NewMediaPipeline(
+		callKey, self.String(), peer.String(), 0x01020304, FrameSamples,
+	)
+	if err != nil {
+		t.Fatalf("new sender: %v", err)
+	}
+	if err = registry.attachSendPipeline(sender); err != nil {
+		t.Fatalf("attach sender after epoch: %v", err)
+	}
+	want, err := srtp.DeriveE2eKeysFromRaw(rawKey, rtp.FormatE2ESrtpParticipantID(self.String()))
+	if err != nil {
+		t.Fatalf("derive expected sender keys: %v", err)
+	}
+	if sender.sendKeys != want {
+		t.Fatal("late-attached sender did not inherit the installed group epoch")
 	}
 }
 

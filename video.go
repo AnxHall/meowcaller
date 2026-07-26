@@ -2,8 +2,11 @@ package meowcaller
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"sync"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 // Video in meowcaller is encoded H.264, carried as Annex-B access units (one frame's worth
@@ -50,6 +53,25 @@ type VideoState struct {
 	Orientation int
 	// Raw is the unmapped "state" attribute value.
 	Raw int
+}
+
+// ParticipantVideoFrame is one authenticated H.264 access unit attributed to a
+// participant device. AccessUnit is owned by the callback and may be retained.
+type ParticipantVideoFrame struct {
+	ParticipantID string
+	Sender        types.JID
+	Device        types.JID
+	PID           uint32
+	HasPID        bool
+	SSRC          uint32
+	Orientation   int
+	AccessUnit    []byte
+}
+
+func cloneParticipantVideoFrame(frame ParticipantVideoFrame) ParticipantVideoFrame {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	frame.AccessUnit = bytes.Clone(frame.AccessUnit)
+	return frame
 }
 
 // annexBRecorder records the peer's H.264 to a raw Annex-B .h264 file.

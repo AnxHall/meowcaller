@@ -32,9 +32,11 @@ import (
 type engine struct {
 	c *Client
 
-	mu           sync.Mutex
-	calls        map[string]*engineCall // keyed by call-id
-	sendCallNode func(context.Context, waBinary.Node) error
+	mu              sync.Mutex
+	calls           map[string]*engineCall // keyed by call-id
+	sendCallNode    func(context.Context, waBinary.Node) error
+	requestCallNode func(context.Context, waBinary.Node, string) (*waBinary.Node, error)
+	rawCallHookErr  error
 }
 
 // engineCall is the engine's per-call state: the public Call handle plus the inputs
@@ -51,17 +53,26 @@ type engineCall struct {
 	creator types.JID // call-creator JID (for accept/relaylatency)
 	from    types.JID // the <call> "from" — where stanzas are addressed
 
-	direction        CallDirection
-	codec            AudioCodec   // audio codec for this call, selected from voip_settings (MLow default)
-	localVideo       bool         // this client is sending, or has requested to send, video
-	remoteVideo      bool         // the peer is sending video to this client
-	videoGate        bool         // outbound upgrade is waiting for peer acceptance
-	peerVideoUpgrade bool         // the peer's inbound upgrade is waiting for local acceptance
-	videoTx          *videoSender // video send pipeline, live while media runs
-	appDataTx        *appDataSender
-	rekeyPeer        func(string) error
-	started          bool
-	cancel           context.CancelFunc // tears down this call's media goroutine
+	direction         CallDirection
+	codec             AudioCodec   // audio codec for this call, selected from voip_settings (MLow default)
+	localVideo        bool         // this client is sending, or has requested to send, video
+	remoteVideo       bool         // the peer is sending video to this client
+	videoGate         bool         // outbound upgrade is waiting for peer acceptance
+	peerVideoUpgrade  bool         // the peer's inbound upgrade is waiting for local acceptance
+	videoTx           *videoSender // video send pipeline, live while media runs
+	appDataTx         *appDataSender
+	rekeyPeer         func(string) error
+	group             bool
+	groupUpdate       *groupCallUpdate
+	groupReceivers    *participantReceiveRegistry
+	groupRawEpoch     []byte
+	groupEpochTxID    uint32
+	hasGroupEpoch     bool
+	started           bool
+	cancel            context.CancelFunc // tears down this call's media goroutine
+	waitingRoomCancel context.CancelFunc
+	inviteSelfDevice  groupCallDevice
+	invitePeerDevice  groupCallDevice
 
 	// The callee <accept> is deferred until the caller's <mute_v2> arrives.
 	acceptPending bool
@@ -74,8 +85,38 @@ func newEngine(c *Client) *engine {
 		e.sendCallNode = func(ctx context.Context, node waBinary.Node) error {
 			return c.wa.DangerousInternals().SendNode(ctx, node)
 		}
+		e.requestCallNode = func(ctx context.Context, node waBinary.Node, requestID string) (*waBinary.Node, error) {
+			di := c.wa.DangerousInternals()
+			waiter := di.WaitResponse(requestID)
+			defer di.CancelResponse(requestID, waiter)
+			if err := di.SendNode(ctx, node); err != nil {
+				return nil, err
+			}
+			select {
+			case response := <-waiter:
+				if response == nil {
+					return nil, errors.New("meowcaller: call request returned no response")
+				}
+				return response, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 	}
 	return e
+}
+
+func (e *engine) requireRawCallAdapter() error {
+	// Source of truth: https://github.com/tulir/whatsmeow/blob/e9a033b24933cc8d90fa5ff8991b1268ba80a140/client.go#L110-L120
+	if e == nil {
+		return errors.New("meowcaller: raw call adapter is unavailable")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.rawCallHookErr != nil {
+		return fmt.Errorf("meowcaller: raw call adapter is unavailable: %w", e.rawCallHookErr)
+	}
+	return nil
 }
 
 // onEndFn returns the Call's OnEnd listener under its lock (the field is unexported
@@ -104,7 +145,12 @@ func (c *Call) playerAndSink() (*Player, AudioSink) {
 // install wires the whatsmeow call event handlers and the <ack>/<call> interception.
 // Call before the whatsmeow client connects.
 func (e *engine) install() {
-	e.installCallAckHook()
+	if err := e.installCallAckHook(); err != nil {
+		e.mu.Lock()
+		e.rawCallHookErr = err
+		e.mu.Unlock()
+		e.c.log.Error().Err(err).Msg("raw call adapter is unavailable")
+	}
 	e.c.wa.AddEventHandler(func(evt any) {
 		switch ev := evt.(type) {
 		case *events.CallOffer:
@@ -122,6 +168,8 @@ func (e *engine) install() {
 			e.onTerminate(ev.CallID, ev.Reason)
 		case *events.CallReject:
 			e.onReject(ev)
+		case *events.UnknownCallEvent:
+			e.onUnknownCallEvent(ev.Node)
 		}
 	})
 }
@@ -435,6 +483,10 @@ func (e *engine) placeCall(ctx context.Context, target string, opts CallOptions)
 	m.direction = CallDirectionOutgoing
 	m.localVideo = opts.Video
 	m.remoteVideo = opts.Video
+	m.inviteSelfDevice = groupCallDevice{
+		JID: self, CapabilityVersion: 1,
+		Capability: append([]byte(nil), signaling.CapabilityOffer...),
+	}
 	e.mu.Unlock()
 
 	e.c.diag.Emit("keying", map[string]any{
@@ -456,6 +508,17 @@ func (e *engine) placeCall(ctx context.Context, target string, opts CallOptions)
 // preparation step, independent of the later Answer/Reject), and fires the
 // OnIncomingCall listener. Only the <accept> is deferred to Answer.
 func (e *engine) onOffer(ev *events.CallOffer) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/33854919e64bdd4b053054ac9764d8fc63027b57/datasheets/voip-group-invite-accept.md#L28-L40
+	groupSnapshot, isGroup, groupErr := signaling.ParseGroupInviteSnapshot(ev.Data)
+	if groupErr != nil {
+		e.c.log.Warn().Err(groupErr).Str("call_id", ev.CallID).Msg("parse inbound group offer failed")
+		return
+	}
+	if isGroup {
+		e.onGroupOffer(ev, groupCallUpdateFromSignaling(*groupSnapshot))
+		return
+	}
+
 	// A "call ended" notification arrives offer-shaped, carrying is_call_ended/
 	// terminate_reason (e.g. accepted_elsewhere). It is not a live call — engaging it
 	// (preaccept/accept) just earns an "accept error 500". Ignore it.
@@ -499,6 +562,13 @@ func (e *engine) onOffer(ev *events.CallOffer) {
 	isVideo := signaling.OfferHasVideo(ev.Data)
 	m.localVideo = isVideo
 	m.remoteVideo = isVideo
+	m.inviteSelfDevice = groupCallDevice{
+		JID: e.c.wa.Store.GetLID(), CapabilityVersion: 1,
+		Capability: append([]byte(nil), signaling.CapabilityOffer...),
+	}
+	if device, ok := inviteDeviceCapability(ev.From, ev.Data); ok {
+		m.invitePeerDevice = device
+	}
 	if r := findRelay(ev.Data); r != nil {
 		m.relay = parseRelayData(r)
 		if !m.relay.peerJID.IsEmpty() {
@@ -519,6 +589,52 @@ func (e *engine) onOffer(ev *events.CallOffer) {
 		e.c.log.Warn().Err(err).Str("call_id", ev.CallID).Msg("preaccept failed")
 	}
 
+	if fn := e.c.incomingCallHandler(); fn != nil {
+		fn(call)
+	}
+}
+
+func (e *engine) onGroupOffer(ev *events.CallOffer, update groupCallUpdate) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/33854919e64bdd4b053054ac9764d8fc63027b57/datasheets/voip-group-invite-accept.md#L28-L40
+	peer := ev.CallCreator
+	if peer.IsEmpty() {
+		peer = ev.From
+	}
+	call := &Call{eng: e, id: ev.CallID, peer: peer, phase: CallPhaseRinging}
+	isVideo := signaling.OfferHasVideo(ev.Data)
+	e.mu.Lock()
+	m := e.entry(ev.CallID)
+	m.call = call
+	m.selfLID = e.c.wa.Store.GetLID().String()
+	m.peerLID = peer.String()
+	m.creator = ev.CallCreator
+	if m.creator.IsEmpty() {
+		m.creator = peer
+	}
+	m.from = types.NewJID(ev.CallID, "call")
+	m.direction = CallDirectionIncoming
+	m.group = true
+	m.localVideo = isVideo
+	m.remoteVideo = isVideo
+	creator := m.creator
+	e.mu.Unlock()
+	e.applyGroupUpdate(update)
+
+	preaccept, err := signaling.BuildActiveGroupPreaccept(
+		ev.CallID,
+		creator,
+		e.nextCallNodeID(),
+		isVideo,
+	)
+	if err != nil {
+		e.c.log.Warn().Err(err).Str("call_id", ev.CallID).Msg("build group preaccept failed")
+		return
+	}
+	if err = e.transmitCallNode(context.Background(), preaccept); err != nil {
+		e.c.log.Warn().Err(err).Str("call_id", ev.CallID).Msg("send group preaccept failed")
+		return
+	}
+	e.c.log.Info().Str("call_id", ev.CallID).Bool("video", isVideo).Msg("active group invite preaccepted")
 	if fn := e.c.incomingCallHandler(); fn != nil {
 		fn(call)
 	}
@@ -551,6 +667,19 @@ func (e *engine) answer(c *Call) error {
 	m := e.lookup(c.id)
 	if m == nil {
 		return fmt.Errorf("meowcaller: unknown call %s", c.id)
+	}
+	if m.group {
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
+		accept, err := signaling.BuildActiveGroupAccept(c.id, m.creator, e.nextCallNodeID())
+		if err != nil {
+			return err
+		}
+		if err = e.transmitCallNode(context.Background(), accept); err != nil {
+			return fmt.Errorf("meowcaller: send group accept: %w", err)
+		}
+		c.setPhase(CallPhaseConnecting)
+		e.maybeStartMedia(c.id)
+		return nil
 	}
 	e.mu.Lock()
 	m.acceptPending = true
@@ -707,6 +836,13 @@ func (e *engine) onPreAccept(ev *events.CallPreAccept) {
 	if m.call != nil && m.call.State() == CallPhaseCalling {
 		m.call.setPhase(CallPhaseRinging)
 	}
+	if device, ok := inviteDeviceCapability(ev.From, ev.Data); ok {
+		e.mu.Lock()
+		if current := e.calls[ev.CallID]; current != nil {
+			current.invitePeerDevice = device
+		}
+		e.mu.Unlock()
+	}
 	e.c.log.Info().
 		Str("call_id", ev.CallID).
 		Str("from", ev.From.String()).
@@ -728,10 +864,25 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 	if m.call != nil && m.call.State() == CallPhaseEnded {
 		return
 	}
+	if m.group {
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
+		if m.call != nil && m.call.State() < CallPhaseConnecting {
+			m.call.setPhase(CallPhaseConnecting)
+		}
+		if m.call != nil {
+			m.call.markPeerAccepted()
+		}
+		e.c.log.Info().Str("call_id", ev.CallID).Str("from", ev.From.String()).Msg("participant accepted group call")
+		e.maybeStartMedia(ev.CallID)
+		return
+	}
 	e.mu.Lock()
 	var rekeyPeer func(string) error
 	answeringPeer := ev.From.String()
 	if current := e.calls[ev.CallID]; current != nil {
+		if device, ok := inviteDeviceCapability(ev.From, ev.Data); ok {
+			current.invitePeerDevice = device
+		}
 		e.applyVoipSettingsCodec(current, ev.Data, ev.CallID)
 		if !ev.From.IsEmpty() {
 			current.from = ev.From
@@ -767,6 +918,29 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 		"from": ev.From.String(), "platform": ev.RemotePlatform, "video": m.localVideo || m.remoteVideo,
 	})
 	e.maybeStartMedia(ev.CallID)
+}
+
+func inviteDeviceCapability(device types.JID, node *waBinary.Node) (groupCallDevice, bool) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
+	if device.IsEmpty() {
+		return groupCallDevice{}, false
+	}
+	capability := findChild(node, "capability")
+	if capability == nil {
+		return groupCallDevice{}, false
+	}
+	value, ok := capability.Content.([]byte)
+	if !ok || len(value) == 0 {
+		return groupCallDevice{}, false
+	}
+	version, err := strconv.ParseUint(capability.AttrGetter().String("ver"), 10, 32)
+	if err != nil {
+		return groupCallDevice{}, false
+	}
+	return groupCallDevice{
+		JID: device, CapabilityVersion: uint32(version),
+		Capability: append([]byte(nil), value...),
+	}, true
 }
 
 func preferQualifiedPeer(current string, signaled types.JID) string {
@@ -843,6 +1017,16 @@ func (e *engine) onCallAck(ack *waBinary.Node) {
 		e.finishCall(callID, "server:"+errCode)
 		return
 	}
+	groupUpdate, isGroup, groupErr := signaling.ParseInitialGroupCallAck(ack)
+	if groupErr != nil {
+		e.c.log.Warn().Err(groupErr).Msg("parse initial group call ack failed")
+		return
+	}
+	if isGroup {
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L27-L33
+		e.applyGroupUpdate(groupCallUpdateFromSignaling(*groupUpdate))
+		return
+	}
 	r := findRelay(ack)
 	if r == nil {
 		return
@@ -872,6 +1056,22 @@ func (e *engine) onCallRaw(callNode *waBinary.Node) bool {
 		return false
 	}
 	switch kids[0].Tag {
+	case "group_update", "enc_rekey", "waiting_room_update", "user_action", "screen_share":
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
+		ack, ok := signaling.BuildCallControlAck(callNode, kids[0].Tag)
+		if !ok {
+			e.c.log.Warn().
+				Str("action", kids[0].Tag).
+				Msg("call control ack: missing id/from")
+		} else if err := e.transmitCallNode(context.Background(), ack); err != nil {
+			e.c.log.Warn().
+				Err(err).
+				Str("action", kids[0].Tag).
+				Str("id", ack.AttrGetter().String("id")).
+				Msg("send typed call control ack failed")
+		}
+		e.onUnknownCallEvent(callNode)
+		return true
 	case "mute_v2":
 		mv := kids[0].AttrGetter()
 		callID := mv.String("call-id")
@@ -1044,16 +1244,29 @@ func (e *engine) finishCall(callID, reason string) {
 	if m != nil {
 		delete(e.calls, callID)
 	}
-	var cancel context.CancelFunc
+	var cancel, waitingRoomCancel context.CancelFunc
 	var call *Call
+	var receivers *participantReceiveRegistry
 	if m != nil {
 		cancel = m.cancel
 		m.cancel = nil
+		waitingRoomCancel = m.waitingRoomCancel
+		m.waitingRoomCancel = nil
+		clear(m.groupRawEpoch)
+		m.groupRawEpoch = nil
+		receivers = m.groupReceivers
+		m.groupReceivers = nil
 		call = m.call
 	}
 	e.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if receivers != nil {
+		receivers.clear()
+	}
+	if waitingRoomCancel != nil {
+		waitingRoomCancel()
 	}
 	if call == nil || call.State() == CallPhaseEnded {
 		return
@@ -1074,28 +1287,70 @@ func (e *engine) finishCall(callID, reason string) {
 //
 // NOT VALIDATED: reaches into the client's unexported nodeHandlers via reflection +
 // unsafe; covered only by a live call against the real relay.
-func (e *engine) installCallAckHook() {
+func (e *engine) installCallAckHook() error {
+	// Source of truth: https://github.com/tulir/whatsmeow/blob/e9a033b24933cc8d90fa5ff8991b1268ba80a140/client.go#L110-L120
 	cli := e.c.wa
-	field := reflect.ValueOf(cli).Elem().FieldByName("nodeHandlers")
-	handlers := *(*map[string]func(context.Context, *waBinary.Node))(unsafe.Pointer(field.UnsafeAddr()))
-	handlers["ack"] = func(_ context.Context, node *waBinary.Node) {
+	if cli == nil {
+		return errors.New("meowcaller: raw call adapter has no whatsmeow client")
+	}
+	if cli.IsConnected() {
+		return errors.New("meowcaller: construct the client before connecting whatsmeow")
+	}
+	clientValue := reflect.ValueOf(cli)
+	if clientValue.Kind() != reflect.Pointer || clientValue.IsNil() {
+		return errors.New("meowcaller: raw call adapter received an invalid whatsmeow client")
+	}
+	clientValue = clientValue.Elem()
+	if !clientValue.IsValid() || clientValue.Kind() != reflect.Struct {
+		return errors.New("meowcaller: raw call adapter cannot inspect whatsmeow client")
+	}
+	field := clientValue.FieldByName("nodeHandlers")
+	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
+	nodeType := reflect.TypeOf((*waBinary.Node)(nil))
+	if !field.IsValid() ||
+		!field.CanAddr() ||
+		field.Kind() != reflect.Map ||
+		field.Type().Key().Kind() != reflect.String ||
+		field.Type().Elem().Kind() != reflect.Func ||
+		field.Type().Elem().NumIn() != 2 ||
+		field.Type().Elem().In(0) != contextType ||
+		field.Type().Elem().In(1) != nodeType ||
+		field.Type().Elem().NumOut() != 0 {
+		return errors.New("meowcaller: upstream whatsmeow node handler layout changed")
+	}
+	handlers := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+	if handlers.IsNil() {
+		return errors.New("meowcaller: upstream whatsmeow node handlers are unavailable")
+	}
+	origAck := handlers.MapIndex(reflect.ValueOf("ack"))
+	ackHandler := reflect.MakeFunc(field.Type().Elem(), func(args []reflect.Value) []reflect.Value {
+		node := args[1].Interface().(*waBinary.Node)
 		if node.AttrGetter().String("class") != "call" {
-			return
+			if origAck.IsValid() && !origAck.IsNil() {
+				origAck.Call(args)
+			}
+			return nil
 		}
 		e.onCallAck(node)
-	}
-	origCall := handlers["call"]
-	handlers["call"] = func(ctx context.Context, node *waBinary.Node) {
+		return nil
+	})
+	handlers.SetMapIndex(reflect.ValueOf("ack"), ackHandler)
+	origCall := handlers.MapIndex(reflect.ValueOf("call"))
+	callHandler := reflect.MakeFunc(field.Type().Elem(), func(args []reflect.Value) []reflect.Value {
+		node := args[1].Interface().(*waBinary.Node)
 		// onCallRaw returns true when it fully handled the node (incl. its own ack), so
 		// whatsmeow's generic typeless ack is skipped — the <video> upgrade needs a typed
 		// type="video" ack, which a bare ack does not satisfy (the peer reverts otherwise).
 		if e.onCallRaw(node) {
-			return
+			return nil
 		}
-		if origCall != nil {
-			origCall(ctx, node)
+		if origCall.IsValid() && !origCall.IsNil() {
+			origCall.Call(args)
 		}
-	}
+		return nil
+	})
+	handlers.SetMapIndex(reflect.ValueOf("call"), callHandler)
+	return nil
 }
 
 // ---- whatsmeow glue (ported from examples/cli/call.go) ----

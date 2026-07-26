@@ -33,6 +33,7 @@ const (
 	CallPhaseConnecting
 	CallPhaseActive
 	CallPhaseEnded
+	CallPhaseWaitingRoom
 )
 
 // CallSession is the per-call signaling state with validated phase transitions.
@@ -110,6 +111,12 @@ func (s *CallSession) TransitionTo(next CallPhase) bool {
 		ok = true
 	case s.phase == CallPhaseRinging && next == CallPhaseConnecting:
 		ok = true
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/f62ccfb2a431fc25008423954287fd3009fed161/datasheets/web-initial-group-call.md#L40-L120
+	case (s.phase == CallPhaseCalling || s.phase == CallPhaseConnecting) &&
+		next == CallPhaseWaitingRoom:
+		ok = true
+	case s.phase == CallPhaseWaitingRoom && next == CallPhaseConnecting:
+		ok = true
 	case s.phase == CallPhaseConnecting && next == CallPhaseActive:
 		ok = true
 	case s.phase == next:
@@ -142,6 +149,8 @@ func phaseName(p CallPhase) string {
 		return "active"
 	case CallPhaseEnded:
 		return "ended"
+	case CallPhaseWaitingRoom:
+		return "waiting_room"
 	default:
 		return "unknown"
 	}
@@ -196,9 +205,7 @@ func (p *MediaPipeline) RekeySendFromRaw(rawE2E []byte, selfJID string) error {
 	if err != nil {
 		return err
 	}
-	p.sendMu.Lock()
-	p.sendKeys = sendKeys
-	p.sendMu.Unlock()
+	p.installSendKeys(sendKeys)
 	return nil
 }
 
@@ -210,10 +217,22 @@ func (p *MediaPipeline) RekeyRecvFromRawPreservingROC(rawE2E []byte, peerJID str
 	if err != nil {
 		return err
 	}
+	p.installRecvKeysPreservingROC(recvKeys)
+	return nil
+}
+
+func (p *MediaPipeline) installSendKeys(sendKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
+	p.sendMu.Lock()
+	p.sendKeys = sendKeys
+	p.sendMu.Unlock()
+}
+
+func (p *MediaPipeline) installRecvKeysPreservingROC(recvKeys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L122-L136
 	p.recvMu.Lock()
 	p.recvKeys = recvKeys
 	p.recvMu.Unlock()
-	return nil
 }
 
 func (p *MediaPipeline) installRecvKeys(recvKeys srtp.E2eSrtpKeys) {

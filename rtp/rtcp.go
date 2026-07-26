@@ -372,6 +372,22 @@ func buildGroupSenderReportFromSenderSection(sender [28]byte, report *RtcpRecept
 	return out
 }
 
+// BuildPictureLossIndication builds an RFC 4585 PLI asking the sender of
+// mediaSSRC for a fresh intra frame.
+func BuildPictureLossIndication(senderSSRC, mediaSSRC uint32, profileExtension bool) [12]byte {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/rtcp.rs#L16-L39
+	var packet [12]byte
+	packet[0] = 0x81
+	if profileExtension {
+		packet[0] |= 0x10
+	}
+	packet[1] = RtcpPtPsfb
+	binary.BigEndian.PutUint16(packet[2:4], 2)
+	binary.BigEndian.PutUint32(packet[4:8], senderSSRC)
+	binary.BigEndian.PutUint32(packet[8:12], mediaSSRC)
+	return packet
+}
+
 func appendReceptionReport(out []byte, report *RtcpReceptionReport) []byte {
 	out = binary.BigEndian.AppendUint32(out, report.Ssrc)
 	out = append(out, report.FractionLost)

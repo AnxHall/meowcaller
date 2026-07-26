@@ -3,8 +3,10 @@ package meowcaller
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"sync"
@@ -25,12 +27,50 @@ import (
 // idle), encodes via MLow + ProtectAudio, and sends to the relay; inbound classifies
 // relay packets, unprotects+decodes RTP, and writes to the Call's sink.
 
+const (
+	groupRegistryInstallMaxAttempts = 32
+	groupRegistryInstallBackoff     = 5 * time.Millisecond
+	videoPLIInterval                = 300 * time.Millisecond
+)
+
+type videoReceiveState struct {
+	assembler   rtp.H264AccessUnitAssembler
+	orientation int
+}
+
 // maybeStartMedia launches the media loop for callID once both the callKey and the relay
 // endpoint are known. It is idempotent — the loop starts exactly once per call.
 func (e *engine) maybeStartMedia(callID string) {
 	e.mu.Lock()
 	m := e.calls[callID]
-	if m == nil || m.started || m.callKey == nil || m.relay == nil {
+	if m == nil || m.started {
+		e.mu.Unlock()
+		return
+	}
+	if m.group && (!m.hasGroupEpoch || len(m.groupRawEpoch) != 32 ||
+		m.groupUpdate == nil || m.groupUpdate.Relay == nil) {
+		e.mu.Unlock()
+		return
+	}
+	if !m.group && m.relay == nil {
+		e.mu.Unlock()
+		return
+	}
+	if !m.group && len(m.callKey) == 0 {
+		e.mu.Unlock()
+		return
+	}
+	rd := m.relay
+	if m.group {
+		groupRelay, err := groupRelayData(*m.groupUpdate, m.direction == CallDirectionIncoming)
+		if err != nil {
+			e.mu.Unlock()
+			e.c.log.Debug().Err(err).Str("call_id", callID).Msg("group media is waiting for an authoritative relay")
+			return
+		}
+		rd = groupRelay
+	}
+	if rd == nil {
 		e.mu.Unlock()
 		return
 	}
@@ -38,7 +78,13 @@ func (e *engine) maybeStartMedia(callID string) {
 	mctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	call := m.call
-	callKey, selfLID, peerLID, rd := m.callKey, m.selfLID, m.peerLID, m.relay
+	var callKey []byte
+	if m.group {
+		callKey = append([]byte(nil), m.groupRawEpoch...)
+	} else {
+		callKey = append([]byte(nil), m.callKey...)
+	}
+	selfLID, peerLID := m.selfLID, m.peerLID
 	inbound := m.direction == CallDirectionIncoming
 	e.mu.Unlock()
 
@@ -47,6 +93,7 @@ func (e *engine) maybeStartMedia(callID string) {
 	}
 	e.c.log.Info().Str("call_id", callID).Msg("starting media")
 	go func() {
+		defer clear(callKey)
 		if err := e.runMedia(mctx, callID, call, callKey, selfLID, peerLID, rd, inbound); err != nil {
 			e.c.log.Warn().Err(err).Str("call_id", callID).Msg("media ended")
 		}
@@ -103,8 +150,8 @@ func (e *engine) connectAndAllocate(ctx context.Context, rd *relayData, streamSs
 	}
 	e.c.diag.Emit("relay", map[string]any{
 		"event": "keying", "token_id": ep.tokenID, "token_count": len(rd.relayTokens),
-		"relay_key_hex": hex.EncodeToString(rd.relayKeyASCII),
-		"token_hex":     hex.EncodeToString(rd.relayTokens[ep.tokenID]),
+		"relay_key_bytes": len(rd.relayKeyASCII),
+		"token_bytes":     len(rd.relayTokens[ep.tokenID]),
 	})
 	endpointXor, ok := stun.EncodeXorRelayEndpoint(ep.addresses[0].ipv4, ep.addresses[0].port, log)
 	if !ok {
@@ -121,7 +168,7 @@ func (e *engine) connectAndAllocate(ctx context.Context, rd *relayData, streamSs
 	log.Info().Int("bytes", len(allocate)).Msg("sent STUN allocate")
 	e.c.diag.Emit("stun", map[string]any{
 		"event": "allocate_sent", "bytes": len(allocate),
-		"tx_id_hex": hex.EncodeToString(tx[:]), "allocate_hex": hex.EncodeToString(allocate),
+		"tx_id_hex":    hex.EncodeToString(tx[:]),
 		"stream_ssrcs": streamSsrcs,
 	})
 	return ch, allocate, nil
@@ -150,7 +197,19 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	if err != nil {
 		return err
 	}
+	hbhFECTXSSRC, err := rtp.DeriveWasmParticipantSsrc(callID, selfParticipantID, rtp.HBHFECTXSlotWord, log)
+	if err != nil {
+		return err
+	}
+	hbhFECRXSSRC, err := rtp.DeriveWasmParticipantSsrc(callID, selfParticipantID, rtp.HBHFECRXSlotWord, log)
+	if err != nil {
+		return err
+	}
 	streamSsrcs, err := rtp.DeriveWasmRelayStreamSsrcs(callID, selfParticipantID, log)
+	if err != nil {
+		return err
+	}
+	streamSsrcs, err = prepareWasmRelayStreamSSRCs(streamSsrcs, appDataSelfSsrc, rand.Reader)
 	if err != nil {
 		return err
 	}
@@ -159,6 +218,11 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	defer ch.Close()
+	allocateState := newGroupRelayAllocateStateWithHBHFEC(
+		allocate,
+		rd.relayKeyASCII,
+		[2]uint32{hbhFECTXSSRC, hbhFECRXSSRC},
+	)
 
 	// Send a consent ping (0x0801) immediately, together with the allocate and BEFORE any
 	// RTP. The relay won't forward the peer's media until consent (ping → pong) is
@@ -188,27 +252,185 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	})
 
 	enc := mlow.NewMlowEncoder(mlow.WithLogger(log))
-	dec := mlow.NewMlowDecoder(mlow.WithLogger(log))
+	e.mu.Lock()
+	m := e.calls[callID]
+	audioReceivers := (*participantReceiveRegistry)(nil)
+	var groupMode atomic.Bool
+	if m != nil {
+		audioReceivers = m.groupReceivers
+		groupMode.Store(m.group)
+	}
+	e.mu.Unlock()
+	if audioReceivers == nil {
+		audioReceivers, err = newParticipantReceiveRegistry(
+			callID,
+			callKey,
+			selfLID,
+			peerLID,
+			func() participantAudioDecoder {
+				return mlow.NewMlowDecoder(mlow.WithLogger(log))
+			},
+			WithLogger(log),
+		)
+		if err != nil {
+			return err
+		}
+		unpublishedReceivers := audioReceivers
+		defer func() {
+			if unpublishedReceivers != nil {
+				unpublishedReceivers.clear()
+			}
+		}()
+		if groupMode.Load() {
+			installed := false
+			for attempt := 0; attempt < groupRegistryInstallMaxAttempts; attempt++ {
+				if err = ctx.Err(); err != nil {
+					return err
+				}
+				e.mu.Lock()
+				current := e.calls[callID]
+				if current == nil || !current.group || current.groupUpdate == nil ||
+					!current.hasGroupEpoch || len(current.groupRawEpoch) != 32 {
+					e.mu.Unlock()
+					return fmt.Errorf("meowcaller: group media prerequisites changed during startup")
+				}
+				update := cloneGroupCallUpdate(*current.groupUpdate)
+				rawEpoch := append([]byte(nil), current.groupRawEpoch...)
+				transactionID := current.groupEpochTxID
+				e.mu.Unlock()
+
+				if err = audioReceivers.ApplyGroupUpdate(update); err == nil {
+					err = audioReceivers.ApplyGroupRawEpoch(transactionID, rawEpoch)
+				}
+				clear(rawEpoch)
+				if err != nil {
+					return fmt.Errorf("initialize group participant media: %w", err)
+				}
+
+				e.mu.Lock()
+				current = e.calls[callID]
+				if current == nil || !current.group {
+					e.mu.Unlock()
+					return fmt.Errorf("meowcaller: group call ended during media startup")
+				}
+				if current.groupReceivers != nil {
+					discarded := audioReceivers
+					audioReceivers = current.groupReceivers
+					e.mu.Unlock()
+					discarded.clear()
+					unpublishedReceivers = nil
+					installed = true
+					break
+				}
+				if current.groupUpdate != nil &&
+					current.groupUpdate.TransactionID <= update.TransactionID &&
+					current.groupEpochTxID <= transactionID {
+					current.groupReceivers = audioReceivers
+					e.mu.Unlock()
+					unpublishedReceivers = nil
+					installed = true
+					break
+				}
+				e.mu.Unlock()
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(groupRegistryInstallBackoff):
+				}
+			}
+			if !installed {
+				return fmt.Errorf(
+					"meowcaller: group media roster changed during %d startup attempts",
+					groupRegistryInstallMaxAttempts,
+				)
+			}
+		} else {
+			e.mu.Lock()
+			current := e.calls[callID]
+			if current == nil {
+				e.mu.Unlock()
+				return fmt.Errorf("meowcaller: direct call ended during media startup")
+			}
+			if current.groupReceivers == nil {
+				current.groupReceivers = audioReceivers
+				e.mu.Unlock()
+			} else {
+				discarded := audioReceivers
+				audioReceivers = current.groupReceivers
+				e.mu.Unlock()
+				discarded.clear()
+			}
+			unpublishedReceivers = nil
+		}
+	}
 	audioPlayout := newAudioPlayoutBuffer()
+	var audioPlayoutMu sync.Mutex
+	var groupMixing atomic.Bool
 	defer func() {
+		if groupMixing.Load() {
+			return
+		}
+		audioPlayoutMu.Lock()
+		defer audioPlayoutMu.Unlock()
 		_, sink := callPlayerSink(call)
 		_ = audioPlayout.Flush(sink)
+	}()
+	audioMixer := newParticipantAudioMixer()
+	var audioSinkFramer participantAudioSinkFramer
+	go func() {
+		ticker := time.NewTicker(time.Duration(participantAudioMixChunkSamples) * time.Second / SampleRate)
+		defer ticker.Stop()
+		playoutStarted := false
+		var writeFailures uint64
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if !groupMixing.Load() {
+				continue
+			}
+			_, sink := callPlayerSink(call)
+			if sink == nil {
+				continue
+			}
+			chunk, ok := audioMixer.MixChunk()
+			if !ok {
+				continue
+			}
+			frame, ok := audioSinkFramer.Push(chunk)
+			if !ok {
+				continue
+			}
+			if err := sink.WriteFrame(frame); err != nil {
+				if writeFailures++; writeFailures == 1 {
+					log.Warn().Err(err).Msg("failed to write mixed WhatsApp audio")
+				}
+				continue
+			}
+			if !playoutStarted {
+				playoutStarted = true
+				log.Info().
+					Int("prefill_ms", participantAudioMixerPrefillSamples*1000/SampleRate).
+					Int("chunk_ms", participantAudioMixChunkSamples*1000/SampleRate).
+					Msg("started participant-mixed inbound audio playout")
+			}
+		}
 	}()
 	txPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, ssrc, FrameSamples, WithLogger(log))
 	if err != nil {
 		return err
 	}
+	if err = audioReceivers.attachSendPipeline(txPipe); err != nil {
+		return fmt.Errorf("attach audio RTP sender: %w", err)
+	}
 	audioRtcp, err := newMediaSrtcpSender(callKey, selfLID, ssrc, false)
 	if err != nil {
 		return err
 	}
-	peerRtcp, err := newMediaSrtcpReceiver(callKey, peerLID)
-	if err != nil {
-		return err
-	}
-	rxPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, ssrc, FrameSamples, WithLogger(log))
-	if err != nil {
-		return err
+	if err = audioReceivers.attachSRTCPSender(audioRtcp); err != nil {
+		return fmt.Errorf("attach audio SRTCP sender: %w", err)
 	}
 	// The derived E2E-SRTP keys live inside MediaPipeline; record the derivation INPUTS
 	// (callKey + participant-ID info strings) so a reference can re-derive and compare.
@@ -216,7 +438,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		"event": "media_keys_input", "call_id": callID, "ssrc": ssrc,
 		"self_participant_id": selfParticipantID,
 		"peer_participant_id": rtp.FormatE2ESrtpParticipantID(peerLID),
-		"call_key_hex":        hex.EncodeToString(callKey),
+		"call_key_bytes":      len(callKey),
 	})
 	e.c.diag.Emit("meta", map[string]any{
 		"event": "media_start", "call_id": callID, "self_lid": selfLID,
@@ -260,8 +482,62 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			var tx [12]byte
 			_, _ = rand.Read(tx[:])
 			ping := stun.BuildWhatsappPing(tx, log)
-			if _, err := ch.Send(allocate); err != nil {
-				return
+			allocateSent := false
+			e.mu.Lock()
+			currentCall := e.calls[callID]
+			if currentCall != nil && currentCall.group {
+				groupMode.Store(true)
+			}
+			e.mu.Unlock()
+			if groupMode.Load() {
+				e.mu.Lock()
+				current := e.calls[callID]
+				var update *groupCallUpdate
+				if current != nil && current.groupUpdate != nil {
+					cloned := cloneGroupCallUpdate(*current.groupUpdate)
+					update = &cloned
+				}
+				e.mu.Unlock()
+				if update != nil && update.Relay != nil {
+					var relayTx [12]byte
+					if _, err := rand.Read(relayTx[:]); err == nil {
+						endpoint := getMediaRelayEndpoint(rd, inbound)
+						allocateSent, err = allocateState.ApplyWithSubscriptions(
+							endpoint,
+							update.Relay,
+							streamSsrcs,
+							appDataSelfSsrc,
+							connectedRemoteParticipantPIDs(*update, audioReceivers.selfID),
+							relayTx,
+							func(packet []byte) error {
+								_, sendErr := ch.Send(packet)
+								return sendErr
+							},
+						)
+						if err != nil {
+							log.Warn().Err(err).Str("call_id", callID).Msg("failed to refresh group relay allocation")
+						}
+					}
+				}
+				activeParticipantIDs := audioReceivers.ActiveParticipantIDs()
+				audioMixer.Retain(activeParticipantIDs)
+				if shouldStartParticipantMixing(activeParticipantIDs) && !groupMixing.Load() {
+					audioPlayoutMu.Lock()
+					_, sink := callPlayerSink(call)
+					if err := audioPlayout.Drain(sink); err != nil {
+						log.Warn().Err(err).Msg("failed to drain direct audio before group playout")
+					}
+					groupMixing.Store(true)
+					audioPlayoutMu.Unlock()
+				}
+			}
+			if !allocateSent {
+				if err := allocateState.SendCurrent(func(packet []byte) error {
+					_, sendErr := ch.Send(packet)
+					return sendErr
+				}); err != nil {
+					return
+				}
 			}
 			_, _ = ch.Send(ping[:])
 			tickCount++
@@ -304,8 +580,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			}
 			e.c.diag.Emit("media_out", map[string]any{
 				"frame": txCount, "frame_samples": len(frame), "pcm_rms": rmsFloat32(frame),
-				"payload_len": len(payload), "payload_hex": hex.EncodeToString(payload),
-				"packet_len": len(packet), "packet_hex": hex.EncodeToString(packet),
+				"payload_len": len(payload), "packet_len": len(packet),
 			})
 			if _, err := ch.Send(packet); err != nil {
 				return
@@ -320,51 +595,12 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	// Receive: DataChannel → classify. RTP → unprotect → decode → sink. A non-RTP STUN
 	// binding request gets a binding-success reply (ICE consent freshness, RFC 7675);
 	// without it the relay drops the binding and the peer's call fails.
-	// Video receive (meowcaller-native): a second WARP pipeline keyed on the video SSRC
-	// (participant slot 2), demuxed off the relay by H.264 payload type 97. NALUs are
-	// reassembled into Annex-B access units and emitted on the RTP marker bit, per WaCalls.
+	// Video receive uses participant-scoped WARP pipelines keyed on each video SSRC.
 	//
 	// NOT VALIDATED: no live video-RTP vector; assumes video shares the audio E2E keys and
 	// WARP framing, and that the relay bridges the video SSRC.
-	rxVideoPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, videoSelfSsrc, FrameSamples, WithLogger(log))
-	if err != nil {
-		return err
-	}
-	rxAppDataPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, appDataSelfSsrc, FrameSamples, WithLogger(log))
-	if err != nil {
-		return err
-	}
-	var peerAppDataSsrc atomic.Uint32
-	setPeerAppDataSsrc := func(peer string) error {
-		ssrc, err := rtp.DeriveWasmParticipantSsrc(
-			callID,
-			rtp.FormatE2ESrtpParticipantID(peer),
-			rtp.AppDataSlotWord,
-			log,
-		)
-		if err != nil {
-			return err
-		}
-		peerAppDataSsrc.Store(ssrc)
-		return nil
-	}
-	if err := setPeerAppDataSsrc(peerLID); err != nil {
-		return err
-	}
 	rekeyPeer := func(answeringPeer string) error {
-		if err := rxPipe.RekeyRecv(callKey, answeringPeer); err != nil {
-			return err
-		}
-		if err := rxVideoPipe.RekeyRecv(callKey, answeringPeer); err != nil {
-			return err
-		}
-		if err := rxAppDataPipe.RekeyRecv(callKey, answeringPeer); err != nil {
-			return err
-		}
-		if err := setPeerAppDataSsrc(answeringPeer); err != nil {
-			return err
-		}
-		return peerRtcp.rekey(callKey, answeringPeer)
+		return audioReceivers.RekeyFallback(answeringPeer)
 	}
 	e.mu.Lock()
 	currentPeer := peerLID
@@ -386,11 +622,12 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		}
 		e.mu.Unlock()
 	}()
-	var videoDepack rtp.H264Depacketizer
-	var videoAU []byte
-	var appDataRx appDataReceiver
+	videoReceiveStates := make(map[*participantAudioReceiver]*videoReceiveState)
+	appDataReceivers := make(map[*participantAudioReceiver]*appDataReceiver)
+	lastVideoPLI := make(map[uint32]time.Time)
+	var rosterGeneration uint64
+	hasRosterGeneration := false
 	var videoWirePacket, videoWireFrame uint64
-	videoOrientation := -1
 
 	// Video send: a second WARP pipeline on our video SSRC, registered on the call so
 	// Call.SendVideoFrame can push encoded H.264 to the relay. Cleared when the loop exits.
@@ -398,9 +635,15 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	if err != nil {
 		return err
 	}
+	if err = audioReceivers.attachSendPipeline(txVideoPipe); err != nil {
+		return fmt.Errorf("attach video RTP sender: %w", err)
+	}
 	videoRtcp, err := newMediaSrtcpSender(callKey, selfLID, videoSelfSsrc, true)
 	if err != nil {
 		return err
+	}
+	if err = audioReceivers.attachSRTCPSender(videoRtcp); err != nil {
+		return fmt.Errorf("attach video SRTCP sender: %w", err)
 	}
 	vsender := &videoSender{
 		pipe: txVideoPipe, stream: rtp.NewVideoRtpStream(videoSelfSsrc, defaultVideoRtpStepSamples),
@@ -410,6 +653,9 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	txAppDataPipe, err := NewMediaPipeline(callKey, selfLID, peerLID, appDataSelfSsrc, FrameSamples, WithLogger(log))
 	if err != nil {
 		return err
+	}
+	if err = audioReceivers.attachSendPipeline(txAppDataPipe); err != nil {
+		return fmt.Errorf("attach app-data RTP sender: %w", err)
 	}
 	appSender := newAppDataSender(txAppDataPipe, appDataSelfSsrc, func(packet []byte) (int, error) {
 		if header, ok := rtp.ParseRtpHeader(packet); ok {
@@ -441,7 +687,45 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		e.mu.Unlock()
 	}()
 
-	var audioReception, videoReception rtp.RtcpReceptionStats
+	var audioReception rtp.RtcpReceptionStatsSet
+	var videoReception rtp.RtcpReceptionStatsSet
+	if groupMode.Load() {
+		e.mu.Lock()
+		current := e.calls[callID]
+		var update *groupCallUpdate
+		if current != nil && current.groupUpdate != nil {
+			cloned := cloneGroupCallUpdate(*current.groupUpdate)
+			update = &cloned
+		}
+		e.mu.Unlock()
+		if update == nil || update.Relay == nil {
+			return fmt.Errorf("meowcaller: group media started without an authoritative relay snapshot")
+		}
+		var relayTx [12]byte
+		if _, err := rand.Read(relayTx[:]); err != nil {
+			return fmt.Errorf("generate group relay transaction ID: %w", err)
+		}
+		_, err = allocateState.ApplyWithSubscriptions(
+			getMediaRelayEndpoint(rd, inbound),
+			update.Relay,
+			streamSsrcs,
+			appDataSelfSsrc,
+			connectedRemoteParticipantPIDs(*update, audioReceivers.selfID),
+			relayTx,
+			func(packet []byte) error {
+				_, sendErr := ch.Send(packet)
+				return sendErr
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("send initial group relay allocation: %w", err)
+		}
+		audioReception.Retain(audioReceivers.ActiveAudioSSRCs())
+		videoReception.Retain(audioReceivers.ActiveVideoSSRCs())
+		activeParticipantIDs := audioReceivers.ActiveParticipantIDs()
+		audioMixer.Retain(activeParticipantIDs)
+		groupMixing.Store(shouldStartParticipantMixing(activeParticipantIDs))
+	}
 
 	// WhatsApp associates the RTP streams with an SRTCP session. Periodic compound
 	// SR+SDES packets are required for the caller's video to start flowing to the
@@ -456,22 +740,46 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				return
 			case now := <-ticker.C:
 				nowMs := uint64(now.UnixMilli())
-				audioReport := audioReception.Report(nowMs)
-				audioPacket, err := audioRtcp.senderReport(txPipe.SenderStats(), nowMs, audioReport)
-				if err != nil {
-					return
+				e.mu.Lock()
+				current := e.calls[callID]
+				if current != nil && current.group {
+					groupMode.Store(true)
 				}
-				if _, err = ch.Send(audioPacket); err != nil {
+				e.mu.Unlock()
+				if groupMode.Load() {
+					audioReception.Retain(audioReceivers.ActiveAudioSSRCs())
+					videoReception.Retain(audioReceivers.ActiveVideoSSRCs())
+				}
+				audioReports := audioReception.Reports(nowMs)
+				_, err := sendMediaSrtcpReceptionReports(
+					audioRtcp,
+					txPipe.SenderStats(),
+					nowMs,
+					audioReports,
+					groupMode.Load() && audioReceivers.HasCommittedGroupUpdate(),
+					func(packet []byte) error {
+						_, sendErr := ch.Send(packet)
+						return sendErr
+					},
+				)
+				if err != nil {
 					return
 				}
 				videoStats := txVideoPipe.SenderStats()
 				if videoStats.PacketsSent > 0 {
-					videoReport := videoReception.Report(nowMs)
-					videoPacket, err := videoRtcp.senderReport(videoStats, nowMs, videoReport)
+					videoReports := videoReception.Reports(nowMs)
+					_, err = sendMediaSrtcpReceptionReports(
+						videoRtcp,
+						videoStats,
+						nowMs,
+						videoReports,
+						groupMode.Load() && audioReceivers.HasCommittedGroupUpdate(),
+						func(packet []byte) error {
+							_, sendErr := ch.Send(packet)
+							return sendErr
+						},
+					)
 					if err != nil {
-						return
-					}
-					if _, err = ch.Send(videoPacket); err != nil {
 						return
 					}
 				}
@@ -489,7 +797,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}()
 
 	buf := make([]byte, 1500)
-	var rtpIn, rtpSeen, unprotectFail, rtpInspect, vidIn, appDataIn, appDataUnprotectFail, videoUnprotectFail, videoFrameIn, videoSinkMissing, rtcpIn, rtcpAuthFail uint64
+	var rtpIn, rtpSeen, unprotectFail, rtpInspect, vidIn, appDataIn, appDataUnprotectFail, videoUnprotectFail, videoFrameIn, videoSinkMissing, rtcpIn, rtcpAuthFail, groupForwardingInvalid uint64
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -498,13 +806,38 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		if err != nil {
 			return fmt.Errorf("relay recv: %w", err)
 		}
+		currentRosterGeneration, activeReceivers := audioReceivers.ActiveReceiverSnapshot()
+		if !hasRosterGeneration || currentRosterGeneration != rosterGeneration {
+			for receiver, state := range videoReceiveStates {
+				if _, active := activeReceivers[receiver]; active {
+					continue
+				}
+				state.assembler = rtp.H264AccessUnitAssembler{}
+				delete(lastVideoPLI, receiver.videoSSRC)
+				delete(videoReceiveStates, receiver)
+			}
+			for receiver := range appDataReceivers {
+				if _, active := activeReceivers[receiver]; !active {
+					delete(appDataReceivers, receiver)
+				}
+			}
+			rosterGeneration = currentRosterGeneration
+			hasRosterGeneration = true
+		}
 		relayRx.Add(1)
-		pkt := buf[:n]
+		rawPkt := buf[:n]
+		pkt, groupWrapped, groupValid := relay.UnwrapGroupForwardingPacket(rawPkt)
+		if !groupValid {
+			if groupForwardingInvalid++; groupForwardingInvalid == 1 {
+				log.Warn().Int("packet_bytes", n).Msg("invalid group-forwarding relay packet")
+			}
+			continue
+		}
 		packetKind := relay.ClassifyRelayPacket(pkt)
 		isRTP := packetKind == relay.RelayPacketRtp
 		e.c.diag.Emit("relay", map[string]any{
 			"event": "packet_in", "bytes": n, "is_rtp": isRTP,
-			"packet_hex": hex.EncodeToString(pkt),
+			"group_wrapped": groupWrapped, "group_header_bytes": n - len(pkt),
 		})
 		switch packetKind {
 		case relay.RelayPacketRtcp:
@@ -512,7 +845,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			if !ok {
 				continue
 			}
-			plain, index, ok := peerRtcp.unprotect(senderSsrc, pkt)
+			plain, index, ok := audioReceivers.UnprotectSRTCP(senderSsrc, pkt)
 			if !ok {
 				if rtcpAuthFail++; rtcpAuthFail == 1 {
 					log.Warn().Uint32("ssrc", senderSsrc).Msg("peer SRTCP failed authentication")
@@ -540,22 +873,22 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			}
 			e.c.diag.Emit("rtcp", map[string]any{
 				"event": "in", "ssrc": senderSsrc, "index": index,
-				"plain_hex": hex.EncodeToString(plain), "requests_keyframe": keyframe,
+				"plain_bytes": len(plain), "requests_keyframe": keyframe,
 			})
 			continue
 		case relay.RelayPacketStun:
 			mt, isStun := stun.StunMessageType(pkt)
 			if isStun && mt == stun.MsgBindingRequest {
-				if txid, ok := stun.StunTransactionID(pkt); ok && len(txid) == 12 {
-					var tx [12]byte
-					copy(tx[:], txid)
-					resp := stun.EncodeStunRequest(stun.MsgBindingSuccess, tx, nil, rd.relayKeyASCII, true, log)
-					if _, err := ch.Send(resp); err != nil {
-						return fmt.Errorf("relay send binding-success: %w", err)
-					}
+				resp, answered, err := allocateState.SendBindingSuccess(pkt, func(packet []byte) error {
+					_, sendErr := ch.Send(packet)
+					return sendErr
+				})
+				if err != nil {
+					return fmt.Errorf("relay send binding-success: %w", err)
+				}
+				if answered {
 					e.c.diag.Emit("stun", map[string]any{
-						"event":     "binding_request_answered",
-						"tx_id_hex": hex.EncodeToString(tx[:]), "resp_hex": hex.EncodeToString(resp),
+						"event": "binding_request_answered", "response_bytes": len(resp),
 					})
 				}
 			}
@@ -585,15 +918,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		}
 		kind := classifyMediaPayload(vh)
 		if kind == mediaPayloadAppData {
-			wantSsrc := peerAppDataSsrc.Load()
-			if vh.Ssrc != wantSsrc {
-				log.Warn().Uint32("ssrc", vh.Ssrc).Uint32("expected_ssrc", wantSsrc).Msg("dropping app-data RTP from unexpected SSRC")
-				e.c.diag.Emit("app_data", map[string]any{
-					"event": "ssrc_mismatch", "ssrc": vh.Ssrc, "expected_ssrc": wantSsrc,
-				})
-				continue
-			}
-			hdr, payload, ok := rxAppDataPipe.UnprotectAudio(pkt)
+			media, ok := audioReceivers.UnprotectAppData(pkt)
 			if !ok {
 				if appDataUnprotectFail++; appDataUnprotectFail == 1 {
 					log.Warn().Uint32("ssrc", vh.Ssrc).Uint16("seq", vh.SequenceNumber).Msg("app-data RTP arrived but failed to unprotect")
@@ -601,22 +926,28 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				e.c.diag.Emit("app_data", map[string]any{"event": "unprotect_failed", "ssrc": vh.Ssrc, "seq": vh.SequenceNumber})
 				continue
 			}
-			handled, err := handleAppDataReaction(call, &appDataRx, payload)
+			receiver := appDataReceivers[media.receiver]
+			if receiver == nil {
+				receiver = &appDataReceiver{}
+				appDataReceivers[media.receiver] = receiver
+			}
+			handled, err := handleGroupAppDataReaction(call, receiver, media)
 			if err != nil {
-				log.Warn().Err(err).Uint32("ssrc", hdr.Ssrc).Uint16("seq", hdr.SequenceNumber).Msg("invalid RTC app-data payload")
+				log.Warn().Err(err).Uint32("ssrc", media.Header.Ssrc).Uint16("seq", media.Header.SequenceNumber).Msg("invalid RTC app-data payload")
 				e.c.diag.Emit("app_data", map[string]any{
-					"event": "decode_failed", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-					"payload_hex": hex.EncodeToString(payload), "error": err.Error(),
+					"event": "decode_failed", "ssrc": media.Header.Ssrc, "seq": media.Header.SequenceNumber,
+					"error": err.Error(),
 				})
 				continue
 			}
 			e.c.diag.Emit("app_data", map[string]any{
-				"event": "in", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-				"ts": hdr.Timestamp, "handled": handled, "payload_hex": hex.EncodeToString(payload),
+				"event": "in", "ssrc": media.Header.Ssrc, "seq": media.Header.SequenceNumber,
+				"ts": media.Header.Timestamp, "handled": handled,
+				"participant_id": media.ParticipantID,
 			})
 			if handled {
 				if appDataIn++; appDataIn == 1 {
-					log.Info().Uint32("ssrc", hdr.Ssrc).Msg("first RTC call reaction received")
+					log.Info().Uint32("ssrc", media.Header.Ssrc).Msg("first RTC call reaction received")
 				}
 			}
 			continue
@@ -624,7 +955,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		// Demux H.264 (PT 97) to video and emit Annex-B access units on the marker bit.
 		// Source of truth: https://github.com/JotaDev66/WaCalls/blob/2d6a1f666426049a89ef9541414e771acdcf8a16/internal/voip/call/callmanager_video.go#L86-L126
 		if kind == mediaPayloadVideo {
-			_, vpayload, vunok := rxVideoPipe.UnprotectAudio(pkt)
+			media, vunok := audioReceivers.UnprotectVideo(pkt)
 			if !vunok {
 				if videoUnprotectFail++; videoUnprotectFail == 1 {
 					log.Warn().
@@ -635,11 +966,17 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 				e.c.diag.Emit("video", map[string]any{"event": "unprotect_failed", "ssrc": vh.Ssrc, "seq": vh.SequenceNumber})
 				continue
 			}
+			vh = media.Header
+			videoState := videoReceiveStates[media.receiver]
+			if videoState == nil {
+				videoState = &videoReceiveState{orientation: -1}
+				videoReceiveStates[media.receiver] = videoState
+			}
 			videoReception.Observe(vh.Ssrc, vh.SequenceNumber, vh.Timestamp, uint64(time.Now().UnixMilli()), 90000)
 			if vh.VideoExtension != nil {
 				orientation := vh.VideoExtension.DisplayOrientation()
-				if orientation != videoOrientation {
-					videoOrientation = orientation
+				if orientation != videoState.orientation {
+					videoState.orientation = orientation
 					if sink, ok := callVideoSink(call).(VideoOrientationSink); ok {
 						sink.SetOrientation(orientation)
 					}
@@ -662,27 +999,48 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 					"ssrc": vh.Ssrc, "seq": vh.SequenceNumber, "rtp_ts": vh.Timestamp,
 					"marker": vh.Marker, "header_hex": hex.EncodeToString(pkt[:headerLen]),
 					"extension_hex": hex.EncodeToString(extension),
-					"payload_hex":   hex.EncodeToString(vpayload), "protected_hex": hex.EncodeToString(pkt),
+					"payload_bytes": len(media.Payload), "protected_bytes": len(pkt),
+					"participant_id": media.ParticipantID,
 				})
 			}
 			videoWirePacket++
-			for _, nalu := range videoDepack.Depacketize(vpayload) {
-				videoAU = append(videoAU, 0x00, 0x00, 0x00, 0x01)
-				videoAU = append(videoAU, nalu...)
+			frame, complete, recoveryNeeded := videoState.assembler.Push(
+				vh.SequenceNumber,
+				vh.Marker,
+				media.Payload,
+			)
+			if recoveryNeeded && shouldSendVideoPLI(lastVideoPLI, vh.Ssrc, time.Now()) {
+				packet, feedbackErr := videoRtcp.pictureLossIndication(vh.Ssrc)
+				if feedbackErr == nil {
+					_, feedbackErr = ch.Send(packet)
+				}
+				if feedbackErr != nil {
+					log.Warn().Err(feedbackErr).Uint32("ssrc", vh.Ssrc).Msg("failed to request video keyframe after RTP loss")
+				}
 			}
-			if vh.Marker && len(videoAU) > 0 {
-				frame := videoAU
-				videoAU = nil
+			if complete {
 				if videoWireFrame < videoWireFrameLimit {
 					e.c.diag.Emit("video_wire", map[string]any{
 						"event": "access_unit", "direction": "in", "call_id": callID,
 						"frame": videoWireFrame, "ssrc": vh.Ssrc, "rtp_ts": vh.Timestamp,
 						"idr": rtp.AUHasIDR(frame), "bytes": len(frame),
-						"annexb_hex": hex.EncodeToString(frame),
 					})
 				}
 				videoWireFrame++
 				e.c.diag.Emit("video", map[string]any{"event": "frame", "ssrc": vh.Ssrc, "bytes": len(frame)})
+				deliveredParticipantFrame := false
+				if call != nil {
+					deliveredParticipantFrame = call.dispatchParticipantVideoFrame(ParticipantVideoFrame{
+						ParticipantID: media.ParticipantID,
+						Sender:        media.UserJID,
+						Device:        media.DeviceJID,
+						PID:           media.PID,
+						HasPID:        media.HasPID,
+						SSRC:          vh.Ssrc,
+						Orientation:   videoState.orientation,
+						AccessUnit:    frame,
+					})
+				}
 				if sink := callVideoSink(call); sink != nil {
 					if err := sink.WriteVideo(frame); err != nil {
 						log.Warn().Err(err).Uint32("ssrc", vh.Ssrc).Int("bytes", len(frame)).Msg("failed to write WhatsApp video frame to sink")
@@ -692,7 +1050,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 						}
 						videoFrameIn++
 					}
-				} else {
+				} else if !deliveredParticipantFrame {
 					if videoSinkMissing == 0 {
 						log.Warn().Uint32("ssrc", vh.Ssrc).Int("bytes", len(frame)).Msg("WhatsApp video frame arrived with no sink attached")
 					}
@@ -713,39 +1071,49 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			})
 			continue
 		}
-		hdr, payload, ok := rxPipe.UnprotectAudio(pkt)
+		audio, ok := audioReceivers.DecodeAudio(pkt)
 		if !ok {
 			if unprotectFail++; unprotectFail == 1 {
-				log.Warn().Int("bytes", n).Msg("RTP arrived but failed to unprotect, keying/SSRC mismatch on the recv path")
+				log.Warn().Uint32("ssrc", vh.Ssrc).Int("bytes", n).Msg("audio RTP did not match an authenticated active participant")
 			}
-			e.c.diag.Emit("srtp", map[string]any{"event": "unprotect_failed", "bytes": n})
+			e.c.diag.Emit("srtp", map[string]any{"event": "unprotect_failed", "ssrc": vh.Ssrc, "bytes": n})
 			continue
 		}
-		audioReception.Observe(hdr.Ssrc, hdr.SequenceNumber, hdr.Timestamp, uint64(time.Now().UnixMilli()), SampleRate)
+		audioReception.Observe(audio.SSRC, vh.SequenceNumber, audio.Timestamp, uint64(time.Now().UnixMilli()), SampleRate)
 		e.c.diag.Emit("rtp", map[string]any{
-			"event": "in", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-			"ts": hdr.Timestamp, "pt": hdr.PayloadType, "marker": hdr.Marker,
+			"event": "in", "ssrc": audio.SSRC, "seq": vh.SequenceNumber,
+			"ts": audio.Timestamp, "pt": vh.PayloadType, "marker": vh.Marker,
+			"participant_id": audio.ParticipantID, "pid": audio.PID, "has_pid": audio.HasPID,
 		})
 		e.c.diag.Emit("srtp", map[string]any{
-			"event": "frame_unprotected", "ssrc": hdr.Ssrc, "seq": hdr.SequenceNumber,
-			"payload_len": len(payload), "payload_hex": hex.EncodeToString(payload),
+			"event": "frame_authenticated", "ssrc": audio.SSRC, "seq": vh.SequenceNumber,
+			"participant_id": audio.ParticipantID, "pid": audio.PID, "has_pid": audio.HasPID,
 		})
-		frame := dec.Decode(payload)
 		e.c.diag.Emit("media_in", map[string]any{
-			"seq": hdr.SequenceNumber, "samples": len(frame),
-			"pcm_rms": rmsFloat32(frame), "payload_len": len(payload),
+			"seq": vh.SequenceNumber, "samples": len(audio.PCM),
+			"pcm_rms": rmsFloat32(audio.PCM), "participant_id": audio.ParticipantID,
 		})
-		_, sink := callPlayerSink(call)
-		playoutStarted, playoutErr := audioPlayout.Push(hdr.Timestamp, frame, sink)
-		if playoutErr != nil {
-			log.Warn().Err(playoutErr).Msg("failed to write timestamp-aligned WhatsApp audio")
+		mixedMode := groupMixing.Load()
+		playoutLocked := false
+		if !mixedMode {
+			audioPlayoutMu.Lock()
+			playoutLocked = true
+			mixedMode = groupMixing.Load()
 		}
-		if playoutStarted {
-			log.Info().Int("prefill_ms", audioPlayoutPrefillSamples*1000/SampleRate).Msg("started timestamp-aligned inbound audio playout")
-			e.c.diag.Emit("meta", map[string]any{
-				"event": "audio_playout_started", "call_id": callID,
-				"prefill_ms": audioPlayoutPrefillSamples * 1000 / SampleRate,
-			})
+		if mixedMode {
+			audioMixer.Add(audio.ParticipantID, audio.PCM)
+		} else {
+			_, sink := callPlayerSink(call)
+			playoutStarted, playoutErr := audioPlayout.Push(audio.Timestamp, audio.PCM, sink)
+			if playoutErr != nil {
+				log.Warn().Err(playoutErr).Msg("failed to write timestamp-aligned WhatsApp audio")
+			}
+			if playoutStarted {
+				log.Info().Int("prefill_ms", audioPlayoutPrefillSamples*1000/SampleRate).Msg("started timestamp-aligned inbound audio playout")
+			}
+		}
+		if playoutLocked {
+			audioPlayoutMu.Unlock()
 		}
 		if rtpIn++; rtpIn == 1 {
 			log.Info().Msg("first RTP decoded from relay, inbound audio flowing")
@@ -758,6 +1126,108 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			}
 		}
 	}
+}
+
+func prepareWasmRelayStreamSSRCs(
+	streamSSRCs [9]uint32,
+	appDataSSRC uint32,
+	random io.Reader,
+) ([9]uint32, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0911f20e97b858506a55ee6aa4f6a1ad73f19798/datasheets/group-video-reactions.md#L51-L65
+	if random == nil {
+		return [9]uint32{}, fmt.Errorf("meowcaller: relay stream SSRC random source is nil")
+	}
+	used := make(map[uint32]struct{}, len(streamSSRCs)+1)
+	for _, ssrc := range streamSSRCs[:6] {
+		if ssrc != 0 {
+			used[ssrc] = struct{}{}
+		}
+	}
+	if appDataSSRC != 0 {
+		used[appDataSSRC] = struct{}{}
+	}
+	for i := 6; i < len(streamSSRCs); i++ {
+		var selected bool
+		for range 64 {
+			var encoded [4]byte
+			if _, err := io.ReadFull(random, encoded[:]); err != nil {
+				return [9]uint32{}, fmt.Errorf("meowcaller: generate auxiliary video SSRC: %w", err)
+			}
+			candidate := binary.LittleEndian.Uint32(encoded[:])
+			if candidate == 0 {
+				continue
+			}
+			if _, exists := used[candidate]; exists {
+				continue
+			}
+			streamSSRCs[i] = candidate
+			used[candidate] = struct{}{}
+			selected = true
+			break
+		}
+		if !selected {
+			return [9]uint32{}, fmt.Errorf("meowcaller: generate unique auxiliary video SSRC")
+		}
+	}
+	return streamSSRCs, nil
+}
+
+func sendMediaSrtcpReceptionReports(
+	sender *mediaSrtcpSender,
+	stats rtp.RtcpSenderStats,
+	nowMs uint64,
+	reports []*rtp.RtcpReceptionReport,
+	groupMedia bool,
+	send func([]byte) error,
+) (int, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/bab582d4e799292478ccba2f8a86f2164d4737c3/datasheets/group-media-rtcp-feedback.md#L148-L156
+	if sender == nil || send == nil {
+		return 0, fmt.Errorf("meowcaller: SRTCP sender or send callback is nil")
+	}
+	if !groupMedia || len(reports) == 0 {
+		var report *rtp.RtcpReceptionReport
+		if len(reports) > 0 {
+			report = reports[0]
+		}
+		packet, err := sender.senderReport(stats, nowMs, report)
+		if err != nil {
+			return 0, err
+		}
+		return 1, send(packet)
+	}
+	sent := 0
+	for _, report := range reports {
+		packet, err := sender.groupSenderReport(stats, nowMs, report)
+		if err != nil {
+			return sent, err
+		}
+		if err = send(packet); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
+}
+
+func handleGroupAppDataReaction(
+	call *Call,
+	receiver *appDataReceiver,
+	media unprotectedParticipantMedia,
+) (bool, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L10-L19
+	reaction, ok, err := receiver.receive(media.Payload)
+	if err != nil || !ok || call == nil {
+		return false, err
+	}
+	if fn := call.onReactionFn(); fn != nil {
+		fn(CallReaction{
+			Emoji: reaction.emoji, ParticipantID: media.ParticipantID,
+			Sender: media.UserJID, Device: media.DeviceJID,
+			PID: media.PID, HasPID: media.HasPID,
+			Removed: reaction.emoji == "",
+		})
+	}
+	return true, nil
 }
 
 // callPlayerSink returns a Call's current Player and sink, tolerating a nil Call (an
@@ -843,10 +1313,15 @@ func (r *mediaSrtcpReceiver) rekey(callKey []byte, peerLID string) error {
 	if err != nil {
 		return err
 	}
+	r.installKeys(keys)
+	return nil
+}
+
+func (r *mediaSrtcpReceiver) installKeys(keys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
 	r.mu.Lock()
 	r.keys = keys
 	r.mu.Unlock()
-	return nil
 }
 
 func (r *mediaSrtcpReceiver) unprotect(senderSSRC uint32, packet []byte) ([]byte, uint32, bool) {
@@ -868,11 +1343,54 @@ func newMediaSrtcpSender(callKey []byte, selfLID string, ssrc uint32, profile bo
 	}, nil
 }
 
+func (s *mediaSrtcpSender) installKeys(keys srtp.E2eSrtpKeys) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	s.mu.Lock()
+	s.keys = keys
+	s.mu.Unlock()
+}
+
 func (s *mediaSrtcpSender) senderReport(stats rtp.RtcpSenderStats, nowMs uint64, report *rtp.RtcpReceptionReport) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	plain := rtp.BuildSenderReportWithSdesAndReception(s.ssrc, &stats, nowMs, &s.cname, report, s.profile)
 	packet, err := srtp.ProtectSrtcp(&s.keys, s.ssrc, s.index, plain)
+	if err == nil {
+		s.index++
+	}
+	return packet, err
+}
+
+func (s *mediaSrtcpSender) groupSenderReport(stats rtp.RtcpSenderStats, nowMs uint64, report *rtp.RtcpReceptionReport) ([]byte, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/6e202a6d6ec5a9384bae6ccbe621966edeee6592/datasheets/group-media-rtcp-feedback.md#L53-L75
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	plain := rtp.BuildGroupSenderReport(s.ssrc, &stats, nowMs, report, rtp.RTCPGroupReportExtension{})
+	packet, err := srtp.ProtectSrtcp(&s.keys, s.ssrc, s.index, plain)
+	if err == nil {
+		s.index++
+	}
+	return packet, err
+}
+
+func shouldSendVideoPLI(lastSent map[uint32]time.Time, mediaSSRC uint32, now time.Time) bool {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	if lastSent == nil {
+		return false
+	}
+	if previous, ok := lastSent[mediaSSRC]; ok && now.Sub(previous) < videoPLIInterval {
+		return false
+	}
+	lastSent[mediaSSRC] = now
+	return true
+}
+
+func (s *mediaSrtcpSender) pictureLossIndication(mediaSSRC uint32) ([]byte, error) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/e2e_srtp.rs#L34-L70
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	plain := rtp.BuildPictureLossIndication(s.ssrc, mediaSSRC, s.profile)
+	packet, err := srtp.ProtectSrtcp(&s.keys, s.ssrc, s.index, plain[:])
 	if err == nil {
 		s.index++
 	}
@@ -914,7 +1432,7 @@ func (vs *videoSender) protectAccessUnitLocked(au []byte, duration time.Duration
 		vs.diag.Emit("video_wire", map[string]any{
 			"event": "access_unit", "direction": "out", "call_id": vs.callID,
 			"frame": vs.frame, "ssrc": vs.ssrc, "idr": idr, "bytes": len(au),
-			"duration_ms": duration.Milliseconds(), "annexb_hex": hex.EncodeToString(au),
+			"duration_ms": duration.Milliseconds(),
 		})
 	}
 	vs.stream.SetTimestampStride(videoRtpDurationSamples(duration))
@@ -937,7 +1455,7 @@ func (vs *videoSender) protectAccessUnitLocked(au []byte, duration time.Duration
 					"seq": header.SequenceNumber, "rtp_ts": header.Timestamp, "marker": header.Marker,
 					"header_hex":    hex.EncodeToString(headerBytes),
 					"extension_hex": hex.EncodeToString(extension),
-					"payload_hex":   hex.EncodeToString(payload), "protected_hex": hex.EncodeToString(packet),
+					"payload_bytes": len(payload), "protected_bytes": len(packet),
 				})
 			}
 		}
