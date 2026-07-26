@@ -609,6 +609,7 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 		allocateState,
 		endpoint,
 		[9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9},
+		10,
 		update,
 		relayTransactionID,
 		func([]byte) error {
@@ -638,6 +639,7 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 		allocateState,
 		endpoint,
 		[9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9},
+		10,
 		update,
 		relayTransactionID,
 		func([]byte) error {
@@ -672,6 +674,14 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 	if len(senderSubscriptions) == 0 {
 		t.Fatal("committed group allocate omitted sender subscriptions")
 	}
+	wantAppDataSubscription := []byte{
+		0x0a, 0x0d, 0x0a, 0x0b, 0x0a, 0x01, 0x0a,
+		0x12, 0x02, 0x08, 0x00,
+		0x12, 0x02, 0x08, 0x02,
+	}
+	if !bytes.HasSuffix(senderSubscriptions, wantAppDataSubscription) {
+		t.Fatalf("committed sender subscriptions did not retain app-data SSRC 10: %x", senderSubscriptions)
+	}
 	if got, want := receiverSubscriptions, []byte{0x12, 0x02, 0x08, 0x00, 0x12, 0x02, 0x08, 0x02}; !bytes.Equal(got, want) {
 		t.Fatalf("committed receiver subscriptions = %x, want %x", got, want)
 	}
@@ -690,6 +700,7 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 		allocateState,
 		nil,
 		[9]uint32{},
+		0,
 		stale,
 		[12]byte{},
 		func([]byte) error {
@@ -708,12 +719,35 @@ func TestApplyGroupMediaUpdateTransactionKeepsRelayRosterAndReceptionAtomic(t *t
 		nil,
 		nil,
 		[9]uint32{},
+		0,
 		withoutRelay,
 		[12]byte{},
 		nil,
 	)
 	if err != nil || changed || registry.transactionID != 19 {
 		t.Fatalf("non-relay apply = changed:%t tx:%d err:%v, want false,19,nil", changed, registry.transactionID, err)
+	}
+}
+
+func TestPrepareWasmRelayStreamSSRCsKeepsAuxiliaryVideoDistinctFromAppData(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0911f20e97b858506a55ee6aa4f6a1ad73f19798/datasheets/group-video-reactions.md#L51-L65
+	derived := [9]uint32{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	random := bytes.NewReader([]byte{
+		0, 0, 0, 0,
+		9, 0, 0, 0,
+		4, 0, 0, 0,
+		0x11, 0x11, 0x11, 0x11,
+		0x22, 0x22, 0x22, 0x22,
+		0x33, 0x33, 0x33, 0x33,
+	})
+
+	got, err := prepareWasmRelayStreamSSRCs(derived, 9, random)
+	if err != nil {
+		t.Fatalf("prepare stream SSRCs: %v", err)
+	}
+	want := [9]uint32{1, 2, 3, 4, 5, 6, 0x11111111, 0x22222222, 0x33333333}
+	if got != want {
+		t.Fatalf("prepared stream SSRCs = %v, want %v", got, want)
 	}
 }
 

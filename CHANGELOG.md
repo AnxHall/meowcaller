@@ -37,6 +37,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   The local sender subscription reuses slot 6 for both secondary-video repair and
   app data, unlike the capture's distinct generated secondary-video and app-data
   SSRCs. A collision-free live retry remains pending.
+- Implemented collision-free auxiliary-video SSRC generation while retaining the
+  deterministic audio, primary-video, and slot-6 app-data SSRCs. Group relay
+  refreshes now receive the app-data SSRC independently instead of inferring it
+  from secondary-video slot 8. Collision rejection and exact app-data
+  subscription propagation KATs pass; live multi-PID acceptance remains pending.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

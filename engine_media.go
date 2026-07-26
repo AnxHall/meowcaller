@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"sync"
@@ -169,6 +171,10 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	streamSsrcs, err := rtp.DeriveWasmRelayStreamSsrcs(callID, selfParticipantID, log)
+	if err != nil {
+		return err
+	}
+	streamSsrcs, err = prepareWasmRelayStreamSSRCs(streamSsrcs, appDataSelfSsrc, rand.Reader)
 	if err != nil {
 		return err
 	}
@@ -446,6 +452,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			allocateState,
 			ep,
 			streamSsrcs,
+			appDataSelfSsrc,
 			update,
 			relayTransactionID,
 			func(packet []byte) error {
@@ -980,6 +987,7 @@ func applyGroupAudioRoster(receivers *participantReceiveRegistry, reception *rtp
 		nil,
 		nil,
 		[9]uint32{},
+		0,
 		update,
 		[12]byte{},
 		nil,
@@ -993,6 +1001,7 @@ func applyGroupMediaUpdateTransaction(
 	allocateState *groupRelayAllocateState,
 	endpoint *types.RelayEndpoint,
 	streamSSRCs [9]uint32,
+	appDataSSRC uint32,
 	update types.GroupCallUpdate,
 	relayTransactionID [12]byte,
 	send func([]byte) error,
@@ -1018,7 +1027,7 @@ func applyGroupMediaUpdateTransaction(
 			endpoint,
 			update.Relay,
 			streamSSRCs,
-			streamSSRCs[8],
+			appDataSSRC,
 			connectedRemoteParticipantPIDs(update, receivers.selfID),
 			relayTransactionID,
 			func(packet []byte) error {
@@ -1045,6 +1054,50 @@ func applyGroupMediaUpdateTransaction(
 	}
 	reception.Retain(receivers.ActiveAudioSSRCs())
 	return changed, nil
+}
+
+func prepareWasmRelayStreamSSRCs(
+	streamSSRCs [9]uint32,
+	appDataSSRC uint32,
+	random io.Reader,
+) ([9]uint32, error) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/0911f20e97b858506a55ee6aa4f6a1ad73f19798/datasheets/group-video-reactions.md#L51-L65
+	if random == nil {
+		return [9]uint32{}, fmt.Errorf("meowcaller: relay stream SSRC random source is nil")
+	}
+	used := make(map[uint32]struct{}, len(streamSSRCs)+1)
+	for _, ssrc := range streamSSRCs[:6] {
+		if ssrc != 0 {
+			used[ssrc] = struct{}{}
+		}
+	}
+	if appDataSSRC != 0 {
+		used[appDataSSRC] = struct{}{}
+	}
+	for i := 6; i < len(streamSSRCs); i++ {
+		var selected bool
+		for range 64 {
+			var encoded [4]byte
+			if _, err := io.ReadFull(random, encoded[:]); err != nil {
+				return [9]uint32{}, fmt.Errorf("meowcaller: generate auxiliary video SSRC: %w", err)
+			}
+			candidate := binary.LittleEndian.Uint32(encoded[:])
+			if candidate == 0 {
+				continue
+			}
+			if _, exists := used[candidate]; exists {
+				continue
+			}
+			streamSSRCs[i] = candidate
+			used[candidate] = struct{}{}
+			selected = true
+			break
+		}
+		if !selected {
+			return [9]uint32{}, fmt.Errorf("meowcaller: generate unique auxiliary video SSRC")
+		}
+	}
+	return streamSSRCs, nil
 }
 
 func connectedRemoteParticipantPIDs(update types.GroupCallUpdate, selfID string) []uint32 {
