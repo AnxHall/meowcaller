@@ -893,6 +893,26 @@ func TestVideoBridgePublishesParticipantTaggedFrame(t *testing.T) {
 	}
 }
 
+func TestVideoBridgeNormalizesUnknownParticipantOrientation(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
+	bridge := &videoBridge{subs: make(map[chan vbMsg]struct{})}
+	events := make(chan vbMsg, 1)
+	bridge.subs[events] = struct{}{}
+	bridge.WriteParticipantFrame(meowcaller.ParticipantVideoFrame{
+		ParticipantID: "333333333333333:43@lid",
+		Orientation:   -1,
+		AccessUnit:    []byte{0, 0, 0, 1, 0x65},
+	})
+	msg := <-events
+	var got vbParticipantVideo
+	if err := json.Unmarshal(msg.data, &got); err != nil {
+		t.Fatalf("decode participant video event: %v", err)
+	}
+	if got.Orientation != 0 {
+		t.Fatalf("unknown participant orientation = %d, want 0", got.Orientation)
+	}
+}
+
 func TestWebCallControllerStartGroupAudioRequiresTwoDistinctPeople(t *testing.T) {
 	var calls int
 	c := &webCallController{

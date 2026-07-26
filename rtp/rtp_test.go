@@ -160,6 +160,21 @@ func TestVideoRtpExtensionDisplayOrientation(t *testing.T) {
 	}
 }
 
+func TestParseCapturedVideoOrientationWithoutTransportSequence(t *testing.T) {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
+	packet := mustHex(t, "906100010003e77e0ba3152bdebe0002300b510000610002")
+	header, ok := ParseRtpHeader(packet)
+	if !ok {
+		t.Fatal("captured RTP header was rejected")
+	}
+	if header.VideoExtension == nil {
+		t.Fatal("captured orientation metadata was discarded")
+	}
+	if got := header.VideoExtension.DisplayOrientation(); got != 1 {
+		t.Fatalf("captured display orientation = %d, want 1", got)
+	}
+}
+
 func TestVideoStreamMatchesCapturedWebFrameMetadata(t *testing.T) {
 	stream := NewVideoRtpStream(0x11223344, 4500)
 	first := EncodeRtpHeader(ptrRtpHeader(stream.NextPacket(false, 0x08)))

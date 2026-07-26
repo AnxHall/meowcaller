@@ -62,8 +62,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   and full KATs pass; live multi-participant media validation remains pending.
 - Recorded the upside-down participant-video failure. The participant ending in
   `031` carries valid RTP orientation metadata but omits optional transport
-  sequence ID 9; the parser discards the whole extension, and the web renderer
-  turns the unknown `-1` fallback into a real three-quarter rotation.
+  sequence ID 9; the parser discarded the whole extension, and the web renderer
+  turned the unknown `-1` fallback into a real three-quarter rotation.
+- Accepted captured video orientation metadata without optional transport
+  sequence ID 9 and normalized unknown participant orientations to zero at the
+  web bridge boundary. Exact RTP and bridge regressions, full suite, race suite,
+  and vet pass.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

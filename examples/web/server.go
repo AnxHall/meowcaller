@@ -119,6 +119,11 @@ func (vb *videoBridge) WriteParticipantFrame(frame meowcaller.ParticipantVideoFr
 	if len(frame.AccessUnit) == 0 {
 		return
 	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
+	orientation := frame.Orientation
+	if orientation < 0 || orientation > 3 {
+		orientation = 0
+	}
 	data, err := json.Marshal(vbParticipantVideo{
 		ParticipantID: frame.ParticipantID,
 		Sender:        frame.Sender.String(),
@@ -126,7 +131,7 @@ func (vb *videoBridge) WriteParticipantFrame(frame meowcaller.ParticipantVideoFr
 		PID:           frame.PID,
 		HasPID:        frame.HasPID,
 		SSRC:          frame.SSRC,
-		Orientation:   frame.Orientation,
+		Orientation:   orientation,
 		AccessUnit:    base64.StdEncoding.EncodeToString(frame.AccessUnit),
 	})
 	if err == nil {
