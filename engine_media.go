@@ -676,7 +676,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}()
 
 	buf := make([]byte, 1500)
-	var rtpIn, rtpSeen, unprotectFail, rtpInspect, vidIn, appDataIn, appDataUnprotectFail, videoUnprotectFail, videoFrameIn, videoSinkMissing, rtcpIn, rtcpAuthFail uint64
+	var rtpIn, rtpSeen, unprotectFail, rtpInspect, vidIn, appDataIn, appDataUnprotectFail, videoUnprotectFail, videoFrameIn, videoSinkMissing, rtcpIn, rtcpAuthFail, groupForwardingInvalid uint64
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -686,12 +686,26 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			return fmt.Errorf("relay recv: %w", err)
 		}
 		relayRx.Add(1)
-		pkt := buf[:n]
+		rawPkt := buf[:n]
+		// Source of truth: https://github.com/purpshell/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L93-L100
+		pkt, groupWrapped, groupValid := relay.UnwrapGroupForwardingPacket(rawPkt)
+		if !groupValid {
+			if groupForwardingInvalid++; groupForwardingInvalid == 1 {
+				log.Warn().Int("packet_bytes", n).Msg("invalid group-forwarding relay packet")
+			}
+			e.c.diag.Emit("relay", map[string]any{
+				"event": "packet_in", "bytes": n, "is_rtp": false,
+				"group_wrapped": true, "group_invalid": true,
+				"packet_hex": hex.EncodeToString(rawPkt),
+			})
+			continue
+		}
 		packetKind := relay.ClassifyRelayPacket(pkt)
 		isRTP := packetKind == relay.RelayPacketRtp
 		e.c.diag.Emit("relay", map[string]any{
 			"event": "packet_in", "bytes": n, "is_rtp": isRTP,
-			"packet_hex": hex.EncodeToString(pkt),
+			"group_wrapped": groupWrapped, "group_header_bytes": n - len(pkt),
+			"media_bytes": len(pkt), "packet_hex": hex.EncodeToString(rawPkt),
 		})
 		switch packetKind {
 		case relay.RelayPacketRtcp:

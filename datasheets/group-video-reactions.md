@@ -2,7 +2,7 @@
 
 **Status:** initial group-video signaling and participant H.264 receive accepted live;
 multi-PID HBH-FEC relay descriptors KAT-verified; group-forwarding de-framing
-capture-pinned, implementation pending
+capture-vector KAT-verified; live multi-participant media retest pending
 
 **Reference pinned at:**
 
@@ -102,6 +102,10 @@ capture-pinned, implementation pending
   top two bits are clear. They fail STUN parsing and are dropped before
   participant SSRC lookup and SRTP authentication. This is the observed cause of
   the two-video freeze after the HBH-FEC descriptor fix.
+- The receive path now removes the three capture-pinned forwarding headers before
+  relay classification. Exact subtype 2, 4, and 7 video/audio vectors pass and
+  ordinary RTP remains byte-for-byte unchanged; malformed and unknown envelopes
+  are rejected before SRTP.
 
 ## Inferences to validate live
 
@@ -110,10 +114,10 @@ capture-pinned, implementation pending
 - A participant added to a video call joins the existing shared group relay/key
   epoch and receives subsequent group updates rather than negotiating a separate
   media session.
-- Stripping the three capture-pinned group-forwarding headers will expose the
-  SRTP packets to the existing participant receive pipelines. The packet
-  identity and sequence evidence is exact; restored live bidirectional
-  multi-participant media remains the acceptance test.
+- The de-framed SRTP packets will authenticate in the existing participant
+  receive pipelines. The packet identity and sequence evidence is exact;
+  restored live bidirectional multi-participant media remains the acceptance
+  test.
 
 The remaining inferences must stay marked unvalidated until a live add-person video
 call proves the offer is accepted and bidirectional video flows for original and

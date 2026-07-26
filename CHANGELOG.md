@@ -55,7 +55,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   participant audio/video RTP packets inside capture-pinned `0x09` forwarding
   envelopes, but the current first-byte classifier labels every envelope as
   STUN and drops it before SRTP. Subtypes 2, 4, and 7 place RTP at byte offsets
-  8, 12, and 18 respectively; de-framing and live validation remain pending.
+  8, 12, and 18 respectively.
+- Implemented group-forwarding de-framing ahead of relay classification. Exact
+  subtype 2, 4, and 7 capture vectors expose valid inner RTP, ordinary RTP passes
+  through unchanged, and malformed envelopes are rejected before SRTP. Focused
+  and full KATs pass; live multi-participant media validation remains pending.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:
