@@ -170,6 +170,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	if err != nil {
 		return err
 	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/89ebce510859a415ef19e9b5d74b0006b60ba634/datasheets/group-video-reactions.md#L47-L53
 	hbhFECTXSSRC, err := rtp.DeriveWasmParticipantSsrc(callID, selfParticipantID, rtp.HBHFECTXSlotWord, log)
 	if err != nil {
 		return err
@@ -192,6 +193,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	}
 	defer ch.Close()
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L53-L62
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/89ebce510859a415ef19e9b5d74b0006b60ba634/datasheets/group-video-reactions.md#L47-L53
 	allocateState := newGroupRelayAllocateStateWithHBHFEC(
 		allocate,
 		ep.Key,

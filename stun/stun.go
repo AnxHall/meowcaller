@@ -202,7 +202,7 @@ func BuildWasmStunAllocateRequestWithGroupSubscriptions(
 	integrityKey []byte,
 	log ...zerolog.Logger,
 ) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/89ebce510859a415ef19e9b5d74b0006b60ba634/datasheets/group-video-reactions.md#L38-L53
 	return BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
 		transactionID,
 		relayToken,
@@ -364,7 +364,7 @@ func CreateWasmStreamDescriptors(ssrcs [9]uint32) []byte {
 }
 
 func createWasmStreamDescriptorsWithHBHFEC(ssrcs [9]uint32, hbhFECSSRCs [2]uint32) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/89ebce510859a415ef19e9b5d74b0006b60ba634/datasheets/group-video-reactions.md#L47-L53
 	var out []byte
 	for i, ssrc := range ssrcs {
 		if ssrc == 0 {

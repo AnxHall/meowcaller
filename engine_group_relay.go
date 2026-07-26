@@ -26,7 +26,7 @@ func newGroupRelayAllocateStateWithHBHFEC(
 	initial, initialKey []byte,
 	hbhFECSSRCs [2]uint32,
 ) *groupRelayAllocateState {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/89ebce510859a415ef19e9b5d74b0006b60ba634/datasheets/group-video-reactions.md#L47-L53
 	return &groupRelayAllocateState{
 		packet:      append([]byte(nil), initial...),
 		key:         append([]byte(nil), initialKey...),
@@ -130,6 +130,7 @@ func (s *groupRelayAllocateState) apply(
 	if !ok {
 		return false, fmt.Errorf("meowcaller: active relay IPv4 is malformed")
 	}
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/89ebce510859a415ef19e9b5d74b0006b60ba634/datasheets/group-video-reactions.md#L47-L53
 	packet := stun.BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
 		transactionID,
 		relay.Tokens[matched.TokenID],
