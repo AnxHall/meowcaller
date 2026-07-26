@@ -139,6 +139,8 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   `@g.us`, Whatsmeow resolves the group roster, local PN/LID identities and
   duplicate aliases are removed, and the bound call is rejected unless 2–31
   remote members remain.
+- Focused group-ID resolution/delegation KATs, the full root suite, race suite,
+  vet, and diff checks pass.
 - Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
   preselected group start, a selected-only public roster seed, stable public
   peer identity, and authoritative connected-device media readiness.

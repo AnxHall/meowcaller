@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -85,6 +86,118 @@ func TestClientGroupCallNormalizesDeduplicatesAndDelegatesOnce(t *testing.T) {
 	}
 	if !m.localVideo || !m.remoteVideo || !call.IsVideo() {
 		t.Fatalf("video group state = local:%t remote:%t call:%t, want all true", m.localVideo, m.remoteVideo, call.IsVideo())
+	}
+}
+
+func TestClientGroupCallByIDResolvesRemoteMembersAndBindsGroup(t *testing.T) {
+	ctx := context.Background()
+	groupJID := types.NewJID("120363411251996986", types.GroupServer)
+	selfPN := types.NewJID("15550001", types.DefaultUserServer)
+	selfLID := types.NewJID("111111111111111", types.HiddenUserServer)
+	first := types.NewJID("222222222222222", types.HiddenUserServer)
+	second := types.NewJID("15550003", types.DefaultUserServer)
+
+	c := &Client{log: zerolog.Nop()}
+	c.eng = newEngine(c)
+	c.getGroupInfo = func(gotContext context.Context, gotJID types.JID) (*types.GroupInfo, error) {
+		if gotContext != ctx || gotJID != groupJID {
+			t.Fatalf("group lookup = (%p, %s), want (%p, %s)", gotContext, gotJID, ctx, groupJID)
+		}
+		return &types.GroupInfo{
+			JID: groupJID,
+			Participants: []types.GroupParticipant{
+				{JID: selfLID, PhoneNumber: selfPN, LID: selfLID},
+				{JID: first, LID: first},
+				{JID: second, PhoneNumber: second},
+				{JID: first, LID: first},
+			},
+		}, nil
+	}
+	c.ownGroupJIDs = func() []types.JID {
+		return []types.JID{selfPN, selfLID}
+	}
+	var gotTargets []types.JID
+	var gotOptions []whatsmeow.GroupCallOfferOptions
+	c.eng.offerGroupCall = func(
+		_ context.Context,
+		targets []types.JID,
+		options ...whatsmeow.GroupCallOfferOptions,
+	) (string, error) {
+		gotTargets = append([]types.JID(nil), targets...)
+		gotOptions = append([]whatsmeow.GroupCallOfferOptions(nil), options...)
+		return "GROUP-BY-ID-CID", nil
+	}
+
+	call, err := c.GroupCallByIDWithOptions(ctx, " 120363411251996986 ", GroupCallOptions{Video: true})
+	if err != nil {
+		t.Fatalf("GroupCallByIDWithOptions: %v", err)
+	}
+	if !slices.Equal(gotTargets, []types.JID{first, second}) {
+		t.Fatalf("resolved targets = %v, want [%s %s]", gotTargets, first, second)
+	}
+	if len(gotOptions) != 1 || gotOptions[0].GroupJID != groupJID || !gotOptions[0].Video {
+		t.Fatalf("resolved options = %+v, want bound video group %s", gotOptions, groupJID)
+	}
+	if call.ID() != "GROUP-BY-ID-CID" {
+		t.Fatalf("call ID = %q, want GROUP-BY-ID-CID", call.ID())
+	}
+}
+
+func TestClientGroupCallByIDStopsBeforeOfferWhenRosterIsNotCallable(t *testing.T) {
+	groupJID := types.NewJID("120363411251996986", types.GroupServer)
+	for _, tc := range []struct {
+		name         string
+		groupID      string
+		participants []types.GroupParticipant
+		wantError    string
+	}{
+		{
+			name:      "empty group ID",
+			groupID:   " ",
+			wantError: "group ID is required",
+		},
+		{
+			name:      "invalid group ID",
+			groupID:   "15550001@s.whatsapp.net",
+			wantError: "not a canonical g.us JID",
+		},
+		{
+			name:    "one remote member",
+			groupID: groupJID.String(),
+			participants: []types.GroupParticipant{
+				{JID: types.NewJID("15550001", types.DefaultUserServer)},
+				{JID: types.NewJID("15550002", types.DefaultUserServer)},
+			},
+			wantError: "requires at least two remote members",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Client{log: zerolog.Nop()}
+			c.eng = newEngine(c)
+			c.getGroupInfo = func(context.Context, types.JID) (*types.GroupInfo, error) {
+				return &types.GroupInfo{JID: groupJID, Participants: tc.participants}, nil
+			}
+			c.ownGroupJIDs = func() []types.JID {
+				return []types.JID{types.NewJID("15550001", types.DefaultUserServer)}
+			}
+			var offers int
+			c.eng.offerGroupCall = func(
+				context.Context,
+				[]types.JID,
+				...whatsmeow.GroupCallOfferOptions,
+			) (string, error) {
+				offers++
+				return "CID", nil
+			}
+
+			_, err := c.GroupCallByID(context.Background(), tc.groupID)
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, tc.wantError)
+			}
+			if offers != 0 {
+				t.Fatalf("invalid group roster delegated %d offers", offers)
+			}
+		})
 	}
 }
 
