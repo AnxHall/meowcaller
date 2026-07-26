@@ -1,6 +1,7 @@
 package stun
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -163,12 +164,13 @@ func TestWasmGroupAllocateCarriesCapturedVideoSubscriptions(t *testing.T) {
 	participantPIDs := []uint32{1, 2}
 	transactionID := [12]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 	endpointXOR := [6]byte{0x2c, 0x84, 0xbc, 0xe2, 0xb5, 0xc7}
-	packet := BuildWasmStunAllocateRequestWithGroupSubscriptions(
+	packet := BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
 		transactionID,
 		[]byte{0x01, 0x02, 0x03},
 		endpointXOR,
 		ssrcs,
 		0xb31ded3e,
+		[2]uint32{0xc1a17938, 0x1bb20c84},
 		participantPIDs,
 		[]byte("0123456789abcdef"),
 	)
@@ -190,8 +192,27 @@ func TestWasmGroupAllocateCarriesCapturedVideoSubscriptions(t *testing.T) {
 	if got := hex.EncodeToString(attrs[2].Value); got != wantReceiverSubscriptions {
 		t.Errorf("group receiver subscriptions = %s, want %s", got, wantReceiverSubscriptions)
 	}
+	wantStreamDescriptors := "0a06188cd889f5030a07100118a8b6e65f0a08100218d68ab9a10f0a08080118a6e2a3a7010a0a0801100118cfa6d8d80b0a0a0801100218809ec5c5090a08080218e38281870e0a0a0802100118968ab6a7070a0a080210021893cca2f50d0a0a0803100318b8f2858d0c0a0a08041003188499c8dd01"
+	if got := hex.EncodeToString(attrs[3].Value); got != wantStreamDescriptors {
+		t.Errorf("group stream descriptors = %s, want %s", got, wantStreamDescriptors)
+	}
 	if got := hex.EncodeToString(attrs[4].Value); got != "02" {
 		t.Errorf("group participant count = %s, want 02", got)
+	}
+
+	oneParticipant := BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
+		transactionID,
+		[]byte{0x01, 0x02, 0x03},
+		endpointXOR,
+		ssrcs,
+		0xb31ded3e,
+		[2]uint32{0xc1a17938, 0x1bb20c84},
+		[]uint32{1},
+		[]byte("0123456789abcdef"),
+	)
+	oneParticipantAttrs := ParseStunAttributes(oneParticipant)
+	if got, want := oneParticipantAttrs[3].Value, CreateWasmStreamDescriptors(ssrcs); !bytes.Equal(got, want) {
+		t.Errorf("one-participant stream descriptors = %x, want no HBH-FEC suffix %x", got, want)
 	}
 }
 

@@ -203,6 +203,34 @@ func BuildWasmStunAllocateRequestWithGroupSubscriptions(
 	log ...zerolog.Logger,
 ) []byte {
 	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	return BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
+		transactionID,
+		relayToken,
+		endpointXor,
+		streamSsrcs,
+		appDataSSRC,
+		[2]uint32{},
+		participantPIDs,
+		integrityKey,
+		log...,
+	)
+}
+
+// BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC adds the
+// participant subscriptions and hop-by-hop FEC stream descriptors used by
+// multi-participant group calls.
+func BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
+	transactionID [12]byte,
+	relayToken []byte,
+	endpointXor [6]byte,
+	streamSsrcs [9]uint32,
+	appDataSSRC uint32,
+	hbhFECSSRCs [2]uint32,
+	participantPIDs []uint32,
+	integrityKey []byte,
+	log ...zerolog.Logger,
+) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
 	pids := normalizedParticipantPIDs(participantPIDs)
 	if len(pids) == 0 {
 		return BuildWasmStunAllocateRequestWithStreamSsrcs(
@@ -216,6 +244,9 @@ func BuildWasmStunAllocateRequestWithGroupSubscriptions(
 	}
 	lg := pickLog(log)
 	streamDescriptors := CreateWasmStreamDescriptors(streamSsrcs)
+	if len(pids) > 1 {
+		streamDescriptors = createWasmStreamDescriptorsWithHBHFEC(streamSsrcs, hbhFECSSRCs)
+	}
 	attrs := stunAttr(attrRelayToken, relayToken)
 	attrs = append(attrs, stunAttr(
 		attrSenderSubscriptionsV2,
@@ -328,6 +359,12 @@ var wasmStreamDescriptorPlan = [9]struct {
 // CreateWasmStreamDescriptors builds the WASM/Web attr 0x4024 protobuf payload for the
 // nine relay stream SSRCs in rtp.WasmRelayStreamSlotWords order.
 func CreateWasmStreamDescriptors(ssrcs [9]uint32) []byte {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/stun.rs#L120-L153
+	return createWasmStreamDescriptorsWithHBHFEC(ssrcs, [2]uint32{})
+}
+
+func createWasmStreamDescriptorsWithHBHFEC(ssrcs [9]uint32, hbhFECSSRCs [2]uint32) []byte {
+	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
 	var out []byte
 	for i, ssrc := range ssrcs {
 		if ssrc == 0 {
@@ -343,6 +380,19 @@ func CreateWasmStreamDescriptors(ssrcs [9]uint32) []byte {
 			inner = pbTag(inner, 2, 0)
 			inner = binary.AppendUvarint(inner, uint64(plan.layer))
 		}
+		inner = pbTag(inner, 3, 0)
+		inner = binary.AppendUvarint(inner, uint64(ssrc))
+		out = pbLenDelim(out, 1, inner)
+	}
+	for i, ssrc := range hbhFECSSRCs {
+		if ssrc == 0 {
+			continue
+		}
+		var inner []byte
+		inner = pbTag(inner, 1, 0)
+		inner = binary.AppendUvarint(inner, uint64(i+3))
+		inner = pbTag(inner, 2, 0)
+		inner = binary.AppendUvarint(inner, 3)
 		inner = pbTag(inner, 3, 0)
 		inner = binary.AppendUvarint(inner, uint64(ssrc))
 		out = pbLenDelim(out, 1, inner)
