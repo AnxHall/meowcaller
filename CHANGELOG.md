@@ -7,6 +7,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ## [Unreleased]
 
+### media/group-runtime — `KAT-verified`
+
+- Hardened live group-call teardown by closing and detaching audio endpoints,
+  accepted timestamp-less encrypted rekey controls, and added sanitized
+  diagnostics for group media readiness and key installation.
+- Corrected RTP CVO display orientation to use the standardized receiver
+  quarter-turn value directly. Android portrait no longer receives the inverse
+  rotation while iPhone portrait remains unchanged.
+
 ### api/upstream-group-call-adapter — `partial`
 - Added a latest-upstream-Whatsmeow compatibility layer for initial ad-hoc and
   group-bound calls, active-call participant invite/ring, active-group

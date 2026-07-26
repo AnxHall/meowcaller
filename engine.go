@@ -1271,6 +1271,20 @@ func (e *engine) finishCall(callID, reason string) {
 	if call == nil || call.State() == CallPhaseEnded {
 		return
 	}
+	call.mu.Lock()
+	player := call.player
+	call.player = nil
+	sink := call.sink
+	call.sink = nil
+	call.mu.Unlock()
+	if player != nil {
+		player.Stop()
+	}
+	if sink != nil {
+		if err := sink.Close(); err != nil {
+			e.c.log.Warn().Err(err).Str("call_id", callID).Msg("close call audio sink failed")
+		}
+	}
 	call.setPhase(CallPhaseEnded)
 	if fn := call.onEndFn(); fn != nil {
 		fn(reason)

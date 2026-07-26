@@ -49,6 +49,13 @@ func (e *engine) maybeStartMedia(callID string) {
 	}
 	if m.group && (!m.hasGroupEpoch || len(m.groupRawEpoch) != 32 ||
 		m.groupUpdate == nil || m.groupUpdate.Relay == nil) {
+		e.c.log.Debug().
+			Str("call_id", callID).
+			Bool("has_group_epoch", m.hasGroupEpoch).
+			Int("group_epoch_bytes", len(m.groupRawEpoch)).
+			Bool("has_group_update", m.groupUpdate != nil).
+			Bool("has_group_relay", m.groupUpdate != nil && m.groupUpdate.Relay != nil).
+			Msg("group media prerequisites incomplete")
 		e.mu.Unlock()
 		return
 	}

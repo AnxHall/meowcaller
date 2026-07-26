@@ -55,9 +55,16 @@ func (e *engine) onUnknownCallEvent(node *waBinary.Node) {
 		}
 		e.dispatchRemoteScreenShare(envelope, *screenShare)
 	case "enc_rekey":
+		e.c.log.Debug().
+			Str("call_id", envelope.CallID).
+			Msg("group rekey received")
 		if err = e.ingestGroupEpoch(context.Background(), envelope); err != nil {
 			e.c.log.Warn().Err(err).Str("call_id", envelope.CallID).Msg("group rekey ingest failed")
+			return
 		}
+		e.c.log.Debug().
+			Str("call_id", envelope.CallID).
+			Msg("group rekey installed")
 	}
 }
 
@@ -195,6 +202,12 @@ func (e *engine) applyGroupUpdate(update groupCallUpdate) bool {
 	waitingRoomCancel := m.waitingRoomCancel
 	m.waitingRoomCancel = nil
 	e.mu.Unlock()
+	e.c.log.Debug().
+		Str("call_id", update.CallID).
+		Uint32("transaction_id", update.TransactionID).
+		Bool("has_relay", stored.Relay != nil).
+		Bool("rekey_requested", update.RekeyRequested).
+		Msg("group update installed")
 
 	if waitingRoomCancel != nil {
 		waitingRoomCancel()

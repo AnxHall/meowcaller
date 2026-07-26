@@ -40,7 +40,7 @@ func ParseCallControlEnvelope(node *waBinary.Node) (*CallControlEnvelope, error)
 		From:        attrs.JID("from"),
 		Participant: attrs.OptionalJIDOrEmpty("participant"),
 		Recipient:   attrs.OptionalJIDOrEmpty("recipient"),
-		Timestamp:   attrs.UnixTime("t"),
+		Timestamp:   attrs.OptionalUnixTime("t"),
 		CallID:      childAttrs.String("call-id"),
 		CallCreator: childAttrs.JID("call-creator"),
 		Action:      children[0],

@@ -222,3 +222,27 @@ func TestParseCallControlEnvelopePreservesCompanionRouting(t *testing.T) {
 		t.Fatalf("envelope = %+v", envelope)
 	}
 }
+
+func TestParseCallControlEnvelopeAllowsRekeyWithoutTimestamp(t *testing.T) {
+	from := types.JID{User: "100001", Server: types.HiddenUserServer}
+	creator := types.JID{User: "300003", Server: types.HiddenUserServer, Device: 4}
+	node := waBinary.Node{
+		Tag:   "call",
+		Attrs: waBinary.Attrs{"from": from, "id": "REKEY"},
+		Content: []waBinary.Node{{
+			Tag: "enc_rekey",
+			Attrs: waBinary.Attrs{
+				"call-id": "CID", "call-creator": creator, "transaction-id": "4",
+			},
+		}},
+	}
+
+	envelope, err := ParseCallControlEnvelope(&node)
+	if err != nil {
+		t.Fatalf("ParseCallControlEnvelope: %v", err)
+	}
+	if envelope.From != from || envelope.CallID != "CID" ||
+		envelope.CallCreator != creator || !envelope.Timestamp.IsZero() {
+		t.Fatalf("envelope = %+v", envelope)
+	}
+}

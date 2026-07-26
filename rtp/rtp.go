@@ -115,10 +115,10 @@ type VideoRtpExtension struct {
 	TransportSequence uint16
 }
 
-// DisplayOrientation converts WhatsApp's inverse RTP orientation into clockwise
-// quarter turns suitable for a renderer or WebRTC CVO extension.
+// DisplayOrientation returns the CVO receiver rotation as clockwise quarter turns.
 func (e *VideoRtpExtension) DisplayOrientation() int {
-	return (4 - int(e.MediaFrameInfo&0x03)) & 0x03
+	// Source of truth: https://www.etsi.org/deliver/etsi_ts/126100_126199/126114/15.05.00_60/ts_126114v150500p.pdf
+	return int(e.MediaFrameInfo & 0x03)
 }
 
 func (e *VideoRtpExtension) encode() []byte {
