@@ -1,0 +1,167 @@
+{
+  "schema": "meowcaller-group-call-analysis/v1",
+  "call_id": "84987F9DE404B79ED999E6F254B0150A",
+  "scenario": "initial three-party video call captured from two WhatsApp Web participants and Meowcaller",
+  "extension_capture": {
+    "path": "diag/captures/group-call-two-browser-v2-20260726-030741.jsonl",
+    "schema": "wa-voip-diag/v2",
+    "events": 24320,
+    "bytes": 32087664,
+    "sha256": "27bd4947e14b25e79baa4e630666f2dd9b474fffc632df93f506eed2f98e20b4",
+    "tabs": {
+      "825906793": 12235,
+      "818526425": 12085
+    },
+    "call_id_hits": 938,
+    "network_signaling_events": 72
+  },
+  "meowcaller_snapshot": {
+    "path": "diag/captures/group-call-84987F9DE404B79ED999E6F254B0150A-meowcaller-20260726-030741",
+    "files": {
+      "app_data.jsonl": {
+        "events": 20,
+        "bytes": 1871,
+        "sha256": "48c1ec3685587a16c1ab87531dcce0047cb082d2ce2e1288947741d29ae80b12"
+      },
+      "media_in.jsonl": {
+        "events": 0,
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "media_out.jsonl": {
+        "events": 311,
+        "bytes": 166975,
+        "sha256": "b55e04ed3d2de20d197347b4f7dba5e30cdf3514cda56228801edf664c6463e1"
+      },
+      "meta.jsonl": {
+        "events": 5,
+        "bytes": 770,
+        "sha256": "1c92802e3276e9e11d59bf27c9e0eeba9f9080cf02bd4b603d628c6539f6077f"
+      },
+      "relay.jsonl": {
+        "events": 1082,
+        "bytes": 1110087,
+        "sha256": "e87f09f450886388a478b33cadfbcba301cbc859e2e61fca1f0c5186b62c8d55"
+      },
+      "rtcp.jsonl": {
+        "events": 37,
+        "bytes": 5625,
+        "sha256": "4ed830be47f22b2fe2a654dba27b4e89701b7bc6cc382d28410dccd021adb741"
+      },
+      "rtp.jsonl": {
+        "events": 0,
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "srtp.jsonl": {
+        "events": 1,
+        "bytes": 288,
+        "sha256": "f57a25cb6f6ce24ae77afff6ccd3a8151b04ef98592df1a2513d15f2319c8151"
+      },
+      "ssrc.jsonl": {
+        "events": 1,
+        "bytes": 330,
+        "sha256": "d766f0efc18306d3099c61e56142f03cdcb32bb36de4611f6cec886735e1da62"
+      },
+      "stun.jsonl": {
+        "events": 31,
+        "bytes": 5485,
+        "sha256": "b03a954d68ddda643f53c5739ae66d3b1a2e5b07cb17f1947145b88017289329"
+      },
+      "video.jsonl": {
+        "events": 17,
+        "bytes": 1188,
+        "sha256": "9eadf6c484628a2b15c21c1e0e391c8e66a3812f35674b26710f81cacfe2d7dd"
+      },
+      "video_out.jsonl": {
+        "events": 21,
+        "bytes": 4721,
+        "sha256": "3221fb6efc733e750523a663a0cf427f135eb8b5aa677364516c9fe3f5c9ae8a"
+      },
+      "video_wire.jsonl": {
+        "events": 125,
+        "bytes": 274228,
+        "sha256": "8646922c83356baaa28db066183b4aa7c43f197054c5ee6a7158c6a3a7285334"
+      }
+    }
+  },
+  "participants": {
+    "self": {
+      "device_jid": "74170125783269:45@lid",
+      "pid": 0
+    },
+    "participant_1": {
+      "device_jid": "242653052539031:2@lid",
+      "pid": 1,
+      "audio_ssrc": 2362737109,
+      "video_ssrc": 1999530665
+    },
+    "participant_2": {
+      "device_jid": "156535032389744:15@lid",
+      "pid": 2,
+      "audio_ssrc": 1730810002,
+      "video_ssrc": 2401104903
+    }
+  },
+  "group_forwarding_envelope": {
+    "marker": 9,
+    "packets": 986,
+    "all_packets_match_known_participant_ssrc": true,
+    "duplicate_inner_sequences": 0,
+    "streams": [
+      {
+        "participant": "participant_1",
+        "media": "video",
+        "ssrc": 1999530665,
+        "packets": 329,
+        "first_sequence": 19,
+        "last_sequence": 347,
+        "missing_sequences": 0
+      },
+      {
+        "participant": "participant_1",
+        "media": "audio",
+        "ssrc": 2362737109,
+        "packets": 120,
+        "first_sequence": 1,
+        "last_sequence": 120,
+        "missing_sequences": 0
+      },
+      {
+        "participant": "participant_2",
+        "media": "video",
+        "ssrc": 2401104903,
+        "packets": 453,
+        "first_sequence": 1,
+        "last_sequence": 453,
+        "missing_sequences": 0
+      },
+      {
+        "participant": "participant_2",
+        "media": "audio",
+        "ssrc": 1730810002,
+        "packets": 84,
+        "first_sequence": 1,
+        "last_sequence": 84,
+        "missing_sequences": 0
+      }
+    ],
+    "subtypes": [
+      {
+        "subtype": 2,
+        "inner_rtp_offset": 8,
+        "packets": 839
+      },
+      {
+        "subtype": 4,
+        "inner_rtp_offset": 12,
+        "packets": 111
+      },
+      {
+        "subtype": 7,
+        "inner_rtp_offset": 18,
+        "packets": 36
+      }
+    ]
+  }
+}

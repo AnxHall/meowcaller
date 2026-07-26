@@ -50,6 +50,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   changing the working one-remote shape. The exact 11-descriptor capture vector,
   one-remote exclusion, atomic relay/roster integration, full suite, vet, and race
   KATs pass; live multi-PID acceptance remains pending.
+- Recorded the successful two-PID relay transition from call
+  `84987F9DE404B79ED999E6F254B0150A`. The accepted relay sends 986 contiguous
+  participant audio/video RTP packets inside capture-pinned `0x09` forwarding
+  envelopes, but the current first-byte classifier labels every envelope as
+  STUN and drops it before SRTP. Subtypes 2, 4, and 7 place RTP at byte offsets
+  8, 12, and 18 respectively; de-framing and live validation remain pending.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:

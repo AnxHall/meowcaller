@@ -1,12 +1,16 @@
 # Group video and reactions
 
 **Status:** initial group-video signaling and participant H.264 receive accepted live;
-multi-PID HBH-FEC relay descriptors KAT-verified, live retest pending
+multi-PID HBH-FEC relay descriptors KAT-verified; group-forwarding de-framing
+capture-pinned, implementation pending
 
 **Reference pinned at:**
 
 - capture SHA-256 `47e4966e1847b686b3a31c4983df8025617d200ec27a71c5884598488af65b90`
 - live diagnostic call `14F2B768B13898CC1783AD897C1B5953`
+- two-browser extension capture SHA-256
+  `27bd4947e14b25e79baa4e630666f2dd9b474fffc632df93f506eed2f98e20b4`
+- live diagnostic call `84987F9DE404B79ED999E6F254B0150A`
 
 ## Observed facts
 
@@ -82,6 +86,22 @@ multi-PID HBH-FEC relay descriptors KAT-verified, live retest pending
 - The captured group call sends video state 6 and later returns to state 1 on
   the same call ID. State 6 is therefore a video-to-audio downgrade, not call
   termination; camera-only mute/unmute remains state 0/1.
+- Live three-party video call `84987F9DE404B79ED999E6F254B0150A`
+  independently validates that the relay accepts the complete two-PID Allocate
+  with HBH-FEC descriptors. Before the second participant connects, the relay
+  delivers ordinary RTP and Meowcaller emits 17 participant H.264 access units.
+- After the second accept, the relay switches its downlink to a `0x09`
+  group-forwarding envelope. All 986 captured envelopes contain inner RTP from a
+  connected participant: subtype 2 starts RTP at byte 8, subtype 4 at byte 12,
+  and subtype 7 at byte 18.
+- Those inner streams are complete rather than duplicate repair traffic:
+  participant-1 video has sequences 19–347, participant-1 audio 1–120,
+  participant-2 video 1–453, and participant-2 audio 1–84, with no gaps or
+  duplicate `(SSRC, sequence)` pairs.
+- The current relay classifier treats every `0x09` message as STUN because its
+  top two bits are clear. They fail STUN parsing and are dropped before
+  participant SSRC lookup and SRTP authentication. This is the observed cause of
+  the two-video freeze after the HBH-FEC descriptor fix.
 
 ## Inferences to validate live
 
@@ -90,10 +110,10 @@ multi-PID HBH-FEC relay descriptors KAT-verified, live retest pending
 - A participant added to a video call joins the existing shared group relay/key
   epoch and receives subsequent group updates rather than negotiating a separate
   media session.
-- The missing HBH-FEC TX/RX descriptors cause the relay to stop forwarding when
-  it switches from one remote to true multi-participant SFU mode. The wire mismatch
-  and stop timestamp are exact, but a descriptor-bearing live retry remains the
-  acceptance test.
+- Stripping the three capture-pinned group-forwarding headers will expose the
+  SRTP packets to the existing participant receive pipelines. The packet
+  identity and sequence evidence is exact; restored live bidirectional
+  multi-participant media remains the acceptance test.
 
 The remaining inferences must stay marked unvalidated until a live add-person video
 call proves the offer is accepted and bidirectional video flows for original and
