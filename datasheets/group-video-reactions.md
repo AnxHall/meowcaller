@@ -48,6 +48,21 @@ group relay subscription refresh KAT-verified, live retest pending
   local stream descriptors. It omits all three captured participant-subscription
   attributes. In a later live call, both peers signaled enabled video but the
   relay forwarded no participant PT-97 packets, while audio continued.
+- Live call `5B1243C9301A31BD73D76A85B26F2981` accepted the subscription-bearing
+  Allocate. With one remote PID selected, participant H.264 flowed. The
+  two-remote-PID refresh at `1785024103163` increased the Allocate from 464 to
+  476 bytes and was followed by an 11,985 ms gap with no incoming video access
+  units while audio continued. When the roster returned to one remote PID, the
+  464-byte refresh at `1785024114785` was followed by H.264 resuming on the same
+  SSRC 398 ms later.
+- The current nine-stream derivation uses slot 6 as the third secondary-video
+  SSRC, while the app-data sender independently derives that same slot 6. The
+  resulting subscription advertises one SSRC in both the secondary-video and
+  app-data groups.
+- The authoritative WhatsApp capture does not have that collision. For SELF it
+  advertises secondary-video SSRCs `E0E04163 / 74ED8516 / DEA8A613` and the
+  distinct app-data SSRC `B31DED3E`. The logs describe the secondary triple as a
+  generated video stream and preserve the slot-6-derived app-data SSRC.
 
 ## Inferences to validate live
 
@@ -56,6 +71,9 @@ group relay subscription refresh KAT-verified, live retest pending
 - A participant added to a video call joins the existing shared group relay/key
   epoch and receives subsequent group updates rather than negotiating a separate
   media session.
+- The duplicate secondary-video/app-data SSRC is the cause of the relay stopping
+  video on a multi-PID subscription. The timestamp correlation is exact, but a
+  collision-free live retry remains the acceptance test.
 
 The remaining inferences must stay marked unvalidated until a live add-person video
 call proves the offer is accepted and bidirectional video flows for original and
@@ -106,6 +124,8 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
 - Relay tests must prove a committed connected roster emits the exact captured
   sender/receiver subscription protobufs for remote PIDs, and that the subscription
   update shares the roster/relay atomic commit boundary.
+- Relay-stream tests must prove the generated secondary-video SSRCs are nonzero,
+  mutually unique, and distinct from audio, primary video, and app-data SSRCs.
 - Web tests must prove tagged participant video messages and sender-attributed
   reaction rendering are present.
 - Initial group-video signaling and participant H.264 receive are live-accepted.

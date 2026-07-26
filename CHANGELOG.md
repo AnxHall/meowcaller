@@ -32,6 +32,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   The refreshed Allocate remains inside the existing atomic roster/relay commit:
   failed sends publish neither resource. Capture-exact STUN and cross-resource
   integration KATs pass; live relay acceptance remains pending.
+- Recorded the first live multi-PID subscription failure. A two-remote refresh
+  stopped incoming video for 11,985 ms and the one-remote refresh restored it.
+  The local sender subscription reuses slot 6 for both secondary-video repair and
+  app data, unlike the capture's distinct generated secondary-video and app-data
+  SSRCs. A collision-free live retry remains pending.
 
 ### media/group_receive — `KAT-verified`
 - Specified one cross-resource commit boundary for each accepted group update:
