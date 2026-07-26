@@ -63,6 +63,9 @@ group relay subscription refresh KAT-verified, live retest pending
   advertises secondary-video SSRCs `E0E04163 / 74ED8516 / DEA8A613` and the
   distinct app-data SSRC `B31DED3E`. The logs describe the secondary triple as a
   generated video stream and preserve the slot-6-derived app-data SSRC.
+- The captured group call sends video state 6 and later returns to state 1 on
+  the same call ID. State 6 is therefore a video-to-audio downgrade, not call
+  termination; camera-only mute/unmute remains state 0/1.
 
 ## Inferences to validate live
 
@@ -109,6 +112,11 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
 ## Web example target
 
 - Start either an audio or video group call from the selector.
+- Start a group-bound audio or video call from a numeric group ID or canonical
+  `@g.us` JID.
+- Coordinate browser capture with call control: start capture for video dial or
+  upgrade, stop it after a successful state-6 downgrade, and never reuse hangup
+  for a video control.
 - Keep one H.264 decoder and canvas per authenticated participant identity.
 - Route reactions to the sender's participant tile, with a shared fallback before
   that participant has a tile.
@@ -127,7 +135,8 @@ an owned copy so callers cannot retain or mutate the media loop's buffer.
 - Relay-stream tests must prove the generated secondary-video SSRCs are nonzero,
   mutually unique, and distinct from audio, primary video, and app-data SSRCs.
 - Web tests must prove tagged participant video messages and sender-attributed
-  reaction rendering are present.
+  reaction rendering are present, group-ID calls reach the bound API, and
+  camera/upgrade/downgrade controls remain independent from hangup.
 - Initial group-video signaling and participant H.264 receive are live-accepted.
   The capture-derived subscription protobuf and atomic roster integration KATs
   pass. Live subscription acceptance, bidirectional multi-participant H.264,

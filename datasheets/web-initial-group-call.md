@@ -1,8 +1,8 @@
 # Datasheet: `web/initial_group_call`
 
-The localhost browser console starts one audio-only call to multiple selected
-people through the Meowcaller group-call API, while keeping established-call
-participant invitations as a separate control.
+The localhost browser console starts one audio or video call to multiple
+selected people, or to a group resolved from its numeric ID or `@g.us` JID,
+while keeping established-call participant invitations as a separate control.
 
 **Validation vectors:** focused controller, HTTP, DOM, and SSE ordering KATs in
 `examples/web/controller_test.go` and `examples/web/server_test.go`, backed by
@@ -54,6 +54,7 @@ The implemented Task 2 API at
 type GroupCallOptions struct {
 	// GroupJID binds the call to a WhatsApp group. Leave empty for an ad-hoc call.
 	GroupJID string
+	Video    bool
 }
 
 func (c *Client) GroupCallWithOptions(
@@ -92,9 +93,18 @@ type webCallController struct {
 		[]string,
 		meowcaller.GroupCallOptions,
 	) (*meowcaller.Call, error)
+	startGroupCallByID func(
+		context.Context,
+		string,
+		meowcaller.GroupCallOptions,
+	) (*meowcaller.Call, error)
 }
 
 func (c *webCallController) startGroupAudio(targets []string) error
+func (c *webCallController) startGroupCallByIDWithVideo(
+	groupID string,
+	video bool,
+) error
 func (c *webCallController) addParticipants(targets []string) error
 ```
 
@@ -102,6 +112,7 @@ The HTTP control envelope adds:
 
 ```json
 {"action":"start_group_audio","targets":["15551234567","15557654321"]}
+{"action":"start_group_id_video","group_id":"120363411251996986@g.us"}
 ```
 
 ## Implementation suggestions (guidance, not authoritative)
@@ -111,6 +122,9 @@ The HTTP control envelope adds:
   people before delegation.
 - Pass `GroupCallOptions{GroupJID: ""}` and delegate once. Do not synthesize
   initial group start from `Call` plus `AddParticipants`.
+- For a group-ID start, delegate once to `Client.GroupCallByIDWithOptions`; the
+  root API owns roster lookup, self removal, alias deduplication, participant
+  limits, and canonical group binding.
 - Reject group start while any current, pending, or call-ID ownership exists.
   Attach the one returned call before publishing a distinct group-dialing
   lifecycle event. On attach failure, clear ownership and hang up.
@@ -125,5 +139,10 @@ The HTTP control envelope adds:
   calls remain subject to the existing busy rejection.
 - Keep the group-start button available only in idle UI state. Keep Add people
   disabled until ready or active, and disable it again on ended/idle.
+- A video dial, initial video group call, or audio-to-video upgrade starts the
+  browser camera before signaling and rolls it back if signaling fails. Camera
+  mute/unmute uses video state 0/1. Stop video sends the captured downgrade
+  state 6, then stops camera capture; only the separate Hang up control may end
+  the call.
 - Live WhatsApp initial offer, ACK, group rekey, relay readiness, and
   bidirectional audio remain the end-to-end validation gate.

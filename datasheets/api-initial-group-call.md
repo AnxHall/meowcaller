@@ -1,8 +1,10 @@
 # Datasheet: `api/initial_group_call`
 
-The Meowcaller root API starts one preselected multi-participant audio call,
-publishes the selected remotes immediately, and hands authoritative roster and
-key epochs to media only after Whatsmeow identifies a connected device.
+The Meowcaller root API starts one preselected multi-participant audio or video
+call, or resolves a WhatsApp group ID into its remote member roster before
+starting a group-bound call. It publishes the selected remotes immediately and
+hands authoritative roster and key epochs to media only after Whatsmeow
+identifies a connected device.
 
 **Validation vectors:** focused root-package KATs in
 `group_call_start_test.go`, backed by the Task 1 initial-offer capture contract.
@@ -65,6 +67,7 @@ package meowcaller
 
 type GroupCallOptions struct {
 	GroupJID string
+	Video    bool
 }
 
 func (c *Client) GroupCall(
@@ -77,12 +80,23 @@ func (c *Client) GroupCallWithOptions(
 	targets []string,
 	opts GroupCallOptions,
 ) (*Call, error)
+
+func (c *Client) GroupCallByID(
+	ctx context.Context,
+	groupID string,
+) (*Call, error)
+
+func (c *Client) GroupCallByIDWithOptions(
+	ctx context.Context,
+	groupID string,
+	opts GroupCallOptions,
+) (*Call, error)
 ```
 
 ## Required behavior
 
-- Initial group calls are audio-only. `GroupCallOptions` has no video field and
-  the root API does not reuse `CallOptions.Video`.
+- `GroupCallOptions.Video` selects the existing initial H.264 group-video offer;
+  false remains audio-only.
 - Trim and parse every target, normalize device JIDs to their non-AD form, and
   deduplicate exact normalized JIDs while preserving first order. Require at
   least two remaining targets.
@@ -91,6 +105,14 @@ func (c *Client) GroupCallWithOptions(
   after resolution.
 - Parse a non-empty optional group JID as one canonical `g.us` JID. Reject
   malformed, non-canonical, non-group, device, or empty-user values.
+- `GroupCallByID` accepts either the numeric group ID or a canonical `g.us` JID,
+  fetches the authoritative roster through Whatsmeow `GetGroupInfo`, excludes
+  the local account through both its PN and LID identities, and deduplicates
+  each member across primary JID, PN, and LID aliases.
+- Group-ID resolution must leave at least two and at most 31 remote members.
+  Reject outside that range rather than silently converting a one-person
+  selection into a direct call or truncating a large group. Bind the resulting
+  offer to the resolved canonical group JID.
 - Delegate once to `whatsmeow.Client.OfferGroupCall`. On success create one
   outgoing `Call` in `CallPhaseCalling` whose public peer remains the first
   selected normalized target.
@@ -128,7 +150,8 @@ func (c *Client) GroupCallWithOptions(
 ## Validation boundaries
 
 - Focused KATs cover target normalization/deduplication/order, strict optional
-  group-JID parsing, one-shot delegation, error preservation, PN/LID handoff,
+  group-JID parsing, group-ID roster lookup/self exclusion/alias deduplication,
+  one-shot bound delegation, error preservation, PN/LID handoff,
   the selected-only public seed, incoming snapshot cloning/replay, stable peer
   behavior, repeated same-ID offer coalescing, post-end offer suppression,
   connected-device media identity, one-shot launch, and queued roster/key

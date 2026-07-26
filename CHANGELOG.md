@@ -110,6 +110,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   pass.
 
 ### web/initial_group_call — `partial`
+- Added group-ID audio/video starts to the web console through
+  `Client.GroupCallByIDWithOptions`, while preserving the existing explicit
+  participant selector and established-call Add people paths.
+- Coordinated browser camera capture with initial video calls and audio-to-video
+  upgrades. Camera mute/unmute now sends state 0/1; Stop video sends state 6,
+  stops local capture, and never calls Hangup.
 - Added the capture-backed web-console contract for one audio-only multi-person
   start through `Client.GroupCallWithOptions`, separate established-call
   participant invitations, and incoming roster replay before Answer-driven
@@ -129,6 +135,10 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   underlying group call.
 
 ### api/initial_group_call — `partial`
+- Added `GroupCallByID` and `GroupCallByIDWithOptions`: numeric IDs normalize to
+  `@g.us`, Whatsmeow resolves the group roster, local PN/LID identities and
+  duplicate aliases are removed, and the bound call is rejected unless 2–31
+  remote members remain.
 - Added the Task 1 capture-pinned Meowcaller API contract for an audio-only
   preselected group start, a selected-only public roster seed, stable public
   peer identity, and authoritative connected-device media readiness.
