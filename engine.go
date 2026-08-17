@@ -964,6 +964,23 @@ func (e *engine) onReject(ev *events.CallReject) {
 	if m == nil {
 		return
 	}
+	// Multi-device: o offer vai com <destination> para TODOS os devices do
+	// callee (celular + WhatsApp Desktop/Web vinculados). Quando o telefone
+	// primário (device 0) está tocando, um device VINCULADO (device != 0) manda
+	// um CallReject sintético ~1s após o offer — mesmo quando o cliente atende
+	// no celular. O servidor NÃO cancela o toque do primário (o celular segue
+	// tocando e aceita), mas honrar esse reject derruba a sessão de mídia do
+	// originador antes do accept do celular chegar (sintoma: cliente atende,
+	// fica "reconectando" e a chamada nunca conecta). Só encerra por reject do
+	// device PRIMÁRIO (0) — rejects de devices vinculados são ignorados e a
+	// chamada segue esperando o accept/timeout.
+	if ev.From.Device != 0 {
+		e.c.log.Info().
+			Str("call_id", ev.CallID).
+			Str("from", ev.From.String()).
+			Msg("ignoring reject from linked device (multi-device synthetic reject); waiting for primary device")
+		return
+	}
 	e.c.log.Info().
 		Str("call_id", ev.CallID).
 		Str("from", ev.From.String()).

@@ -371,6 +371,37 @@ func TestOutgoingPeerAcceptLifecycle(t *testing.T) {
 	}
 }
 
+func TestOutgoingLinkedDeviceRejectIgnored(t *testing.T) {
+	eng, call := testEngineWithOutgoingCall()
+	primary := peerJID()
+	linked := peerJID()
+	linked.Device = 24
+
+	// Reject vindo de um device VINCULADO (WhatsApp Desktop/Web, device != 0)
+	// é o falso positivo sintético do multi-device: o celular primário segue
+	// tocando e pode atender — a chamada NÃO pode ser derrubada por ele.
+	eng.onReject(&events.CallReject{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: linked},
+	})
+	if got := call.State(); got != CallPhaseCalling {
+		t.Fatalf("after linked-device reject phase = %d, want Calling (reject ignorado)", got)
+	}
+	if eng.lookup(call.ID()) == nil {
+		t.Fatal("linked-device reject removed the call from the engine registry")
+	}
+
+	// Reject do device PRIMÁRIO (0) continua encerrando a chamada como rejected.
+	eng.onReject(&events.CallReject{
+		BasicCallMeta: types.BasicCallMeta{CallID: call.ID(), From: primary},
+	})
+	if got := call.State(); got != CallPhaseEnded {
+		t.Fatalf("after primary-device reject phase = %d, want Ended", got)
+	}
+	if eng.lookup(call.ID()) != nil {
+		t.Fatal("primary-device reject retained the ended call in the engine registry")
+	}
+}
+
 func TestOutgoingAcceptRekeysToAnsweringDevice(t *testing.T) {
 	eng, call := testEngineWithOutgoingCall()
 	m := eng.calls[call.ID()]
