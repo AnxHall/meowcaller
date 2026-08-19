@@ -833,6 +833,17 @@ func (e *engine) onPreAccept(ev *events.CallPreAccept) {
 	if m == nil || m.direction != CallDirectionOutgoing {
 		return
 	}
+	// Multi-device: ignore preaccept from linked devices (Device != 0).
+	// Companion devices preaccept before the primary phone answers, causing
+	// WhatsApp to route RTP media to the desktop. Wait for Device == 0.
+	if !ev.From.IsEmpty() && ev.From.Device != 0 {
+		e.c.log.Info().
+			Str("call_id", ev.CallID).
+			Str("from", ev.From.String()).
+			Str("platform", ev.RemotePlatform).
+			Msg("ignoring preaccept from linked device (multi-device); waiting for primary device")
+		return
+	}
 	if m.call != nil && m.call.State() == CallPhaseCalling {
 		m.call.setPhase(CallPhaseRinging)
 	}
