@@ -482,7 +482,7 @@ func TestRelayRekeysToElectedPeerDevice(t *testing.T) {
 	}
 }
 
-func TestUnqualifiedAcceptPreservesRelayElectedPeerDevice(t *testing.T) {
+func TestAcceptRekeysFromCompanionToAnsweringPrimaryDevice(t *testing.T) {
 	eng, call := testEngineWithOutgoingCall()
 	m := eng.calls[call.ID()]
 	m.peerLID = peerJID().String()
@@ -507,14 +507,14 @@ func TestUnqualifiedAcceptPreservesRelayElectedPeerDevice(t *testing.T) {
 		Data:          &waBinary.Node{Tag: "accept"},
 	})
 
-	if len(rekeyed) != 1 || rekeyed[0] != companion.String() {
-		t.Fatalf("rekeyed peers = %v, want only %q", rekeyed, companion.String())
+	if len(rekeyed) != 2 || rekeyed[1] != peerJID().String() {
+		t.Fatalf("rekeyed peers = %v, want second rekey to %q", rekeyed, peerJID().String())
 	}
 	eng.mu.Lock()
 	gotPeer := m.peerLID
 	eng.mu.Unlock()
-	if gotPeer != companion.String() {
-		t.Fatalf("stored peer after accept = %q, want %q", gotPeer, companion.String())
+	if gotPeer != peerJID().String() {
+		t.Fatalf("stored peer after accept = %q, want %q", gotPeer, peerJID().String())
 	}
 }
 

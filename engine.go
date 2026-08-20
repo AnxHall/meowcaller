@@ -985,14 +985,6 @@ func preferQualifiedPeer(current string, signaled types.JID) string {
 	if signaled.IsEmpty() {
 		return current
 	}
-	parsed, err := types.ParseJID(current)
-	if err == nil &&
-		parsed.User == signaled.User &&
-		parsed.Server == signaled.Server &&
-		parsed.Device != 0 &&
-		signaled.Device == 0 {
-		return current
-	}
 	return signaled.String()
 }
 

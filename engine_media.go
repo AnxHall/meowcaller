@@ -477,7 +477,7 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	// Binding-requests instead flip the relay into ICE-consent mode and the bridge never
 	// forms.
 	go func() {
-		t := time.NewTicker(time.Second)
+		t := time.NewTicker(400 * time.Millisecond)
 		defer t.Stop()
 		var tickCount uint64
 		for {
