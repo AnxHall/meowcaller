@@ -833,15 +833,42 @@ func (e *engine) onPreAccept(ev *events.CallPreAccept) {
 	if m == nil || m.direction != CallDirectionOutgoing {
 		return
 	}
-	// Multi-device: ignore preaccept from linked devices (Device != 0).
-	// Companion devices preaccept before the primary phone answers, causing
-	// WhatsApp to route RTP media to the desktop. Wait for Device == 0.
+	// Multi-device: reject linked devices (Device != 0) actively.
+	//
+	// Companion devices (WhatsApp Desktop/Web, device != 0) preaccept before the
+	// primary phone answers. Simply ignoring the preaccept is NOT enough: the Desktop
+	// still connects to the WhatsApp relay server as the "callee" endpoint and holds
+	// the relay bridge open. Since the relay bridges to whoever connects first, the
+	// primary phone's RTP never reaches our server — the call appears connected
+	// (signaling is synchronised) but is completely silent.
+	//
+	// Fix: send a targeted <terminate> to the linked device's specific JID (with the
+	// device suffix, e.g. 70790103990472:24@lid). The Desktop interprets this as "you
+	// are not the answerer — back off from the relay". The call stanza is directed only
+	// to that device, so the primary phone (device 0) is unaffected and continues
+	// ringing normally.
 	if !ev.From.IsEmpty() && ev.From.Device != 0 {
 		e.c.log.Info().
 			Str("call_id", ev.CallID).
 			Str("from", ev.From.String()).
 			Str("platform", ev.RemotePlatform).
-			Msg("ignoring preaccept from linked device (multi-device); waiting for primary device")
+			Msg("terminating linked device preaccept to release relay bridge (multi-device)")
+		// Send terminate to this specific linked device JID so it disconnects from the
+		// relay. Use the device-specific JID (ev.From, with Device != 0) as the target
+		// so the stanza is routed only to that companion device. m.creator is the
+		// outgoing call's creator (our server LID); m.from is the peer's primary JID.
+		term := signaling.BuildTerminate(&signaling.TerminateParams{
+			CallID:      ev.CallID,
+			To:          ev.From,
+			CallCreator: m.creator,
+		})
+		term.Attrs["id"] = e.nextCallNodeID()
+		if err := e.transmitCallNode(context.Background(), term); err != nil {
+			e.c.log.Warn().Err(err).
+				Str("call_id", ev.CallID).
+				Str("from", ev.From.String()).
+				Msg("failed to send terminate to linked device; relay may stay bridged to desktop")
+		}
 		return
 	}
 	if m.call != nil && m.call.State() == CallPhaseCalling {
