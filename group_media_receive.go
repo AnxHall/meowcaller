@@ -737,6 +737,9 @@ func (r *participantReceiveRegistry) UnprotectVideo(packet []byte) (unprotectedP
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	receiver := r.byVideoSSRC[header.Ssrc]
+	if receiver == nil && !r.hasGroupUpdate {
+		receiver = r.byDeviceID[r.fallbackID]
+	}
 	if receiver == nil {
 		r.log.Debug().Uint32("ssrc", header.Ssrc).Msg("dropping video from inactive participant SSRC")
 		return unprotectedParticipantMedia{}, false
@@ -759,6 +762,9 @@ func (r *participantReceiveRegistry) UnprotectAppData(packet []byte) (unprotecte
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	receiver := r.byAppDataSSRC[header.Ssrc]
+	if receiver == nil && !r.hasGroupUpdate {
+		receiver = r.byDeviceID[r.fallbackID]
+	}
 	if receiver == nil {
 		r.log.Debug().Uint32("ssrc", header.Ssrc).Msg("dropping app-data from inactive participant SSRC")
 		return unprotectedParticipantMedia{}, false
@@ -791,6 +797,9 @@ func (r *participantReceiveRegistry) UnprotectSRTCP(senderSSRC uint32, packet []
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	receiver := r.bySRTCPSSRC[senderSSRC]
+	if receiver == nil && !r.hasGroupUpdate {
+		receiver = r.byDeviceID[r.fallbackID]
+	}
 	if receiver == nil {
 		r.log.Debug().Uint32("ssrc", senderSSRC).Msg("dropping SRTCP from inactive participant SSRC")
 		return nil, 0, false
@@ -854,6 +863,9 @@ func (r *participantReceiveRegistry) DecodeAudio(packet []byte) (decodedParticip
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	receiver := r.bySSRC[header.Ssrc]
+	if receiver == nil && !r.hasGroupUpdate {
+		receiver = r.byDeviceID[r.fallbackID]
+	}
 	if receiver == nil {
 		r.log.Debug().Uint32("ssrc", header.Ssrc).Msg("dropping audio from inactive participant SSRC")
 		return decodedParticipantAudio{}, false

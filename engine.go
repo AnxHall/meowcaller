@@ -165,6 +165,14 @@ func (e *engine) install() {
 		case *events.CallTransport:
 			e.onRelay(ev.CallID, ev.Data)
 		case *events.CallTerminate:
+			if !ev.From.IsEmpty() && ev.From.Device != 0 {
+				e.c.log.Info().
+					Str("call_id", ev.CallID).
+					Str("from", ev.From.String()).
+					Str("reason", ev.Reason).
+					Msg("ignoring CallTerminate from linked companion device (multi-device)")
+				break
+			}
 			e.onTerminate(ev.CallID, ev.Reason)
 		case *events.CallReject:
 			e.onReject(ev)
