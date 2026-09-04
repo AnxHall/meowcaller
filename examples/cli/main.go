@@ -29,9 +29,9 @@ import (
 	"syscall"
 	"time"
 
-	meowcaller "github.com/purpshell/meowcaller"
-	"github.com/purpshell/meowcaller/audio/malgo"
-	"github.com/purpshell/meowcaller/diag"
+	meowcaller "github.com/AnxHall/meowcaller"
+	"github.com/AnxHall/meowcaller/audio/malgo"
+	"github.com/AnxHall/meowcaller/diag"
 	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"

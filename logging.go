@@ -1,7 +1,7 @@
 package meowcaller
 
 import (
-	"github.com/purpshell/meowcaller/diag"
+	"github.com/AnxHall/meowcaller/diag"
 	"github.com/rs/zerolog"
 )
 

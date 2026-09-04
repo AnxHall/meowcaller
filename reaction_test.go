@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/purpshell/meowcaller/rtp"
+	"github.com/AnxHall/meowcaller/rtp"
 	"go.mau.fi/whatsmeow/types"
 )
 

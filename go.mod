@@ -1,4 +1,4 @@
-module github.com/purpshell/meowcaller
+module github.com/AnxHall/meowcaller
 
 go 1.25.0
 

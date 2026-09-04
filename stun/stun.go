@@ -202,7 +202,7 @@ func BuildWasmStunAllocateRequestWithGroupSubscriptions(
 	integrityKey []byte,
 	log ...zerolog.Logger,
 ) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
 	return BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
 		transactionID,
 		relayToken,
@@ -230,7 +230,7 @@ func BuildWasmStunAllocateRequestWithGroupSubscriptionsAndHBHFEC(
 	integrityKey []byte,
 	log ...zerolog.Logger,
 ) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
 	pids := normalizedParticipantPIDs(participantPIDs)
 	if len(pids) == 0 {
 		return BuildWasmStunAllocateRequestWithStreamSsrcs(
@@ -280,7 +280,7 @@ func buildWasmStunAllocateRequest(transactionID [12]byte, relayToken []byte, end
 }
 
 func normalizedParticipantPIDs(participantPIDs []uint32) []uint32 {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
 	pids := append([]uint32(nil), participantPIDs...)
 	slices.Sort(pids)
 	return slices.Compact(pids)
@@ -291,7 +291,7 @@ func createWasmGroupSenderSubscriptions(
 	appDataSSRC uint32,
 	participantPIDs []uint32,
 ) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
 	var out []byte
 	out = append(out, createWasmSenderSubscription(streamSsrcs[3:6], participantPIDs, true)...)
 	out = append(out, createWasmSenderSubscription(streamSsrcs[6:9], nil, false)...)
@@ -305,7 +305,7 @@ func createWasmSenderSubscription(
 	participantPIDs []uint32,
 	video bool,
 ) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L40-L46
 	var packedSSRCs []byte
 	for _, ssrc := range ssrcs {
 		if ssrc != 0 {
@@ -330,7 +330,7 @@ func createWasmSenderSubscription(
 }
 
 func createWasmGroupReceiverSubscriptions(participantPIDs []uint32) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L44-L46
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L44-L46
 	var out []byte
 	for _, pid := range participantPIDs {
 		var participant []byte
@@ -364,7 +364,7 @@ func CreateWasmStreamDescriptors(ssrcs [9]uint32) []byte {
 }
 
 func createWasmStreamDescriptorsWithHBHFEC(ssrcs [9]uint32, hbhFECSSRCs [2]uint32) []byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/99134bb900df3ee83a69d9a38112e623817597ae/datasheets/group-video-reactions.md#L36-L50
 	var out []byte
 	for i, ssrc := range ssrcs {
 		if ssrc == 0 {

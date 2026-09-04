@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/purpshell/meowcaller/signaling"
+	"github.com/AnxHall/meowcaller/signaling"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"
 )
@@ -17,7 +17,7 @@ func (e *engine) placeGroupCall(
 	targets []string,
 	opts GroupCallOptions,
 ) (*Call, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
 	if err := e.requireRawCallAdapter(); err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (e *engine) placeGroupCall(
 }
 
 func (e *engine) inviteParticipant(ctx context.Context, callID, target string) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
 	if err := e.requireRawCallAdapter(); err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (e *engine) inviteParticipant(ctx context.Context, callID, target string) e
 }
 
 func (e *engine) ringParticipant(ctx context.Context, callID, target string) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
 	if err := e.requireRawCallAdapter(); err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (e *engine) ringParticipant(ctx context.Context, callID, target string) err
 func (e *engine) groupInviteRoster(
 	callID string,
 ) (types.JID, []signaling.GroupCallParticipant, bool, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	m := e.calls[callID]
@@ -219,7 +219,7 @@ func (e *engine) groupInviteRoster(
 }
 
 func signalingParticipantsFromUpdate(update groupCallUpdate) []signaling.GroupCallParticipant {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
 	participants := make([]signaling.GroupCallParticipant, len(update.Participants))
 	for i, participant := range update.Participants {
 		participants[i] = signaling.GroupCallParticipant{
@@ -235,7 +235,7 @@ func signalingParticipantsFromUpdate(update groupCallUpdate) []signaling.GroupCa
 }
 
 func signalingDeviceFromInternal(device groupCallDevice) signaling.GroupCallDevice {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
 	return signaling.GroupCallDevice{
 		JID: device.JID, Platform: device.Platform,
 		PID: device.PID, HasPID: device.HasPID,
@@ -245,7 +245,7 @@ func signalingDeviceFromInternal(device groupCallDevice) signaling.GroupCallDevi
 }
 
 func (e *engine) discoverTargetDevices(ctx context.Context, target types.JID) ([]types.JID, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
 	devices, err := e.c.wa.GetUserDevices(ctx, []types.JID{target})
 	if err != nil {
 		return nil, fmt.Errorf("meowcaller: call invite device discovery: %w", err)
@@ -261,7 +261,7 @@ func (e *engine) resolveGroupTargets(
 	targets []string,
 	self types.JID,
 ) ([]types.JID, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L99
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L99
 	selected := make([]types.JID, 0, len(targets))
 	seen := make(map[types.JID]struct{}, len(targets))
 	for i, target := range targets {
@@ -292,7 +292,7 @@ func (e *engine) discoverGroupParticipants(
 	ctx context.Context,
 	users []types.JID,
 ) ([]signaling.GroupCallParticipant, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
 	devices, err := e.c.wa.GetUserDevices(ctx, users)
 	if err != nil {
 		return nil, fmt.Errorf("meowcaller: group device discovery: %w", err)
@@ -326,7 +326,7 @@ func (e *engine) discoverGroupParticipants(
 }
 
 func parseOptionalGroupJID(raw string) (types.JID, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L96
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L82-L96
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return types.EmptyJID, nil
@@ -335,7 +335,7 @@ func parseOptionalGroupJID(raw string) (types.JID, error) {
 }
 
 func selectedGroupCallState(targets []types.JID) *GroupCallState {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L104
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L97-L104
 	state := &GroupCallState{Participants: make([]GroupCallParticipant, len(targets))}
 	for i, target := range targets {
 		state.Participants[i] = GroupCallParticipant{JID: target, State: "outgoing"}
@@ -508,7 +508,7 @@ func (e *engine) controlWaitingParticipant(
 }
 
 func (e *engine) setHandRaised(callID string, raised bool) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
 	if err := e.requireRawCallAdapter(); err != nil {
 		return err
 	}
@@ -540,7 +540,7 @@ func (e *engine) setHandRaised(callID string, raised bool) error {
 }
 
 func (e *engine) setScreenShare(callID string, active bool, screenShareID *uint32) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
 	if err := e.requireRawCallAdapter(); err != nil {
 		return err
 	}
@@ -583,7 +583,7 @@ func (e *engine) setScreenShare(callID string, active bool, screenShareID *uint3
 }
 
 func (e *engine) callControlCreator(callID string) (types.JID, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/699185f41519da3177c17ea6a10f9d4aa48b6941/datasheets/voip-group-call-state.md#L62-L68
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/699185f41519da3177c17ea6a10f9d4aa48b6941/datasheets/voip-group-call-state.md#L62-L68
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	m := e.calls[callID]
@@ -623,7 +623,7 @@ func (e *engine) startWaitingRoomHeartbeat(callID string) {
 }
 
 func valueOrZero(value *uint32) uint32 {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
 	if value == nil {
 		return 0
 	}

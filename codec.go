@@ -1,6 +1,6 @@
 package meowcaller
 
-import "github.com/purpshell/meowcaller/signaling"
+import "github.com/AnxHall/meowcaller/signaling"
 
 // AudioCodec identifies the wire audio codec negotiated for a call. WhatsApp 1:1
 // audio is carried in RTP payload type 120 regardless of codec; the codec itself

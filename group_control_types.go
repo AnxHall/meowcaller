@@ -3,7 +3,7 @@ package meowcaller
 import (
 	"bytes"
 
-	"github.com/purpshell/meowcaller/signaling"
+	"github.com/AnxHall/meowcaller/signaling"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -109,7 +109,7 @@ type callLinkJoinResult struct {
 }
 
 func groupCallUpdateFromSignaling(update signaling.GroupCallUpdate) groupCallUpdate {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/699185f41519da3177c17ea6a10f9d4aa48b6941/datasheets/voip-group-call-state.md#L22-L68
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/699185f41519da3177c17ea6a10f9d4aa48b6941/datasheets/voip-group-call-state.md#L22-L68
 	out := groupCallUpdate{
 		CallID: update.CallID, CallCreator: update.CallCreator,
 		GroupJID: update.GroupJID, TransactionID: update.TransactionID,
@@ -158,7 +158,7 @@ func groupCallUpdateFromSignaling(update signaling.GroupCallUpdate) groupCallUpd
 }
 
 func cloneByteSlices(values [][]byte) [][]byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L59-L69
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L59-L69
 	out := make([][]byte, len(values))
 	for i, value := range values {
 		out[i] = bytes.Clone(value)

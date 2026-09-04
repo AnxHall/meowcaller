@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/purpshell/meowcaller/srtp"
+	"github.com/AnxHall/meowcaller/srtp"
 	"github.com/rs/zerolog"
 )
 
@@ -224,7 +224,7 @@ func RtpExtensionProfileAndData(data []byte) (uint16, []byte, bool) {
 
 // ParseWhatsappVideoExtension decodes WhatsApp's one-byte-header video extensions.
 func ParseWhatsappVideoExtension(data []byte) (*VideoRtpExtension, bool) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
 	profile, ext, ok := RtpExtensionProfileAndData(data)
 	if !ok || profile != WhatsappRtpExtensionProfile {
 		return nil, false

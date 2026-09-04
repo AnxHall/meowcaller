@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"github.com/gen2brain/malgo"
-	meowcaller "github.com/purpshell/meowcaller"
+	meowcaller "github.com/AnxHall/meowcaller"
 )
 
 const numChannels = 1

@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/purpshell/meowcaller/rtp"
+	"github.com/AnxHall/meowcaller/rtp"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -159,7 +159,7 @@ func handleAppDataReaction(call *Call, receiver *appDataReceiver, payload []byte
 }
 
 func handleAppDataReactionFrom(call *Call, receiver *appDataReceiver, sender types.JID, payload []byte) (bool, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
 	reaction, ok, err := receiver.receive(payload)
 	if err != nil || !ok || call == nil {
 		return false, err

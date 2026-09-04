@@ -6,8 +6,8 @@ import (
 
 	"go.mau.fi/whatsmeow/types"
 
-	"github.com/purpshell/meowcaller/rtp"
-	"github.com/purpshell/meowcaller/srtp"
+	"github.com/AnxHall/meowcaller/rtp"
+	"github.com/AnxHall/meowcaller/srtp"
 )
 
 func peerJID() types.JID { return types.JID{User: "222222222222222", Server: types.HiddenUserServer} }

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/purpshell/meowcaller/signaling"
+	"github.com/AnxHall/meowcaller/signaling"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -129,7 +129,7 @@ func (c *Call) Peer() types.JID {
 
 // GroupState returns the latest group-call roster, if this is a group call.
 func (c *Call) GroupState() (GroupCallState, bool) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.groupState == nil {
@@ -141,7 +141,7 @@ func (c *Call) GroupState() (GroupCallState, bool) {
 // OnGroupState registers a callback for group-call roster state. The latest
 // cached state, including a selected-target seed, is replayed immediately.
 func (c *Call) OnGroupState(fn func(GroupCallState)) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L28-L72
 	c.mu.Lock()
 	c.onGroupState = fn
 	c.groupCallbackGeneration++
@@ -169,7 +169,7 @@ func (c *Call) OnGroupState(fn func(GroupCallState)) {
 }
 
 func (c *Call) setGroupState(state GroupCallState) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
 	stored := cloneGroupCallState(state)
 	c.mu.Lock()
 	if c.groupState != nil &&
@@ -202,7 +202,7 @@ func (c *Call) setGroupState(state GroupCallState) {
 }
 
 func groupCallStateFromUpdate(update groupCallUpdate) GroupCallState {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L68
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L68
 	state := GroupCallState{
 		TransactionID:  update.TransactionID,
 		RekeyRequested: update.RekeyRequested,
@@ -227,7 +227,7 @@ func groupCallStateFromUpdate(update groupCallUpdate) GroupCallState {
 }
 
 func cloneGroupCallState(state GroupCallState) GroupCallState {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a95ab63017f996313ca7e4cfbbfb96fead1717a7/datasheets/api-group-call-state.md#L58-L72
 	clone := state
 	clone.Participants = make([]GroupCallParticipant, len(state.Participants))
 	for participantIndex, participant := range state.Participants {
@@ -312,13 +312,13 @@ func (c *Call) SetVideoOrientation(orientation int) error {
 
 // AddParticipant invites one person to this established call.
 func (c *Call) AddParticipant(ctx context.Context, target string) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
 	return c.eng.inviteParticipant(ctx, c.id, target)
 }
 
 // AddParticipants invites each person independently and returns index-aligned results.
 func (c *Call) AddParticipants(ctx context.Context, targets ...string) []error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
 	results := make([]error, len(targets))
 	for i, target := range targets {
 		results[i] = c.AddParticipant(ctx, target)
@@ -328,7 +328,7 @@ func (c *Call) AddParticipants(ctx context.Context, targets ...string) []error {
 
 // RingParticipant rings one non-connected participant already present in this call's roster.
 func (c *Call) RingParticipant(ctx context.Context, target string) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/160912971e6bc2a4aa79ac3aafcf08360075e3fc/datasheets/api-group-participant-invite.md#L23-L100
 	return c.eng.ringParticipant(ctx, c.id, target)
 }
 
@@ -390,7 +390,7 @@ func (c *Call) WaitingRoomState() (WaitingRoomState, bool) {
 
 // OnWaitingRoomState registers a waiting-room listener and replays current state.
 func (c *Call) OnWaitingRoomState(fn func(WaitingRoomState)) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
 	c.mu.Lock()
 	c.onWaitingRoomState = fn
 	c.waitingCallbackGeneration++
@@ -433,7 +433,7 @@ func (c *Call) DenyParticipant(ctx context.Context, user string) error {
 }
 
 func (c *Call) setWaitingRoomState(state WaitingRoomState) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
 	stored := cloneWaitingRoomState(state)
 	c.mu.Lock()
 	if c.waitingRoomState != nil &&
@@ -460,7 +460,7 @@ func (c *Call) setWaitingRoomState(state WaitingRoomState) {
 }
 
 func (c *Call) setWaitingRoomAdmission() {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
 	c.mu.Lock()
 	if c.waitingRoomState == nil || !c.waitingRoomState.InWaitingRoom {
 		c.mu.Unlock()
@@ -485,7 +485,7 @@ func (c *Call) setWaitingRoomAdmission() {
 }
 
 func (c *Call) enqueueNotification(notification func()) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/call-links-waiting-room.md#L62-L94
 	if notification == nil {
 		return
 	}
@@ -510,7 +510,7 @@ func (c *Call) enqueueNotification(notification func()) {
 }
 
 func (c *Call) dispatchHandRaise(state HandRaiseState) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
 	c.mu.Lock()
 	if c.handRaises == nil {
 		c.handRaises = make(map[types.JID]bool)
@@ -622,14 +622,14 @@ func (c *Call) OnVideoKeyframeRequest(fn func()) {
 // OnParticipantVideoFrame registers a callback for authenticated H.264 access
 // units with their group participant identity. It is additive to ReceiveVideo.
 func (c *Call) OnParticipantVideoFrame(fn func(ParticipantVideoFrame)) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
 	c.mu.Lock()
 	c.onParticipantVideoFrame = fn
 	c.mu.Unlock()
 }
 
 func (c *Call) dispatchParticipantVideoFrame(frame ParticipantVideoFrame) bool {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L32-L54
 	c.mu.Lock()
 	fn := c.onParticipantVideoFrame
 	c.mu.Unlock()

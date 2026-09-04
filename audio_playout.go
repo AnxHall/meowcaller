@@ -80,7 +80,7 @@ func (p *audioPlayoutBuffer) Flush(sink AudioSink) error {
 }
 
 func (p *audioPlayoutBuffer) Drain(sink AudioSink) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L20-L27
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L20-L27
 	frames := append([][]float32(nil), p.prefill...)
 	if p.pending != nil {
 		frames = append(frames, p.pending.pcm)

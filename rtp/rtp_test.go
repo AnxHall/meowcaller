@@ -161,7 +161,7 @@ func TestVideoRtpExtensionDisplayOrientationUsesCVOReceiverRotation(t *testing.T
 }
 
 func TestParseCapturedVideoOrientationWithoutTransportSequence(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/2af70f9b5f88de1ab3b9ba5e9ecda8687810f498/datasheets/group-video-reactions.md#L109-L117
 	packet := mustHex(t, "906100010003e77e0ba3152bdebe0002300b510000610002")
 	header, ok := ParseRtpHeader(packet)
 	if !ok {

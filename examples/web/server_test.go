@@ -129,7 +129,7 @@ func TestVideoBridgeControlDispatchesCallLinkAndParticipantStateFields(t *testin
 }
 
 func TestVideoBridgeControlDispatchesParticipantTargets(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 	vb := &videoBridge{}
 	var got vbControl
 	vb.OnControl(func(command vbControl) error {
@@ -153,7 +153,7 @@ func TestVideoBridgeControlDispatchesParticipantTargets(t *testing.T) {
 }
 
 func TestVideoBridgeControlDispatchesParticipantRing(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 	vb := &videoBridge{}
 	var got vbControl
 	vb.OnControl(func(command vbControl) error {
@@ -309,7 +309,7 @@ func TestVideoBridgePageClampsCameraToAVCLevel31(t *testing.T) {
 }
 
 func TestVideoBridgeParticipantInviteEventDoesNotReplaceReplayState(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/302ff288df89adef44cda74f74da6285b6f13aa2/datasheets/web-group-participant-invite.md#L23-L94
 	vb := &videoBridge{}
 	vb.PublishState(webCallState{Event: "ready", CallID: "CID"})
 	replay := string(vb.state)

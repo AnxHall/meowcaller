@@ -1,10 +1,10 @@
-module github.com/purpshell/meowcaller/examples/cli
+module github.com/AnxHall/meowcaller/examples/cli
 
 go 1.25.0
 
 require (
-	github.com/purpshell/meowcaller v0.0.0
-	github.com/purpshell/meowcaller/audio/malgo v0.0.0
+	github.com/AnxHall/meowcaller v0.0.0
+	github.com/AnxHall/meowcaller/audio/malgo v0.0.0
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.mau.fi/whatsmeow v0.0.0-20260609091626-4e622162b959
@@ -47,6 +47,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/purpshell/meowcaller => ../../
+replace github.com/AnxHall/meowcaller => ../../
 
-replace github.com/purpshell/meowcaller/audio/malgo => ../../audio/malgo
+replace github.com/AnxHall/meowcaller/audio/malgo => ../../audio/malgo

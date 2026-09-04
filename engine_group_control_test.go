@@ -4,14 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/purpshell/meowcaller/signaling"
+	"github.com/AnxHall/meowcaller/signaling"
 	"github.com/rs/zerolog"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"
 )
 
 func testGroupEngine(callID string) (*engine, *Call, types.JID) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
 	creator := types.NewJID("100", types.HiddenUserServer)
 	client := &Client{log: zerolog.Nop()}
 	eng := &engine{c: client, calls: make(map[string]*engineCall)}
@@ -28,7 +28,7 @@ func testGroupEngine(callID string) (*engine, *Call, types.JID) {
 }
 
 func TestGroupAnswerSendsImmediateCallScopedAccept(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
 	eng, call, creator := testGroupEngine("GROUP")
 	var sent waBinary.Node
 	eng.sendCallNode = func(_ context.Context, node waBinary.Node) error {
@@ -59,7 +59,7 @@ func TestGroupAnswerSendsImmediateCallScopedAccept(t *testing.T) {
 }
 
 func TestInitialGroupAckPublishesAuthoritativeRoster(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L27-L33
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L27-L33
 	eng, call, creator := testGroupEngine("GROUP")
 	eng.calls["GROUP"].direction = CallDirectionOutgoing
 	participant := types.NewJID("200", types.HiddenUserServer)
@@ -105,7 +105,7 @@ func TestInitialGroupAckPublishesAuthoritativeRoster(t *testing.T) {
 }
 
 func TestUnknownCallControlsUpdateHandScreenAndWaitingRoom(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
 	eng, call, creator := testGroupEngine("GROUP")
 	participant := types.NewJID("200", types.HiddenUserServer)
 	call.setGroupState(GroupCallState{
@@ -177,7 +177,7 @@ func TestUnknownCallControlsUpdateHandScreenAndWaitingRoom(t *testing.T) {
 }
 
 func TestRawGroupControlSendsTypedAckWithoutUpstreamDoubleHandling(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
 	eng, call, creator := testGroupEngine("GROUP")
 	participant := types.NewJID("200", types.HiddenUserServer)
 	var sent waBinary.Node
@@ -231,7 +231,7 @@ func TestLateGroupUpdateDoesNotRecreateEndedCall(t *testing.T) {
 }
 
 func TestDirectCallInviteRosterUsesNegotiatedActiveDevices(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
 	eng, call, creator := testGroupEngine("DIRECT")
 	self := types.NewADJID("100", 0, 14)
 	peer := types.NewADJID("200", 0, 3)
@@ -270,7 +270,7 @@ func TestDirectCallInviteRosterUsesNegotiatedActiveDevices(t *testing.T) {
 }
 
 func TestInviteDeviceCapabilityCopiesNegotiatedValue(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/1ebd064663ac336ff3d1fc65d9baa974148fe73e/datasheets/voip-group-participant-invite.md#L36-L72
 	device := types.NewADJID("200", 0, 3)
 	raw := []byte{1, 5, 0xf7, 9}
 	node := &waBinary.Node{

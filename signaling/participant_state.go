@@ -28,7 +28,7 @@ type ScreenShare struct {
 
 // BuildRaiseHand builds one persistent participant hand-state transition.
 func BuildRaiseHand(callID string, to, creator types.JID, requestID string, raised bool) waBinary.Node {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
 	state := "0"
 	if raised {
 		state = "1"
@@ -44,7 +44,7 @@ func BuildRaiseHand(callID string, to, creator types.JID, requestID string, rais
 
 // ParseRaiseHand parses one raise/lower action.
 func ParseRaiseHand(node *waBinary.Node) (bool, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
 	if node == nil || node.Tag != "user_action" {
 		return false, fmt.Errorf("signaling: parse raise hand: unexpected node")
 	}
@@ -75,7 +75,7 @@ func BuildScreenShare(
 	state ScreenShareState,
 	screenShareID *uint32,
 ) waBinary.Node {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
 	attrs := waBinary.Attrs{
 		"call-id": callID, "call-creator": creator,
 		"screenshare_state": strconv.Itoa(int(state)), "version": "2",
@@ -88,7 +88,7 @@ func BuildScreenShare(
 
 // ParseScreenShare parses one versioned screen-share transition.
 func ParseScreenShare(node *waBinary.Node) (*ScreenShare, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
 	if node == nil || node.Tag != "screen_share" {
 		return nil, fmt.Errorf("signaling: parse screen share: unexpected node")
 	}
@@ -122,7 +122,7 @@ func ParseScreenShare(node *waBinary.Node) (*ScreenShare, error) {
 
 // BuildCallControlAck builds the typed ACK required by a call-control action.
 func BuildCallControlAck(original *waBinary.Node, childTag string) (waBinary.Node, bool) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
 	if original == nil || childTag == "" {
 		return waBinary.Node{}, false
 	}

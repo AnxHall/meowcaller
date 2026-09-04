@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	meowcaller "github.com/purpshell/meowcaller"
-	"github.com/purpshell/meowcaller/diag"
+	meowcaller "github.com/AnxHall/meowcaller"
+	"github.com/AnxHall/meowcaller/diag"
 	"github.com/rs/zerolog"
 )
 

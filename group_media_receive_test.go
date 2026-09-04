@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/purpshell/meowcaller/rtp"
-	"github.com/purpshell/meowcaller/srtp"
+	"github.com/AnxHall/meowcaller/rtp"
+	"github.com/AnxHall/meowcaller/srtp"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -1218,7 +1218,7 @@ func TestParticipantReceiveRegistryRejectedUpdateIsAtomic(t *testing.T) {
 }
 
 func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L100-L141
 	callKey := iota32()
 	self := mediaTestJID("111111111111111", 14)
 	peer := mediaTestJID("222222222222222", 0)
@@ -1332,7 +1332,7 @@ func TestParticipantReceiveRegistryExternalFailureIsAtomicAndRetryable(t *testin
 }
 
 func TestParticipantReceiveRegistryCarriesEpochToLateAttachedSender(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/cbe1446dabb5842362b1a4362d4100ec15d8254f/datasheets/group-media-key-epoch.md#L104-L136
 	callKey := iota32()
 	rawKey := bytes.Repeat([]byte{0x5d}, 32)
 	self := mediaTestJID("111111111111111", 14)

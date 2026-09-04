@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/purpshell/meowcaller/diag"
-	"github.com/purpshell/meowcaller/rtp"
+	"github.com/AnxHall/meowcaller/diag"
+	"github.com/AnxHall/meowcaller/rtp"
 )
 
 func TestVideoRtpDurationSamples(t *testing.T) {

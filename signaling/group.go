@@ -146,7 +146,7 @@ func BuildActiveGroupPreaccept(
 	requestID string,
 	video bool,
 ) (waBinary.Node, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/33854919e64bdd4b053054ac9764d8fc63027b57/datasheets/voip-group-invite-accept.md#L28-L40
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/33854919e64bdd4b053054ac9764d8fc63027b57/datasheets/voip-group-invite-accept.md#L28-L40
 	if callID == "" || callCreator.IsEmpty() || requestID == "" {
 		return waBinary.Node{}, fmt.Errorf("signaling: build active group preaccept: incomplete identity")
 	}
@@ -162,7 +162,7 @@ func BuildActiveGroupPreaccept(
 
 // BuildActiveGroupAccept builds the immediate acceptance of an active-call invite.
 func BuildActiveGroupAccept(callID string, callCreator types.JID, requestID string) (waBinary.Node, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/676ebee3eca513b5348fab36cae5c560cc791238/datasheets/voip-group-invite-accept.md#L26-L45
 	if callID == "" || callCreator.IsEmpty() || requestID == "" {
 		return waBinary.Node{}, fmt.Errorf("signaling: build active group accept: incomplete identity")
 	}
@@ -178,7 +178,7 @@ func BuildActiveGroupAccept(callID string, callCreator types.JID, requestID stri
 
 // BuildInitialGroupOffer builds an ad-hoc or group-bound initial group offer.
 func BuildInitialGroupOffer(params InitialGroupOfferParams) (waBinary.Node, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
 	if params.CallID == "" {
 		return waBinary.Node{}, fmt.Errorf("signaling: build initial group offer: call ID is required")
 	}
@@ -219,7 +219,7 @@ type GroupInviteOfferParams struct {
 
 // BuildGroupInviteOffer builds a singular active-call participant offer.
 func BuildGroupInviteOffer(params GroupInviteOfferParams) (waBinary.Node, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/25eda415afb0f926112ca375c5892b95b4bd6f60/datasheets/voip-group-invite-offer.md#L81-L106
 	if params.CallID == "" || params.To.IsEmpty() || params.CallCreator.IsEmpty() {
 		return waBinary.Node{}, fmt.Errorf("signaling: build group invite offer: call identity and target are required")
 	}
@@ -243,7 +243,7 @@ func BuildGroupInviteOffer(params GroupInviteOfferParams) (waBinary.Node, error)
 }
 
 func buildGroupUsers(participants []GroupCallParticipant, creator types.JID, video bool) ([]waBinary.Node, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L63-L101
 	users := make([]waBinary.Node, len(participants))
 	for participantIndex, participant := range participants {
 		if participant.JID.IsEmpty() || len(participant.Devices) == 0 {
@@ -279,7 +279,7 @@ func buildGroupUsers(participants []GroupCallParticipant, creator types.JID, vid
 
 // ParseGroupInviteSnapshot parses the group snapshot embedded in an active-call offer.
 func ParseGroupInviteSnapshot(offer *waBinary.Node) (*GroupCallUpdate, bool, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/33854919e64bdd4b053054ac9764d8fc63027b57/datasheets/voip-group-invite-accept.md#L28-L40
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/33854919e64bdd4b053054ac9764d8fc63027b57/datasheets/voip-group-invite-accept.md#L28-L40
 	if offer == nil || offer.Tag != "offer" {
 		return nil, false, fmt.Errorf("signaling: parse group invite snapshot: unexpected offer")
 	}
@@ -308,7 +308,7 @@ func ParseGroupInviteSnapshot(offer *waBinary.Node) (*GroupCallUpdate, bool, err
 
 // ParseInitialGroupCallAck parses a group snapshot carried by an offer or link-join ACK.
 func ParseInitialGroupCallAck(node *waBinary.Node) (*GroupCallUpdate, bool, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L27-L33
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/7cb6045001dafd2514f53e85cd8c3e419c13adbe/datasheets/voip-initial-group-call.md#L27-L33
 	if node == nil || node.Tag != "ack" {
 		return nil, false, fmt.Errorf("signaling: parse initial group ACK: unexpected envelope")
 	}
@@ -336,7 +336,7 @@ func ParseInitialGroupCallAck(node *waBinary.Node) (*GroupCallUpdate, bool, erro
 
 // ParseGroupUpdate parses a group_update action.
 func ParseGroupUpdate(node *waBinary.Node) (*GroupCallUpdate, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	if node == nil || node.Tag != "group_update" {
 		return nil, fmt.Errorf("signaling: parse group update: unexpected node")
 	}
@@ -366,7 +366,7 @@ func ParseGroupUpdate(node *waBinary.Node) (*GroupCallUpdate, error) {
 }
 
 func parseGroupInfo(node *waBinary.Node, update *GroupCallUpdate) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	attrs := node.AttrGetter()
 	update.GroupJID = attrs.OptionalJIDOrEmpty("group-jid")
 	update.Media = attrs.String("media")
@@ -396,7 +396,7 @@ func parseGroupInfo(node *waBinary.Node, update *GroupCallUpdate) error {
 }
 
 func parseGroupParticipant(node *waBinary.Node) (GroupCallParticipant, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	attrs := node.AttrGetter()
 	participant := GroupCallParticipant{
 		JID: attrs.JID("jid"), PN: attrs.OptionalJIDOrEmpty("user_pn"),
@@ -419,7 +419,7 @@ func parseGroupParticipant(node *waBinary.Node) (GroupCallParticipant, error) {
 }
 
 func parseGroupDevice(node *waBinary.Node) (GroupCallDevice, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	attrs := node.AttrGetter()
 	device := GroupCallDevice{JID: attrs.JID("jid"), Platform: attrs.OptionalString("platform")}
 	var err error
@@ -441,7 +441,7 @@ func parseGroupDevice(node *waBinary.Node) (GroupCallDevice, error) {
 }
 
 func parseGroupRelay(node *waBinary.Node) (*GroupCallRelay, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	attrs := node.AttrGetter()
 	relay := &GroupCallRelay{
 		UUID: attrs.String("uuid"), ParticipantUUID: attrs.String("participant_uuid"),
@@ -479,7 +479,7 @@ func parseGroupRelay(node *waBinary.Node) (*GroupCallRelay, error) {
 }
 
 func parseGroupRelayEndpoint(node *waBinary.Node) (GroupCallRelayEndpoint, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	attrs := node.AttrGetter()
 	endpoint := GroupCallRelayEndpoint{
 		RelayName: attrs.String("relay_name"), DomainName: attrs.OptionalString("domain_name"),
@@ -520,7 +520,7 @@ type GroupEncRekeyParams struct {
 
 // BuildGroupEncRekey builds one keygen-v2 group epoch stanza.
 func BuildGroupEncRekey(params GroupEncRekeyParams) (waBinary.Node, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L20-L72
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L20-L72
 	if params.CallID == "" || params.To.IsEmpty() || params.CallCreator.IsEmpty() ||
 		params.TransactionID == 0 || params.RequestID == "" {
 		return waBinary.Node{}, fmt.Errorf("signaling: build group rekey: incomplete identity")
@@ -547,7 +547,7 @@ func BuildGroupEncRekey(params GroupEncRekeyParams) (waBinary.Node, error) {
 
 // ParseGroupCallEncRekey parses an enc_rekey action.
 func ParseGroupCallEncRekey(node *waBinary.Node) (*GroupCallEncRekey, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/747c6a1b8a0370358ef18bbaa5e029b960c2f836/datasheets/voip-group-enc-rekey-ingest.md#L39-L65
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/747c6a1b8a0370358ef18bbaa5e029b960c2f836/datasheets/voip-group-enc-rekey-ingest.md#L39-L65
 	if node == nil || node.Tag != "enc_rekey" {
 		return nil, fmt.Errorf("signaling: parse group rekey: unexpected node")
 	}
@@ -582,7 +582,7 @@ func ParseGroupCallEncRekey(node *waBinary.Node) (*GroupCallEncRekey, error) {
 }
 
 func optionalUint32Attr(attrs *waBinary.AttrUtility, key string) (uint32, bool, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	raw, ok := attrs.GetString(key, false)
 	if !ok {
 		return 0, false, nil
@@ -595,7 +595,7 @@ func optionalUint32Attr(attrs *waBinary.AttrUtility, key string) (uint32, bool, 
 }
 
 func requiredUint32Attr(attrs *waBinary.AttrUtility, key string) (uint32, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	value, ok, err := optionalUint32Attr(attrs, key)
 	if err != nil {
 		return 0, err
@@ -619,7 +619,7 @@ func nodeBytes(node *waBinary.Node) []byte {
 }
 
 func parseIndexedTokens(node *waBinary.Node, tag string) [][]byte {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/68f039c1d44407788d543f2a510afd550c25591c/datasheets/voip-group-update-ingest.md#L20-L78
 	var tokens [][]byte
 	for _, child := range node.GetChildren() {
 		if child.Tag != tag {

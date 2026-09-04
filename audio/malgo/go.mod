@@ -1,10 +1,10 @@
-module github.com/purpshell/meowcaller/audio/malgo
+module github.com/AnxHall/meowcaller/audio/malgo
 
 go 1.25.0
 
 require (
 	github.com/gen2brain/malgo v0.11.23
-	github.com/purpshell/meowcaller v0.0.0
+	github.com/AnxHall/meowcaller v0.0.0
 )
 
 require (
@@ -36,4 +36,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/purpshell/meowcaller => ../../
+replace github.com/AnxHall/meowcaller => ../../

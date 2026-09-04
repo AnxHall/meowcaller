@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/purpshell/meowcaller/signaling"
+	"github.com/AnxHall/meowcaller/signaling"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"

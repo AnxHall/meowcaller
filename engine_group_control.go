@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/purpshell/meowcaller/signaling"
+	"github.com/AnxHall/meowcaller/signaling"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -15,7 +15,7 @@ import (
 )
 
 func (e *engine) onUnknownCallEvent(node *waBinary.Node) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/48c2391ce9f7dcc2b3f223f72f1b5f0c627ad943/datasheets/voip-group-update-ingest.md#L105-L148
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/48c2391ce9f7dcc2b3f223f72f1b5f0c627ad943/datasheets/voip-group-update-ingest.md#L105-L148
 	envelope, err := signaling.ParseCallControlEnvelope(node)
 	if err != nil {
 		return
@@ -95,7 +95,7 @@ func (e *engine) applyWaitingRoomUpdate(room signaling.WaitingRoom) {
 }
 
 func (e *engine) dispatchRemoteHandState(envelope *signaling.CallControlEnvelope, raised bool) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L43
 	if envelope == nil {
 		return
 	}
@@ -116,7 +116,7 @@ func (e *engine) dispatchRemoteScreenShare(
 	envelope *signaling.CallControlEnvelope,
 	screenShare signaling.ScreenShare,
 ) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L44-L56
 	if envelope == nil {
 		return
 	}
@@ -139,7 +139,7 @@ func (e *engine) dispatchRemoteScreenShare(
 }
 
 func callControlParticipant(envelope *signaling.CallControlEnvelope) types.JID {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/36d54857c74e45ccb08f6444a32d2afa13f20be9/datasheets/group-video-reactions.md#L31-L56
 	if envelope == nil {
 		return types.EmptyJID
 	}
@@ -150,7 +150,7 @@ func callControlParticipant(envelope *signaling.CallControlEnvelope) types.JID {
 }
 
 func (e *engine) applyGroupUpdate(update groupCallUpdate) bool {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L83-L100
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/65b1dbf33f365db7392e438c3e3bf3651decb6cf/datasheets/group-media-receive.md#L83-L100
 	if update.CallID == "" {
 		return false
 	}
@@ -227,7 +227,7 @@ func (e *engine) applyGroupUpdate(update groupCallUpdate) bool {
 }
 
 func (e *engine) ingestGroupEpoch(ctx context.Context, envelope *signaling.CallControlEnvelope) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/747c6a1b8a0370358ef18bbaa5e029b960c2f836/datasheets/voip-group-enc-rekey-ingest.md#L39-L123
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/747c6a1b8a0370358ef18bbaa5e029b960c2f836/datasheets/voip-group-enc-rekey-ingest.md#L39-L123
 	if envelope == nil {
 		return errors.New("meowcaller: group rekey envelope is nil")
 	}
@@ -263,7 +263,7 @@ func (e *engine) ingestGroupEpoch(ctx context.Context, envelope *signaling.CallC
 }
 
 func (e *engine) installGroupEpoch(callID string, transactionID uint32, rawKey []byte) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L85-L143
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L85-L143
 	if callID == "" || transactionID == 0 || len(rawKey) != 32 {
 		return errors.New("meowcaller: invalid group key epoch")
 	}
@@ -323,7 +323,7 @@ func (e *engine) installGroupEpoch(callID string, transactionID uint32, rawKey [
 }
 
 func (e *engine) distributeRequestedGroupEpoch(ctx context.Context, update groupCallUpdate) error {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L99-L162
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L99-L162
 	self := e.c.wa.Store.GetLID()
 	recipients := groupRekeyRecipients(update, self)
 	if len(recipients) == 0 {
@@ -370,7 +370,7 @@ func (e *engine) distributeRequestedGroupEpoch(ctx context.Context, update group
 }
 
 func groupRekeyRecipients(update groupCallUpdate, self types.JID) []types.JID {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L145-L162
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/d9df3eb9d96ea5260ffcd4036b6669499a1c1bc2/datasheets/voip-group-key-epoch-fanout.md#L145-L162
 	seen := make(map[types.JID]struct{})
 	var recipients []types.JID
 	for _, participant := range update.Participants {
@@ -392,7 +392,7 @@ func groupRekeyRecipients(update groupCallUpdate, self types.JID) []types.JID {
 }
 
 func cloneGroupCallUpdate(update groupCallUpdate) groupCallUpdate {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L59-L69
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/a9e4195fb846a730f30ce98c26a7d1c03993fdb2/datasheets/group-media-relay-refresh.md#L59-L69
 	out := update
 	out.Participants = make([]groupCallParticipant, len(update.Participants))
 	for i, participant := range update.Participants {

@@ -7,7 +7,7 @@ import (
 )
 
 func TestUnwrapGroupForwardingPacketCaptureVectors(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L51-L70
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L51-L70
 	vectors := []struct {
 		name      string
 		packetHex string
@@ -57,7 +57,7 @@ func TestUnwrapGroupForwardingPacketCaptureVectors(t *testing.T) {
 }
 
 func TestUnwrapGroupForwardingPacketPassThrough(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L93-L100
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L93-L100
 	packet := []byte{0x90, 0xe1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2}
 	got, wrapped, valid := UnwrapGroupForwardingPacket(packet)
 	if wrapped {
@@ -72,7 +72,7 @@ func TestUnwrapGroupForwardingPacketPassThrough(t *testing.T) {
 }
 
 func TestUnwrapGroupForwardingPacketRejectsMalformed(t *testing.T) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L93-L100
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/4db38f0ea0645ac8449a105ffd9aa30c6e269689/diag/analysis/group-call-84987F9DE404B79ED999E6F254B0150A.md#L93-L100
 	cases := [][]byte{
 		{0x09},
 		{0x09, 0xff},

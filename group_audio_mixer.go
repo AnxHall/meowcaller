@@ -28,7 +28,7 @@ type participantAudioSinkFramer struct {
 }
 
 func newParticipantAudioMixer() *participantAudioMixer {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L29-L38
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L29-L38
 	// NOT VALIDATED: validated once live group-call playout includes every connected remote participant.
 	return &participantAudioMixer{
 		streams: make(map[string]*participantAudioMixQueue),
@@ -37,12 +37,12 @@ func newParticipantAudioMixer() *participantAudioMixer {
 }
 
 func shouldStartParticipantMixing(activeParticipantIDs []string) bool {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L24-L35
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/ca4ba64503efeb86c337ee37cb00c4da540c632c/datasheets/group-media-receive.md#L24-L35
 	return len(activeParticipantIDs) > 1
 }
 
 func (m *participantAudioMixer) Add(participantID string, pcm []float32) bool {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L31-L37
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L31-L37
 	// NOT VALIDATED: validated once live group-call playout includes every connected remote participant.
 	if participantID == "" || len(pcm) == 0 {
 		return false
@@ -72,7 +72,7 @@ func (m *participantAudioMixer) Add(participantID string, pcm []float32) bool {
 }
 
 func (m *participantAudioMixer) Retain(participantIDs []string) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L35-L37
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L35-L37
 	// NOT VALIDATED: validated once a departed participant stops contributing to live playout.
 	allowed := make(map[string]struct{}, len(participantIDs))
 	for _, participantID := range participantIDs {
@@ -92,7 +92,7 @@ func (m *participantAudioMixer) Retain(participantIDs []string) {
 }
 
 func (m *participantAudioMixer) MixChunk() ([]float32, bool) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L31-L38
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L31-L38
 	// NOT VALIDATED: validated once two live remote speakers are simultaneously audible without extending playout duration.
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -140,7 +140,7 @@ func (m *participantAudioMixer) MixChunk() ([]float32, bool) {
 }
 
 func (f *participantAudioSinkFramer) Push(chunk []float32) ([]float32, bool) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L20-L26
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/fabad4acce2147da4e40c1e8c6a1643053ae8c59/datasheets/group-audio-mixer.md#L20-L26
 	// NOT VALIDATED: validated once live mixed playout reaches a public AudioSink in 960-sample frames.
 	f.pending = append(f.pending, chunk...)
 	if len(f.pending) < FrameSamples {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/purpshell/meowcaller/diag"
+	"github.com/AnxHall/meowcaller/diag"
 	"github.com/rs/zerolog"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
@@ -78,7 +78,7 @@ func (c *Client) CallWithOptions(ctx context.Context, target string, opts CallOp
 
 // GroupCall places an audio group call to at least two remote targets.
 func (c *Client) GroupCall(ctx context.Context, targets ...string) (*Call, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L61-L107
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L61-L107
 	return c.GroupCallWithOptions(ctx, targets, GroupCallOptions{})
 }
 
@@ -88,14 +88,14 @@ func (c *Client) GroupCallWithOptions(
 	targets []string,
 	opts GroupCallOptions,
 ) (*Call, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L61-L107
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/ceaa2156015e8f24e09328fb7a9c89203295efff/datasheets/api-initial-group-call.md#L61-L107
 	return c.eng.placeGroupCall(ctx, targets, opts)
 }
 
 // GroupCallByID places an audio call to every remote member of a WhatsApp group.
 // The groupID may be a bare numeric ID or a canonical @g.us JID.
 func (c *Client) GroupCallByID(ctx context.Context, groupID string) (*Call, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L84-L115
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L84-L115
 	return c.GroupCallByIDWithOptions(ctx, groupID, GroupCallOptions{})
 }
 
@@ -106,7 +106,7 @@ func (c *Client) GroupCallByIDWithOptions(
 	groupID string,
 	opts GroupCallOptions,
 ) (*Call, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L84-L115
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L84-L115
 	groupJID, err := parseGroupCallID(groupID)
 	if err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func (c *Client) GroupCallByIDWithOptions(
 }
 
 func parseGroupCallID(raw string) (types.JID, error) {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L106-L115
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L106-L115
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return types.EmptyJID, errors.New("meowcaller: group ID is required")
@@ -152,7 +152,7 @@ func parseGroupCallID(raw string) (types.JID, error) {
 }
 
 func (c *Client) groupSelfJIDs() []types.JID {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L108-L115
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L108-L115
 	if c.ownGroupJIDs == nil {
 		return nil
 	}
@@ -163,7 +163,7 @@ func remoteGroupCallTargets(
 	participants []types.GroupParticipant,
 	self []types.JID,
 ) []string {
-	// Source of truth: https://github.com/purpshell/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L108-L115
+	// Source of truth: https://github.com/AnxHall/meowcaller/blob/c52f804a98140e46516e91a9d2495f174f894a2a/datasheets/api-initial-group-call.md#L108-L115
 	seen := make(map[types.JID]struct{}, len(participants)*3+len(self))
 	for _, jid := range self {
 		if jid = jid.ToNonAD(); !jid.IsEmpty() {
