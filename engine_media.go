@@ -805,6 +805,9 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 
 	buf := make([]byte, 1500)
 	var rtpIn, rtpSeen, unprotectFail, rtpInspect, vidIn, appDataIn, appDataUnprotectFail, videoUnprotectFail, videoFrameIn, videoSinkMissing, rtcpIn, rtcpAuthFail, groupForwardingInvalid uint64
+	var rxDedupRing [512]uint64
+	var rxDedupIdx int
+	var rxDedupFilled bool
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -1078,6 +1081,30 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 			})
 			continue
 		}
+
+		// Deduplicação de áudio RX multi-relay: descarta cópias exatas (mesmo SSRC e seq)
+		pktKey := (uint64(vh.Ssrc) << 16) | uint64(vh.SequenceNumber)
+		duplicate := false
+		limit := rxDedupIdx
+		if rxDedupFilled {
+			limit = len(rxDedupRing)
+		}
+		for i := 0; i < limit; i++ {
+			if rxDedupRing[i] == pktKey {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		rxDedupRing[rxDedupIdx] = pktKey
+		rxDedupIdx++
+		if rxDedupIdx >= len(rxDedupRing) {
+			rxDedupIdx = 0
+			rxDedupFilled = true
+		}
+
 		audio, ok := audioReceivers.DecodeAudio(pkt)
 		if !ok {
 			if unprotectFail++; unprotectFail == 1 {
