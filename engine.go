@@ -504,6 +504,19 @@ func (e *engine) placeCall(ctx context.Context, target string, opts CallOptions)
 	})
 
 	if err := cli.DangerousInternals().SendNode(ctx, offer); err != nil {
+		e.c.log.Warn().Err(err).Str("call_id", callID).Msg("send offer failed; terminating abandoned call offer to avoid ghost ring")
+		e.finishCall(callID, "origination_failed")
+		termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer termCancel()
+		reason := "origination_failed"
+		term := signaling.BuildTerminate(&signaling.TerminateParams{
+			CallID:      callID,
+			To:          peerLID,
+			CallCreator: self,
+			Reason:      &reason,
+		})
+		term.Attrs["id"] = e.nextCallNodeID()
+		_ = e.transmitCallNode(termCtx, term)
 		return nil, fmt.Errorf("send offer: %w", err)
 	}
 	e.c.log.Info().Str("call_id", callID).Bool("video", opts.Video).Msg("offer sent; media starts when the relay endpoint arrives")
@@ -1342,7 +1355,9 @@ func (e *engine) finishCall(callID, reason string) {
 	}
 	call.setPhase(CallPhaseEnded)
 	if fn := call.onEndFn(); fn != nil {
-		fn(reason)
+		call.enqueueNotification(func() {
+			fn(reason)
+		})
 	}
 }
 

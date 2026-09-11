@@ -719,7 +719,7 @@ func (c *Call) OnPeerAccept(fn func()) {
 	}
 	c.mu.Unlock()
 	if shouldNotify {
-		fn()
+		c.enqueueNotification(fn)
 	}
 }
 
@@ -733,7 +733,7 @@ func (c *Call) markPeerAccepted() {
 	}
 	c.mu.Unlock()
 	if shouldNotify {
-		fn()
+		c.enqueueNotification(fn)
 	}
 }
 
@@ -763,6 +763,8 @@ func (c *Call) setPhase(next CallPhase) {
 	fn := c.onState
 	c.mu.Unlock()
 	if fn != nil {
-		fn(next)
+		c.enqueueNotification(func() {
+			fn(next)
+		})
 	}
 }
