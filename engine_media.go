@@ -602,33 +602,6 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 	// Receive: DataChannel → classify. RTP → unprotect → decode → sink. A non-RTP STUN
 	// binding request gets a binding-success reply (ICE consent freshness, RFC 7675);
 	// without it the relay drops the binding and the peer's call fails.
-	// Video receive uses participant-scoped WARP pipelines keyed on each video SSRC.
-	//
-	// NOT VALIDATED: no live video-RTP vector; assumes video shares the audio E2E keys and
-	// WARP framing, and that the relay bridges the video SSRC.
-	rekeyPeer := func(answeringPeer string) error {
-		return audioReceivers.RekeyFallback(answeringPeer)
-	}
-	e.mu.Lock()
-	currentPeer := peerLID
-	if m := e.calls[callID]; m != nil {
-		m.rekeyPeer = rekeyPeer
-		currentPeer = m.peerLID
-	}
-	e.mu.Unlock()
-	if currentPeer != "" && currentPeer != peerLID {
-		if err := rekeyPeer(currentPeer); err != nil {
-			return fmt.Errorf("rekey media to answering device: %w", err)
-		}
-		peerLID = currentPeer
-	}
-	defer func() {
-		e.mu.Lock()
-		if m := e.calls[callID]; m != nil {
-			m.rekeyPeer = nil
-		}
-		e.mu.Unlock()
-	}()
 	videoReceiveStates := make(map[*participantAudioReceiver]*videoReceiveState)
 	appDataReceivers := make(map[*participantAudioReceiver]*appDataReceiver)
 	lastVideoPLI := make(map[uint32]time.Time)
@@ -690,6 +663,36 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		if m := e.calls[callID]; m != nil {
 			m.videoTx = nil
 			m.appDataTx = nil
+		}
+		e.mu.Unlock()
+	}()
+
+	rekeyPeer := func(answeringPeer string) error {
+		if err := audioReceivers.RekeyFallback(answeringPeer); err != nil {
+			return err
+		}
+		_ = txPipe.RekeyRecv(callKey, answeringPeer)
+		_ = txVideoPipe.RekeyRecv(callKey, answeringPeer)
+		_ = txAppDataPipe.RekeyRecv(callKey, answeringPeer)
+		return nil
+	}
+	e.mu.Lock()
+	currentPeer := peerLID
+	if m := e.calls[callID]; m != nil {
+		m.rekeyPeer = rekeyPeer
+		currentPeer = m.peerLID
+	}
+	e.mu.Unlock()
+	if currentPeer != "" && currentPeer != peerLID {
+		if err := rekeyPeer(currentPeer); err != nil {
+			return fmt.Errorf("rekey media to answering device: %w", err)
+		}
+		peerLID = currentPeer
+	}
+	defer func() {
+		e.mu.Lock()
+		if m := e.calls[callID]; m != nil {
+			m.rekeyPeer = nil
 		}
 		e.mu.Unlock()
 	}()
