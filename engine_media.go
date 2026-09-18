@@ -674,6 +674,16 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		_ = txPipe.RekeyRecv(callKey, answeringPeer)
 		_ = txVideoPipe.RekeyRecv(callKey, answeringPeer)
 		_ = txAppDataPipe.RekeyRecv(callKey, answeringPeer)
+		// Força o relay do WhatsApp a direcionar os pacotes para o answering device imediatamente:
+		var rtx [12]byte
+		if _, err := rand.Read(rtx[:]); err == nil {
+			rekeyPing := stun.BuildWhatsappPing(rtx, log)
+			_, _ = ch.Send(rekeyPing[:])
+			e.c.diag.Emit("stun", map[string]any{
+				"event": "rekey_consent_ping_sent", "answering_peer": answeringPeer,
+				"tx_id_hex": hex.EncodeToString(rtx[:]),
+			})
+		}
 		return nil
 	}
 	e.mu.Lock()
