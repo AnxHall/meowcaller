@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/AnxHall/meowcaller/rtp"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestAppDataReactionMatchesCapturedWirePayload(t *testing.T) {

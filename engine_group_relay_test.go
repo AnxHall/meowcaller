@@ -7,7 +7,7 @@ import (
 
 	"github.com/AnxHall/meowcaller/rtp"
 	"github.com/AnxHall/meowcaller/stun"
-	"go.mau.fi/whatsmeow/types"
+	"github.com/polymorfa/hypermeow/types"
 )
 
 func TestGroupRelayDataSelectsCaptureAddressAndCredentials(t *testing.T) {
